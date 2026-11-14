@@ -1,0 +1,47 @@
+{
+  "_readme": "Template for the per-machine tool profile. Copy to machine.json and fill in, or let preflight.ps1 discover and write it with:  powershell -NoProfile -ExecutionPolicy Bypass -File preflight.ps1 -Write.  Every pipeline script resolves tool paths and roots through this file; nothing should hard-code a drive letter or a user profile.",
+  "machine": "UNNAMED",
+  "os": "windows",
+  "tools": {
+    "ffmpeg": "",
+    "ffprobe": "",
+    "orc": "",
+    "rife_engine": "",
+    "rife_model_dir": "",
+    "avisynth_plugin_dir": "",
+    "avisynth_loader": "",
+    "sevenzip": "",
+    "curl": ""
+  },
+  "roots": {
+    "downloads_root": "",
+    "downloads_template": "DS9 {episode} LaserDisc",
+    "dvd_root": "",
+    "work": "",
+    "probe": "",
+    "avs": "",
+    "audio": "",
+    "subs": "",
+    "out": "",
+    "prores": "",
+    "stack": "",
+    "logs": "",
+    "runbook_dir": "",
+    "archive_share": "",
+    "upscale_root": ""
+  },
+  "python": {
+    "interpreter": "python",
+    "require": [
+      "numpy",
+      "cv2",
+      "PIL"
+    ]
+  },
+  "limits": {
+    "min_free_gb": 80,
+    "heavy_jobs": 1,
+    "select_terms_max": 32
+  },
+  "notes": []
+}

@@ -1,0 +1,97 @@
+{
+  "_readme": [
+    "Per-episode manifest. Copy only after identifying the episode; fill values as measured.",
+    "Scripts read this instead of hard-coding frame counts, durations, skips or paths.",
+    "Rule: if an accessor asks for a value and it is not here, the script fails loudly -",
+    "measure it and record it. Never guess and never copy another episode's number.",
+    "Unknown measurements must remain null/unset. Never use zero as a placeholder for an unknown value.",
+    "files.* uses {root, name} so machine paths stay in machine.json; alternatively",
+    "{path} with an absolute path is accepted for files that are not under a known root.",
+    "roots.downloads optionally overrides the profile's download-folder template."
+  ],
+  "episode": "S01E00",
+  "title": "",
+  "pad_report_label": "",
+  "record_status": "template",
+  "format": "one_part",
+  "archive_item": "",
+  "captures": [],
+  "reference": "",
+  "alignment_map": "",
+  "stack": {
+    "frames": null,
+    "duration_s": null,
+    "pressing_groups": [],
+    "fit_trusted": null,
+    "fell_back_to_mean": null,
+    "stack_sigma": null,
+    "best_single_sigma": null
+  },
+  "audio": {
+    "capture": "",
+    "pad_frames": null,
+    "skip_s": null,
+    "rate_fit_ppm": null,
+    "rate_fit_stderr_ppm": null,
+    "asetrate": null,
+    "corrected_duration_s": null,
+    "origin_verified_by_duration": null
+  },
+  "video": {
+    "frames": null,
+    "duration_s": null,
+    "head_trim": null,
+    "fade_up_output": null,
+    "tail_trim": null,
+    "delta_s": null,
+    "tfm_period5_pct": null,
+    "tfm_unmatched": null,
+    "inserts": null,
+    "repair_frames": null,
+    "repair_pct": null
+  },
+  "pads": {
+    "map_pads": null,
+    "rendered_isolated": null,
+    "repaired": null,
+    "trimmed_away": null,
+    "inside_break_black": null,
+    "never_rendered": null,
+    "cut_pads": null,
+    "content_blacks_left_alone": []
+  },
+  "retime": {
+    "breaks": [],
+    "tail_off": null,
+    "merged_music_through": [],
+    "srt_cues": null,
+    "max_gap_vs_black_s": null,
+    "head_sil_end": null,
+    "tail_sil_start": null
+  },
+  "files": {},
+  "qc": {
+    "video_md5": "",
+    "ld_audio_md5": "",
+    "fiveone_md5": "",
+    "srt_md5": "",
+    "av_constant_ms": null,
+    "av_slope_ppm": null,
+    "av_rms_ms": null,
+    "track_offset_ms": null,
+    "pad_aligned_black_hits": null,
+    "identity_own_ncc_min": null,
+    "identity_other_ncc_max": null,
+    "full_decode_errors": null
+  },
+  "deliverable": "",
+  "deliverable_tracks": [
+    "ld"
+  ],
+  "_labels_note": "pad_report_label keys shared reports; set it to this episode code. deliverable is a files.* key naming the actual file QC checks. deliverable_tracks describes its streams. Top-level mux_tracks and ld_audio_source configure remux_padfixed.",
+  "mux_tracks": [
+    "ld"
+  ],
+  "ld_audio_source": "",
+  "_mux_note": "mux_tracks controls the LD-only/intermediate remux. ld_audio_source is the files.* key for its uncompressed/FLAC LD audio input. Add 51 and srt only when the measured sources are available."
+}

@@ -1,0 +1,35 @@
+# Machine-local profiles; keep only the portable generic profile template.
+/machine*.json
+!/machine.example.json
+/machine-authoring-profile.original.json
+
+# Measured episode state and offline archival/reference material are not part of
+# the public source-only export. Keep the generic schema/template.
+/episodes/*.json
+!/episodes/_template.json
+/reference-pool/
+/reference-runs/
+
+# Captures, decoded audio, media, generated caches, and temporary outputs.
+*.tbc
+*.efm
+*.wav
+*.flac
+*.mkv
+*.mov
+*.mp4
+*.npy
+*.raw
+*.7z
+*.png
+*.tmp
+*.tmp.*
+*.log
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# The public source repository does not redistribute third-party plugin DLLs.
+/avsplugins/*.dll
