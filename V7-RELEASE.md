@@ -27,6 +27,11 @@ lower V6 audio, video, safety, space, or QC gates.
   provision `devices/` and grant write access only there. The W share's current ACL was not
   changed per operator direction, so it still requires administrator enforcement for an
   OS-level read-only guarantee.
+- Added mandatory indexed-seek audio QC for every audio track in each final master: four
+  quarter-timeline sample points, comparing fast input seek with output-seek control. Both
+  platform remuxers set Matroska `-max_interleave_delta 0`, the M5-verified fix for
+  audio-less clusters caused by the default 10-second interleave flush. Final QC uses
+  unique absolute-A/V report names so reruns do not fail on existing artifacts.
 - `scripts/generate_runbooks.py`: generates the Qwen4B and Qwen4B/Luna runbooks from
   `DS9 LaserDisc OpenCode Runbook.md` plus short model-policy templates. `--check`
   detects stale generated copies.
@@ -39,8 +44,10 @@ lower V6 audio, video, safety, space, or QC gates.
   pass; stage planning and tests pass. A read-only `S01E07` manifest-validation attempt
   correctly stopped because the configured download folder/source captures were absent.
   V6's episode workflow remains the Windows reference.
-- macOS arm64: dependency pins are based on M5 component evidence. No fresh-Mac V7
-  end-to-end delivery/QC is claimed.
+- macOS arm64: M5 completed S01E10 end to end through final multi-track remux. The corrected
+  master had 0/1067 audio-less clusters; all six previously failing seek windows decoded
+  fully and all four packet-identity checks passed. This validates the tested M5 setup; a
+  fresh Mac installation is not independently validated.
 - Linux x86_64: candidate Python/environment pins only. Native Decode-Orc, frameserver
   plugins, PowerShell integration, and full episode delivery are unvalidated. Do not
   process a production episode or call Linux supported based on lock/bootstrap success.
@@ -48,8 +55,8 @@ lower V6 audio, video, safety, space, or QC gates.
 - The shared-drive application paths avoid writing to the release root, but V7 does not
   provision/modify filesystem ACLs. If the share grants write access at the root, an
   administrator must correct that ACL before calling it OS-enforced read-only.
-- The shared-mode follow-up tests `shared_workspace.py` initialization/provenance and
-  per-instance manifest/write-path guards. Full suite: 48 passed, 7 Mac/VapourSynth-only
+- The follow-up tests shared-workspace initialization/provenance and
+  per-instance manifest/write-path guards. Full suite: 53 passed, 7 Mac/VapourSynth-only
   skipped; Windows doctor passes in local mode. The active W account still has root write
   access, so W shared-mode doctor correctly blocks stage execution pending an ACL change.
 

@@ -7,7 +7,6 @@ templates, V7 doctor/stage-runner tools, and platform Python locks. It intention
 - `machine.json` or machine-specific profiles;
 - measured episode manifests or work outputs;
 - the shared `devices/` tree of mutable per-instance manifests/logs/references/cut-PAD inboxes;
-- `devices/` per-device/instance logs, references, manifests, or cut-PAD inboxes (these are shared mutable data, not release source);
 - the archival `reference-pool/` and historical `reference-runs/` data;
 - TBC/EFM captures, WAV/FLAC audio, video, descriptor caches, or other generated images;
 - all but the intentionally curated, single-frame cut-PAD stills in `Cut Pad Images/<episode>/`;
@@ -24,7 +23,7 @@ DVDs, video sequences, or episode footage.
 No project-wide license has been selected yet. Public visibility does not grant a license
 to reuse the project; add a LICENSE file only after the owner chooses the intended terms.
 
-The documented Windows x64 workflow is the reference. macOS Apple-silicon tooling is
-included, but fresh-Mac end-to-end delivery remains unvalidated. Linux x86_64 has a
-dependency candidate only, not workflow support; Linux ARM64 and Windows ARM64 are
-untested unless a release explicitly says otherwise.
+The documented Windows x64 workflow is the reference. macOS Apple-silicon workflow has
+completed end to end on the M5 configuration; fresh-device installation coverage remains
+unverified. Linux x86_64 has a dependency candidate only, not workflow support; Linux ARM64
+and Windows ARM64 are untested unless a release explicitly says otherwise.

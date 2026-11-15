@@ -145,6 +145,12 @@ def main() -> int:
         "-disposition:v:0", "default"] + meta + [
         "-color_primaries", "smpte170m", "-color_trc", "smpte170m",
         "-colorspace", "smpte170m", "-color_range", "tv",
+        # Matroska's default 10 s DTS interleave flush can emit video-only
+        # clusters. Cues index video, so fast seeks into those clusters may
+        # omit audio although sequential playback is fine. Keep all tracks
+        # interleaved; confirmed on M5 by zero audio-less clusters and passing
+        # seek windows after remux.
+        "-max_interleave_delta", "0",
         "-t", str(dur), str(out)]
 
     print(f"episode : {ep.code}  ({ep.title})")

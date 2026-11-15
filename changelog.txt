@@ -57,10 +57,17 @@ FROM Version 6 -> Version 7
 - Added an allowlisted, dry-run-first stage runner with doctor/manifest gates and unique per-stage logs.
 - Made Qwen runbooks generated from the canonical runbook and short model-policy templates; added
   `generate_runbooks.py --check` to detect drift.
-- Added the Linux x86_64 profile/environment candidate. Linux production workflow, fresh-Mac V7
-  end-to-end delivery, Linux ARM64, and Windows ARM64 remain unvalidated.
+- Added the Linux x86_64 profile/environment candidate. Linux production workflow, a fresh-Mac
+  installation, Linux ARM64, and Windows ARM64 remain unvalidated; the tested M5/macOS arm64
+  configuration has completed an end-to-end S01E10 workflow.
 - Added shared-release mode with unique per-device/instance/episode workspaces under
   `devices/`; manifests and stage logs are routed there, with no-overwrite reference and
   provenance-aware cut-PAD publication. The tooling did not change share ACLs.
+- Integrated M5 S01E10's seek-only audio-dropout finding: final QC checks input-seek and
+  output-seek five-second audio windows at four timeline points for every master audio
+  track. Both remuxers set Matroska `-max_interleave_delta 0`, the verified interleave fix;
+  QC failure output documents the repair. Absolute-A/V QC reports use unique names so QC
+  can be rerun without a stale-file error. M5 completed an end-to-end macOS arm64 workflow;
+  fresh-Mac installation coverage remains separate.
 - Validation: see the V7 entry in the authoring-device log and `V7-RELEASE.md`; installation is
   opt-in and no native tools/plugins are silently installed or upgraded.

@@ -95,7 +95,11 @@ $ffArgs = @('-y', '-hide_banner', '-loglevel', 'warning') + $ffInputs + $maps +
       '-metadata:s:v:0', "title=LaserDisc $($ep.audio.capture), 3:2 pulldown removed, 23.976p, PAD blips repaired",
       '-disposition:v:0', 'default') + $meta +
     @('-color_primaries', 'smpte170m', '-color_trc', 'smpte170m',
-      '-colorspace', 'smpte170m', '-color_range', 'tv', '-t', $dur, $out)
+      '-colorspace', 'smpte170m', '-color_range', 'tv',
+      # Matroska's default 10 s DTS interleave flush can emit video-only
+      # clusters. Cues index video, so fast seeks into those clusters may
+      # omit audio although sequential playback is fine. Keep tracks together.
+      '-max_interleave_delta', '0', '-t', $dur, $out)
 
 Write-Host "episode : $Episode  ($($ep.title))"
 Write-Host "tracks  : $($tracks -join ' + ')"

@@ -21,9 +21,10 @@ ACTION/VERIFY steps. If the configured fallback `opencode-go/gpt-6-luna` is avai
 use `DS9 LaserDisc OpenCode Runbook - Qwen4B-Luna.md` for its narrowly gated fallback
 protocol. The main runbook remains the technical source of truth.
 
-Windows x64 is the authoritative/reference workflow. V7 also includes an Apple-silicon
-macOS VapourSynth path; its helpers and M5 stage evidence are included, but a fresh-Mac
-end-to-end V7 delivery has not yet been validated. Linux x86_64 dependency locks are
+Windows x64 is the authoritative/reference workflow. The Apple-silicon macOS VapourSynth
+workflow has now completed an end-to-end S01E10 delivery on the M5 Mac, including the
+final remux and seek-defect repair. This validates the tested M5/macOS arm64 configuration;
+a separate fresh-Mac installation is not implied. Linux x86_64 dependency locks are
 provided, but the Linux workflow is still unvalidated; Linux ARM64 and Windows ARM64 also
 remain untested. This is not a single unattended encoder: OpenCode
 measures per-episode values, records them in a manifest, runs gated helpers, and stops at
@@ -149,12 +150,13 @@ fallback route is unavailable, ask the user rather than silently changing models
    interpreter's listed direct packages; native tools/plugins are separate. Linux x86_64
    is a dependency candidate, not production-workflow support.
 4. Run `python scripts/doctor.py --json` after profile/tool selection. It delegates to
-    Windows or Mac preflight, checks the Python lock, and emits one report. Require
-    `ready_for_episode: true`; Mac's doctor result is component capability only, not
-    end-to-end certification. Linux deliberately returns not-ready/untested. Continue
-    anyway does not waive required capability/QC gates. In shared mode, create a unique
-    per-episode workspace first; the machine-level doctor without one reports setup
-    diagnostics but is intentionally not episode-ready.
+   Windows or Mac preflight, checks the Python lock, and emits one report. Require
+   `ready_for_episode: true`; macOS end-to-end completion is demonstrated on the M5
+   configuration, while fresh-device setup remains a separate validation. Linux
+   deliberately returns not-ready/untested. Continue anyway does not waive required
+   capability/QC gates. In shared mode, create a unique per-episode workspace first; the
+   machine-level doctor without one reports setup diagnostics but is intentionally not
+   episode-ready.
 5. For a job-specific output location, update `roots.out` or pass it as the manifest's
    file root. Do not modify scripts to insert drive letters.
 
@@ -252,16 +254,12 @@ adjudicated values already in the manifest; it does not infer them. Never reuse 
 E04/E05 alignment or edge script. No README can make a missing measurement safe by
 pretending it is automated.
 
-The M5 log documents a real macOS V5 port: native TFM logging, source reader, `.vpy`
-cadence/encode/PAD path, 4:2:2 PAD conversion, stream-copy remux, plugin setup, and a
-successful Mac preflight. The validated Mac helper set is now included in `scripts/` and
-the source-available M5 regression tests are included. **This still is not a claim of a
-fresh-Mac, full-delivery pass:** the M5 project log ends before a final V5 delivery/QC
-result, and the V6 files in this authoring copy have not been run on a Mac. Follow the
-new-machine setup and Mac smoke gates in `PORTING.md`, then validate a complete episode
-on real Apple-silicon hardware before calling macOS end-to-end supported. The historical
-TFM parity result is background evidence; current supported software needs no recurring
-parity test. Before Windows or Mac setup and every new episode, follow the **Tool-update
+The M5 log now records a complete S01E10 macOS arm64 workflow, final multi-track deliverable,
+remux, and seekability repair (§22). This establishes end-to-end success on the tested M5
+configuration; it does not certify every fresh Mac installation or hardware variant. The
+Mac helper set and source-available regression tests are included in `scripts/` and `tests/`.
+The historical TFM parity result is background evidence; current supported software needs
+no recurring parity test. Before Windows or Mac setup and every new episode, follow the **Tool-update
 gate** in `PORTING.md`, record version choices, rerun capability checks, and freeze the
 toolchain during the episode.
 
@@ -694,22 +692,22 @@ The controlled comparison found that explicit `-fps_mode passthrough` reproduced
 68,555-frame failure and `-vsync 0` failed; retain FFmpeg's validated default rawvideo
 output-sync behavior.
 
-### Mac-side component smoke evidence
+### Mac-side completed end-to-end evidence
 
-The M5 log records a verified 18/18-file E10 download, input/stack/cadence/audio stages,
-native TFM parity evidence, and the V5 VapourSynth ports. Its V5 PAD chain passed
-`pad_audit`, `fullres_check`, 81 replacements, padfix validation, and encoder validation;
-the log does **not** record a final encode/remux/delivery-QC completion. The M5-local V5
-preflight reported **36 pass, 1 warn, 0 fail** after the four observed macOS fixes. The
-reusable Mac helpers and the Mac-specific preflight fix have now been included in this
-bundle. These are strong component/stage results on M5, not a complete fresh-Mac V6 pass.
+The M5 log records a verified 18/18-file E10 download and a complete S01E10 workflow through
+final encode, multi-track remux, and delivery. It reports all nine workflow stages green
+(225 pass, 0 warn, 0 fail); initial QC exposed a seek-only audio dropout, which was
+diagnosed, fixed, and reverified. The corrected master had 0/1067 audio-less clusters, all
+six formerly failing seeks decoded full windows, and all four packet-identity checks passed.
+The M5-local preflight also passed (36 pass, 1 warn, 0 fail). This validates the tested M5
+macOS arm64 configuration, not a fresh install or every Mac model.
 
 `download_archive.ps1` uses `System.IO.DriveInfo` for POSIX free-space checks with a
 Windows `Get-PSDrive` fallback. `align_dvd.py` from the snapshot remains excluded: the
-authoritative descriptor pair supplies `align_npy`. Before claiming Mac readiness, run
-the updated preflight/tests and ListOnly gate from a fresh local bundle/profile, then
-complete a real episode through final video encode, stream-copy remux, and QC. Recompute
-free-space budgets on every host; the M5 measurements do not transfer.
+authoritative descriptor pair supplies `align_npy`. For a new Mac, run current preflight,
+tests, and ListOnly checks from its local bundle/profile before processing; the M5
+completion does not replace machine setup checks. Recompute free-space budgets on every
+host; the M5 measurements do not transfer.
 
 ## Runbook files in this folder
 

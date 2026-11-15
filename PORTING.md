@@ -24,10 +24,10 @@ source of truth.
 
 **Platform boundary:** Windows uses the PowerShell/AviSynth+ workflow and
 `preflight.ps1`. macOS uses POSIX profile paths and the bundled VapourSynth companions;
-it cannot use the Windows AviSynth demuxer or Windows preflight. M5-specific scripts and
-the preflight have been exercised on Apple silicon, but neither a fresh-Mac V6 delivery/QC
-nor a V7 end-to-end pass has been recorded. Do not treat component smoke tests as full
-workflow support. V7 includes a Linux x86_64 dependency/environment candidate and common
+it cannot use the Windows AviSynth demuxer or Windows preflight. The M5 Mac has completed
+S01E10 end to end through final remux and seek-defect repair, validating the tested macOS
+arm64 configuration. A separate fresh-Mac installation is not independently certified.
+V7 includes a Linux x86_64 dependency/environment candidate and common
 capability checks, but no full Linux episode run has passed. Linux x86_64 is not a production
 support claim; Linux ARM64 and Windows ARM64 remain untested.
 
@@ -45,7 +45,7 @@ but need a recorded `conda-lock` resolution for bit-for-bit reproduction.
 | Host target | Direct Python lock | Environment recipe | Support note |
 |---|---|---|---|
 | Windows x86_64 | `dependencies/requirements-windows-x86_64.lock.txt` | Use the profile-selected Python/venv. | V7 authoring environment lock: Python 3.10.14, NumPy 2.2.6, OpenCV 4.13.0.92, Pillow 12.2.0. |
-| macOS arm64 | `dependencies/requirements-macos-arm64.lock.txt` | `dependencies/environment-macos-arm64.yml` | M5 component evidence; fresh-Mac V7 end-to-end QC still outstanding. VapourSynth/plugins/native tools remain distinct components. |
+| macOS arm64 | `dependencies/requirements-macos-arm64.lock.txt` | `dependencies/environment-macos-arm64.yml` | End-to-end S01E10 completed on the M5 Mac, including final remux and seekability repair; fresh-device installation remains unverified. VapourSynth/plugins/native tools remain distinct components. |
 | Linux x86_64 | `dependencies/requirements-linux-x86_64.lock.txt` | `dependencies/environment-linux-x86_64.yml` | Candidate only. Python/QC package pins are copied from the Windows base where compatible; native plugin/toolchain and full delivery are unvalidated. |
 
 After the tool-update decision and before setup, use `bootstrap_deps.py --install` only if
@@ -212,10 +212,10 @@ the Mac cadence builder must refuse rather than silently omit the deinterlace.
    must read the `.vpy` source; `rife_padframes.py` must preserve exact frame indices;
    `build_padfix_vpy.py` must pass both frame-count assertions; validate again before the
    one final encode. Keep DVD and no-DVD choices and QC limits the same as Windows.
-5. Run a full episode through final video-only encode, `remux_padfixed_mac.py`, and
-   `qc_report.py` before calling the Mac end-to-end path supported. The existing M5 log
-   records extensive component/stage passes but does not establish a completed fresh-Mac
-   V6 delivery.
+5. The M5 S01E10 run has completed the full path through video-only final encode,
+   `remux_padfixed_mac.py`, and final delivery on macOS arm64. New Mac installs still need
+   their own preflight/tool/version checks; do not generalize this result to untested
+   hardware or dependency combinations.
 
 ---
 
@@ -383,30 +383,26 @@ or parity clips before cadence. A historical cross-machine PASS is documented in
 a recurring gate. If an actual TFM error or disagreement is observed during processing,
 stop and diagnose it; do not infer the episode's cadence from the historical clips.
 
-### Still open — Mac V6 end-to-end acceptance
+### macOS arm64 end-to-end validation — completed on M5
 
 The Mac reference snapshot's `align_dvd.py` is not included: the authoritative
 `extract_video_descriptors.py` + `measure_dvd_alignment.py` pair is the only supported
 DVD-map implementation. Mac machine profiles and episode manifests remain local and are
 not copied into the authoritative bundle.
 
-The M5 log establishes a working Mac-specific V5 tool path, TFM parity, source reader,
-PAD-repair translation, a real-stack validate pass, and extensive stage checks. It does
-**not** record a complete final encode/remux/delivery QC on the current Z V6 bundle or on
-a fresh Mac. Therefore:
+The M5 project log §22 records S01E10 from verified downloads through final encode and
+multi-track remux. All nine workflow stages were green (225 pass, 0 warn, 0 fail); the
+deliverable was 4.077 GiB with LD stereo default, retimed DVD 5.1, and English SDH. Initial
+QC exposed an indexed-seek audio dropout; after correcting the Matroska interleave option,
+all six failing seek windows decoded fully, 0/1067 clusters lacked audio, and all four
+packet-identity checks passed. This is end-to-end evidence for that M5/macOS arm64 setup.
+It does not certify a fresh Mac, all Mac hardware, or every package/native-tool combination.
 
-1. On a fresh Mac, copy `machine-macos.example.json` to a local `machine.json`, replace
-   every example path, install the user-approved current compatible toolchain, and run
-   `preflight_mac.py` plus the test suite before download/render.
-2. Validate the current `build_map_vpy.py` and `encode_episode_mac.py --pass validate`
-   against the actual stack master; M5 synthetic/fixture tests are not a substitute.
-3. For measured interlaced inserts, use `build_map_vpy.py --repair qtgmc` only after
-   confirming the M5-mapped `QTempGaussMC().deinterlace()` dependencies load and the
-   frame/FPS assertions pass. The PyPI package named `havsfunc` may be a decoy; do not
-   assume it contains QTGMC.
-4. Run the complete current workflow through one video-only final encode, platform remux, and
-   `qc_report.py` exit 0 on actual Mac hardware before calling the Mac target end-to-end
-   supported. Component and smoke-test passes alone are not a delivery pass.
+For a new Mac, follow the local-profile and approved-tool setup below, then run
+`preflight_mac.py`, the test suite, and the episode workflow. Keep `build_map_vpy.py`
+QTGMC dependency/frame-rate checks for episodes that require measured interlaced-insert
+repair. Final `qc_report.py` now also checks indexed audio seeking on every track and points
+to the proven `-max_interleave_delta 0` remux fix if needed.
 
 ---
 
@@ -485,10 +481,10 @@ Updates Log.md`, §8, as background only.
   apply. V6 added `build_map_vpy.py`, `build_padfix_vpy.py`, `encode_episode_mac.py`,
   `remux_padfixed_mac.py`, `vspipe_util.py`, and `.vpy` transports for PAD audit, full-raster
   checks, RIFE neighbor extraction, and motion traces. The M5 log records unit/smoke passes
-  and a V5 audio stage; a complete final delivery/QC on M5 or a fresh Mac is not yet recorded.
-  V7 adds the unified doctor, Python lock/bootstrap, stage runner, and runbook generator;
-  these do not count as full Mac validation. Do not claim end-to-end Mac support until the
-  full current chain passes on real Mac hardware. The no-DVD timing path is available on
+  and V7 adds the unified doctor, Python lock/bootstrap, stage runner, and runbook generator.
+  The M5 log now records a completed S01E10 final delivery/remux and corrected seekability;
+  macOS arm64 is end-to-end demonstrated on that tested setup, while fresh-device coverage
+  remains open. The no-DVD timing path is available on
   Mac through the same Python/FFmpeg helper; check
   the exact FFmpeg build for `libsoxr` (the M5 static build lacked it and uses a logged SWR
   fallback). The no-DVD QC verifies capture-pad geometry and exact sample duration, but does

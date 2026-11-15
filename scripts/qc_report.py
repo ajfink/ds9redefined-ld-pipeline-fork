@@ -14,7 +14,8 @@ Gates, each with an explicit threshold (runbook section 10):
      (or DVD-free timeline/sample-budget validation when the user elected no-DVD mode)
   7. between-track drift within +/-30 ppm, rms<=40 ms   sync_check.py
   8. retimed SRT: count, monotonic, inside the timeline
-  9. measured values agree with what the manifest recorded (warnings, not failures)
+  9. input- and output-seek audio windows decode fully for every master audio track
+ 10. measured values agree with what the manifest recorded (warnings, not failures)
 
 Writes <code>-qc-report.md. Exit 0 only if every hard gate passes.
 """
@@ -26,10 +27,12 @@ import json
 import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ldcommon import BUNDLE, Ld, PipelineError, load_episode  # noqa: E402
+from ldcommon import (BUNDLE, Ld, PipelineError, assert_writable_path,
+                      load_episode)  # noqa: E402
 
 SCRIPTS = Path(__file__).resolve().parent
 
@@ -45,6 +48,8 @@ STANDING_WARNINGS = [
     "measure every episode: never copy another episode's AudioSkip, DELTA, rate or trim",
     "DVD-free deliveries can verify the capture-origin/duration/PAD model and exact audio/video endpoint, "
     "but cannot claim an external absolute A/V cross-correlation",
+    "if input-seek audio is truncated while output-seek control succeeds, remux Matroska with "
+    "-max_interleave_delta 0; this prevents audio-less clusters caused by the default 10 s interleave flush",
 ]
 
 
@@ -83,6 +88,87 @@ def ffprobe_json(ld: Ld, path: Path, count_frames: bool = False) -> dict:
     return json.loads(p.stdout or "{}")
 
 
+def _progress_seconds(output: str) -> float | None:
+    """Read FFmpeg's machine-readable final out_time, preferring integer microseconds."""
+    microseconds = re.findall(r"(?m)^out_time_us=(\d+)\s*$", output)
+    if microseconds:
+        return int(microseconds[-1]) / 1_000_000.0
+    times = re.findall(r"(?m)^out_time=(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)\s*$", output)
+    if times:
+        hours, minutes, seconds = times[-1]
+        return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+    return None
+
+
+def decode_audio_seek_window(ld: Ld, media: Path, stream_number: int,
+                             at_seconds: float, window_seconds: float,
+                             *, input_seek: bool) -> float:
+    """Decode a short audio window after a fast input seek or sequential control seek."""
+    timestamp = f"{at_seconds:.6f}"
+    cmd = [ld.ffmpeg(), "-hide_banner", "-nostats", "-loglevel", "error"]
+    if input_seek:
+        cmd += ["-ss", timestamp, "-i", str(media)]
+    else:
+        cmd += ["-i", str(media), "-ss", timestamp]
+    cmd += ["-map", f"0:a:{stream_number}", "-vn", "-t", f"{window_seconds:.3f}",
+            "-af", "volumedetect", "-f", "null", "-", "-progress", "pipe:1"]
+    proc = sh(cmd)
+    if proc.returncode:
+        mode = "input" if input_seek else "output"
+        raise PipelineError(f"FFmpeg {mode}-seek audio decode failed at {at_seconds:.3f}s "
+                            f"for audio stream {stream_number}: {(proc.stderr or '')[-300:]}")
+    duration = _progress_seconds(proc.stdout or "")
+    if duration is None:
+        raise PipelineError(f"FFmpeg returned no parseable -progress out_time for audio stream "
+                            f"{stream_number} at {at_seconds:.3f}s")
+    return duration
+
+
+def check_seekability(ld: Ld, media: Path, duration: float, audio_count: int,
+                      *, window_seconds: float = 5.0,
+                      tolerance_seconds: float = 0.15) -> tuple[str, str]:
+    """Check four timeline regions, both seek modes, for every audio track in a master."""
+    if audio_count < 1:
+        return "FAIL", "master contains no audio streams to seek-test"
+    quarter = duration / 4.0
+    if quarter < window_seconds:
+        return "ERROR", (f"master duration {duration:.3f}s is too short to fit a full "
+                          f"{window_seconds:.1f}s seek window inside each timeline quarter")
+    # Center each complete decode window inside its quarter. This remains a true
+    # four-quarter sample while avoiding a false short-read at EOF on short fixtures.
+    points = [index * quarter + (quarter - window_seconds) / 2.0
+              for index in range(4)]
+    measurements = []
+    failures = []
+    for stream_number in range(audio_count):
+        for at_seconds in points:
+            try:
+                input_duration = decode_audio_seek_window(
+                    ld, media, stream_number, at_seconds, window_seconds, input_seek=True)
+            except PipelineError as exc:
+                return ("ERROR", f"{exc}. If this is Matroska, preserve the suspect master, "
+                        "remux with -max_interleave_delta 0, and rerun final QC")
+            output_duration = decode_audio_seek_window(
+                ld, media, stream_number, at_seconds, window_seconds, input_seek=False)
+            measurements.append(
+                f"a:{stream_number}@{at_seconds:.1f}s input={input_duration:.3f}s/control={output_duration:.3f}s")
+            if abs(input_duration - window_seconds) > tolerance_seconds:
+                failures.append(f"a:{stream_number}@{at_seconds:.1f}s input seek decoded "
+                                f"{input_duration:.3f}s (wanted {window_seconds:.3f}s)")
+            if abs(output_duration - window_seconds) > tolerance_seconds:
+                failures.append(f"a:{stream_number}@{at_seconds:.1f}s output-seek control decoded "
+                                f"{output_duration:.3f}s (wanted {window_seconds:.3f}s)")
+    if failures:
+        detail = "; ".join(failures)
+        if any("input seek" in failure for failure in failures):
+            detail += (". Likely Matroska interleave/index defect: re-remux with "
+                       "-max_interleave_delta 0, then rerun final QC")
+        return "FAIL", detail + ". Samples: " + " | ".join(measurements)
+    return "PASS", (f"{audio_count} audio track(s), 4 timeline points each; input and output seeks "
+                    f"decoded {window_seconds:.1f}s windows (±{tolerance_seconds:.2f}s). "
+                    + " | ".join(measurements))
+
+
 def packet_hash(ld: Ld, path: Path, selector: str) -> str:
     p = sh([ld.ffmpeg(), "-hide_banner", "-v", "error", "-i", str(path),
             "-map", selector, "-c", "copy", "-f", "hash", "-hash", "md5", "-"])
@@ -118,6 +204,7 @@ def main() -> int:
     if ep.data.get("record_status") == "measured-partial" or ep.data.get("format") == "two_part":
         raise PipelineError(f"{ep.code} is a partial/two-part record; generic QC is not valid until per-part deliverables and gates are defined")
     probe = ld.probe()
+    qc_run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     dkey = ep.data.get("deliverable") or "padfixed"
     deliverable = ep.path(dkey)
     if not deliverable.exists():
@@ -130,11 +217,11 @@ def main() -> int:
     print(f"=== {ep.code} {ep.title} QC ===\n{deliverable}\n", flush=True)
 
     # ---- heavy gates (they decode the deliverable) ----
-    print("[1/9] full decode + PAD black gate ...", flush=True)
+    print("[1/10] full decode + PAD black gate ...", flush=True)
     add("full-decode + PAD black", *run_gate("scan_padfixed_black.py",
                                              ["--episode", ep.code, "--encode", str(deliverable), "--rescan"],
                                              args.skip_heavy))
-    print("[2/9] replacement identity ...", flush=True)
+    print("[2/10] replacement identity ...", flush=True)
     add("replacement identity", *run_gate("verify_pad_identities.py",
                                           ["--episode", ep.code, "--encode", str(deliverable)],
                                           args.skip_heavy))
@@ -142,26 +229,29 @@ def main() -> int:
     if dvd_available is None:  # existing V1-V5 manifests carry files.dvd instead
         dvd_available = bool((ep.data.get("files") or {}).get("dvd"))
     if dvd_available:
-        print("[3/9] absolute A/V ...", flush=True)
+        print("[3/10] absolute A/V ...", flush=True)
+        av_report = probe / f"{ep.code}-av-check-qc-{qc_run_id}.tsv"
+        assert_writable_path(av_report, ld)
         add("absolute A/V", *run_gate("av_check_output.py",
-                                       ["--episode", ep.code, "--video", str(deliverable)],
+                                       ["--episode", ep.code, "--video", str(deliverable),
+                                        "--out", str(av_report)],
                                        args.skip_heavy))
     else:
-        print("[3/9] DVD-free timeline sync ...", flush=True)
+        print("[3/10] DVD-free timeline sync ...", flush=True)
         add("absolute A/V", "SKIP",
             "no DVD reference supplied; external absolute A/V cross-correlation is unavailable")
         add("DVD-free sync", *run_gate("ld_only_sync_check.py",
                                         ["--episode", ep.code, "--video", str(deliverable)],
                                         args.skip_heavy))
     if "51" in list(ep.data.get("deliverable_tracks") or ["ld"]):
-        print("[4/9] between-track sync ...", flush=True)
+        print("[4/10] between-track sync ...", flush=True)
         add("between-track sync", *run_gate("sync_check.py",
                                             ["--episode", ep.code], args.skip_heavy))
     else:
         add("between-track sync", "SKIP", "no DVD 5.1 track in deliverable_tracks")
 
     # ---- container / stream inventory ----
-    print("[5/9] stream inventory ...", flush=True)
+    print("[5/10] stream inventory ...", flush=True)
     info = ffprobe_json(ld, deliverable, count_frames=False)
     streams = info.get("streams", [])
     fmt = info.get("format", {})
@@ -230,8 +320,16 @@ def main() -> int:
         f"1 video Main10 768x484 23.976, {len(aud)} audio (LD default), {len(sub)} subtitle, "
         f"{dur:.6f}s, {fmt.get('size')} bytes")
 
+    # ---- indexed audio seeking (players seek by container index, unlike the full decode above) ----
+    print("[6/10] audio seekability ...", flush=True)
+    try:
+        seek_status, seek_detail = check_seekability(ld, deliverable, dur, len(aud))
+        add("audio seekability", seek_status, seek_detail)
+    except PipelineError as e:
+        add("audio seekability", "ERROR", str(e))
+
     # ---- frame count (from the full decode log to avoid a second decode) ----
-    print("[6/9] frame count ...", flush=True)
+    print("[7/10] frame count ...", flush=True)
     scan_log = probe / f"{ep.code}-blackscan-{deliverable.stem}.txt"
     frames = None
     if scan_log.exists():
@@ -252,7 +350,7 @@ def main() -> int:
         add("frame count", "FAIL", f"{frames} != manifest {ep.frame_count}")
 
     # ---- packet hashes ----
-    print("[7/9] packet hashes ...", flush=True)
+    print("[8/10] packet hashes ...", flush=True)
     try:
         vh = packet_hash(ld, deliverable, "0:v:0")
         recorded = (ep.data.get("qc") or {}).get("video_md5")
@@ -297,7 +395,7 @@ def main() -> int:
         add("packet hashes", "ERROR", str(e))
 
     # ---- subtitles ----
-    print("[8/9] subtitle timeline ...", flush=True)
+    print("[9/10] subtitle timeline ...", flush=True)
     srt_path = ep.path("retimed_srt") if ep.data.get("files", {}).get("retimed_srt") else None
     if "srt" not in tracks:
         add("subtitle timeline", "SKIP", "no subtitle track in deliverable_tracks")
@@ -316,7 +414,7 @@ def main() -> int:
             add("subtitle timeline", "PASS", detail)
 
     # ---- manifest cross-check (informational) ----
-    print("[9/9] manifest cross-check ...", flush=True)
+    print("[10/10] manifest cross-check ...", flush=True)
     notes = []
     recorded_bytes = (ep.data.get("qc") or {}).get("delivered_bytes")
     if recorded_bytes and int(fmt.get("size") or 0) != recorded_bytes:
@@ -353,6 +451,7 @@ def main() -> int:
         print(f"    - {x}")
 
     report = probe / f"{ep.code}-qc-report.md"
+    assert_writable_path(report, ld)
     lines = [f"# {ep.code} {ep.title} - delivery QC", "",
              f"- deliverable: `{deliverable}`",
              f"- profile: `{ld.profile_path}` (machine {ld.profile.get('machine')})",

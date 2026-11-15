@@ -6,7 +6,7 @@ interpreter configured by its local `machine.json`:
 | Target | Python | Lock / environment | Evidence status |
 |---|---:|---|---|
 | Windows x86_64 | 3.10.14 | `requirements-windows-x86_64.lock.txt` | Direct Python package versions verified in the V7 authoring environment. |
-| macOS arm64 | 3.15.2 | `requirements-macos-arm64.lock.txt`, `environment-macos-arm64.yml` | Package versions match M5 component evidence; fresh-Mac V7 delivery/QC is not complete. |
+| macOS arm64 | 3.15.2 | `requirements-macos-arm64.lock.txt`, `environment-macos-arm64.yml` | M5 completed S01E10 end to end through final remux/seek repair; fresh-device installation is not independently certified. |
 | Linux x86_64 | 3.10.14 | `requirements-linux-x86_64.lock.txt`, `environment-linux-x86_64.yml` | Candidate only; Linux x86_64 is not an end-to-end supported platform. |
 
 These are **direct package version locks**, not hash-complete locks of every

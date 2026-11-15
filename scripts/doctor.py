@@ -275,7 +275,7 @@ def main() -> int:
 
         workflow_status = {
             "windows": "V7 Windows x86_64 reference workflow",
-            "macos": "component preflight only; fresh-Mac V7 end-to-end QC remains outstanding",
+            "macos": "macOS arm64 end-to-end workflow demonstrated on M5 (S01E10); fresh-device setup is not independently certified",
             "linux": "UNTESTED: x86_64 dependency/capability candidate only; do not process a delivery",
         }[target_os]
         shared_ready = (shared_report.get("enabled") is not True or
