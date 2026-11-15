@@ -454,7 +454,8 @@ def main() -> int:
         "build_padfix_vpy.py", "encode_episode_mac.py", "remux_padfixed_mac.py",
         "vspipe_util.py", "build_motion_trace.py", "qc_report.py",
         "verify_pad_identities.py", "check_space_budget.py", "doctor.py",
-        "bootstrap_deps.py", "dependency_lock.py", "run_stage.py", "shared_workspace.py",
+        "bootstrap_deps.py", "dependency_lock.py", "run_stage.py", "run_workflow.py",
+        "shared_workspace.py",
         "stage_clock.py",
         "generate_runbooks.py",
     )

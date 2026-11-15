@@ -91,6 +91,24 @@ class StageRunnerTests(unittest.TestCase):
             make_action("encode-final", "S01E99", profile, [], None)
         self.assertTrue(validate_command("S01E99", profile, "encode")[1].endswith("validate_episode.py"))
 
+    def test_deterministic_helpers_and_corrected_pad_review_gates(self):
+        profile = {"os": "windows", "python": {"interpreter": sys.executable},
+                   "tools": {"pwsh": sys.executable}}
+        self.assertIn("build-ld-synced", STAGES)
+        self.assertIn("retime-assets", STAGES)
+        master = make_action("master-descriptors", "S01E99", profile,
+                             ["--input-fps", "30000/1001"], None)
+        self.assertEqual(master[1].endswith("extract_video_descriptors.py"), True)
+        self.assertEqual(master[master.index("--source") + 1], "master")
+        self.assertEqual(master[-2:], ["--source", "master"])
+        self.assertIn("--input-fps", master)
+        dvd = make_action("dvd-descriptors", "S01E99", profile, [], None)
+        self.assertEqual(dvd[dvd.index("--source") + 1], "dvd")
+        with self.assertRaisesRegex(LockError, "fixes argument.*--source"):
+            make_action("master-descriptors", "S01E99", profile, ["--source", "dvd"], None)
+        self.assertEqual(STAGES["fullres-check"]["gate"], "cadence")
+        self.assertEqual(STAGES["rife-replacements"]["gate"], "cadence")
+
 
 class RunbookGeneratorTests(unittest.TestCase):
     def test_both_generated_variants_include_canonical_source_and_model_policy(self):

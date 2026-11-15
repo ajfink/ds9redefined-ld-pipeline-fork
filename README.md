@@ -1,6 +1,6 @@
 # DS9 LaserDisc OpenCode Operator Pack
 
-**Workflow version: 7** — check `WORKFLOW_VERSION` and follow the core-change/device-log
+**Workflow version: 9** — check `WORKFLOW_VERSION` and follow the core-change/device-log
 rules in `WORKFLOW_VERSIONING.md` before editing or syncing workflow files.
 
 **Design goal:** make the workflow clear and reliable enough for capable free or low-cost
@@ -11,6 +11,12 @@ that every model/version has been tested. Model convenience never lowers QC or s
 **GitHub source-only note:** this repository intentionally omits machine profiles, measured
 episode data, reference archives, media/caches, and third-party AviSynth DLLs. See
 `GITHUB-EXPORT.md` before treating a GitHub clone as a complete runnable bundle.
+
+**Configure a job first:** start with the root `CONFIGURE HERE FIRST.json`. Edit only the
+`value` members in `_operator_inputs_EDIT`; keep its `_comment` descriptions and
+`_instructions_DO_NOT_EDIT` section intact. The template is a no-DVD intake example and
+must be filled with this job's confirmed values before it can be planned. Job IDs and
+approval identity/time are generated automatically.
 
 **Start here.** An OpenCode instance given this folder and the three job inputs
 below should read this README, then follow `DS9 LaserDisc OpenCode Runbook.md`.
@@ -505,12 +511,16 @@ permission.
 | `scripts/doctor.py` | Unified read-only profile/dependency/platform report; Linux x86_64 remains explicitly not episode-ready |
 | `scripts/bootstrap_deps.py` / `dependencies/` | Direct Python version locks for Windows x64, Mac arm64, and candidate Linux x86_64; check-only by default, `--install` is explicit |
 | `scripts/run_stage.py` | Allowlisted stage dispatcher; dry-run plan by default, explicit `--execute`, downloader-specific checks for the early download stage, full doctor/manifest gates before other write stages, and unique logs/reports |
+| `scripts/run_workflow.py` | Ordered JSON-plan orchestration using only `run_stage.py` allowlisted stages; durable status/log, per-job locking, input/output fingerprints, and conservative resume |
+| `CONFIGURE HERE FIRST.json` | Sanitized no-DVD intake-plan template; edit only `_operator_inputs_EDIT` values and replace every placeholder |
 | `scripts/stage_clock.py` | Pause/resume timer for manual stages; separates active work from human gate waits and writes a timestamped record in the device workspace |
 | `scripts/shared_workspace.py` | Ensure a collision-resistant per-device/instance/episode folder beside the selected README, with local fallback; publish no-overwrite references and provenance-checked cut-PAD stills |
 | `scripts/generate_runbooks.py` / `templates/runbooks/` | Regenerate model variants from the canonical runbook plus model-policy templates; `--check` detects drift |
 | `WORKFLOW_VERSION` / `WORKFLOW_VERSIONING.md` | Authoritative workflow version and core-change/device-log rules |
 | `V7-RELEASE.md` | V7 tooling overview and platform validation boundaries |
 | `V8-RELEASE.md` | V8 stage timing and README-relative device workspace changes |
+| `V9-RELEASE.md` | V9 ordered workflow orchestration and intake configuration |
+| `V9-QUEUE.md` | Proposed follow-ups and audited carry-overs; planning only, not current workflow instructions |
 | `changelog.txt` | Short release history; retrospective V1–V5 notes and accepted V6 changes |
 | `Cut Pad Images/<episode>/` | Curated single-frame DVD cut-PAD repair stills, named by verified DVD timestamp/frame; not a DVD reference substitute |
 | `scripts/download_archive.ps1` | Metadata-verified, resumable source download; checks profile curl (>=7.71.0), and ListOnly prints inventory, integrity metadata, aggregate bytes, and projected free space |
@@ -540,7 +550,7 @@ permission.
 | `scripts/qc_report.py` | Final delivery report; skipped/unverified required checks fail closed |
 | `scripts/regen_plain_text.py` | Rebuild the ASCII companion from the main Markdown runbook |
 
-### V8 entry points
+### V9 entry points
 
 ```text
 python scripts/bootstrap_deps.py --print --json
@@ -558,6 +568,42 @@ the full doctor so the transfer can start early. Every other write-capable stage
 `--execute`, a doctor pass, and its declared manifest gates. It never runs arbitrary shell
 text, performs cleanup, or replaces helper-level refusal/QC checks. Linux x86_64 can check its candidate dependency lock but
 production stage execution is blocked until the complete Linux workflow is validated.
+
+### V9 ordered workflow orchestration
+
+`scripts/run_workflow.py` executes an ordered JSON plan by invoking only allowlisted
+`run_stage.py` stages. It is dry-run by default, does not run arbitrary shell text, choose
+measurements, install tools, or bypass stage gates, and is not a complete automatic episode
+graph. The root `CONFIGURE HERE FIRST.json` demonstrates a no-DVD intake ending at input
+validation. DVD-backed intake requires a separate plan with the exact matching `--dvd` path.
+The intake plan records choices for audit; it does not infer or verify them against media.
+Review the initialized manifest's identity before proceeding to a processing plan.
+
+Fill the template's placeholders, editing only `_operator_inputs_EDIT.*.value`; do not add
+machine profile, output, or approver values elsewhere. The plan rejects unresolved
+placeholders and a DVD mode that conflicts with this no-DVD template. The executor creates
+the job ID from episode code, confirmed title, and UTC timestamp. It records `approved_by`
+from the local account and `approved_at_utc` automatically; neither is an operator input.
+
+```text
+python scripts/run_workflow.py --plan "CONFIGURE HERE FIRST.json"                 # plan only
+python scripts/run_workflow.py --plan "<completed plan.json>" --execute
+python scripts/run_workflow.py --plan "<same plan.json>" --execute --resume
+```
+
+Job state and the combined stage log are written under the selected episode workspace's
+`logs/` or the profile's local `roots.logs`. A per-job OS lock, exact plan/profile/workflow
+identity checks, and declared input/output fingerprints protect state. Completed steps are
+skipped only when their fingerprints still match. Large files use size/mtime plus
+first/last-block hashes by default; `fingerprint_policy: "full"` requests full SHA-256.
+Only a plan step explicitly marked `resume_policy: "download"` can retry an interrupted
+download. Other failed/interrupted steps stop for inspection. The lock is per job ID; it is
+not a cross-job same-episode claim mechanism.
+
+V9 validation is fixture/unit testing only: no real Archive transfer, real-media processing,
+full end-to-end episode, or macOS support claim is made. Linux production stages remain
+blocked. The Mac cadence-dispatch integration issue remains open; do not use orchestration
+as evidence that Mac cadence dispatch is ready.
 
 ### Per-device episode workspaces (every README location)
 

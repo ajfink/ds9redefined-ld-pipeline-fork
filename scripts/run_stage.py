@@ -44,11 +44,19 @@ STAGES = {
     "validate-deliverable": {"kind": "validate", "manifest_stage": "deliverable", "write": False},
     "stack-reference": {"kind": "python", "script": "select_stack_reference.py", "gate": "inputs", "write": True},
     "build-map": {"kind": "map", "gate": "stack", "write": True},
+    "motion-trace": {"kind": "python", "script": "build_motion_trace.py", "gate": "stack", "write": True},
+    "master-descriptors": {"kind": "python", "script": "extract_video_descriptors.py", "fixed_args": ["--source", "master"], "gate": "stack", "write": True},
+    "dvd-descriptors": {"kind": "python", "script": "extract_video_descriptors.py", "fixed_args": ["--source", "dvd"], "gate": "stack", "write": True},
+    "measure-dvd-alignment": {"kind": "python", "script": "measure_dvd_alignment.py", "gate": "stack", "write": True},
+    "measure-break-edges": {"kind": "python", "script": "measure_break_edges.py", "gate": "stack", "write": True},
+    "measure-audio-rate": {"kind": "python", "script": "measure_audio_rate.py", "write": True},
+    "build-ld-synced": {"kind": "python", "script": "build_ld_synced.py", "write": True},
+    "retime-assets": {"kind": "python", "script": "retime_dvd_assets.py", "gate": "retime", "write": True},
     "audio-diagnostic": {"kind": "python", "script": "audio_timing_diagnostic.py", "gate": "stack", "write": True},
     "audio-promote-no-dvd": {"kind": "no-dvd", "gate": "stack", "write": True},
     "pad-audit": {"kind": "python", "script": "pad_audit.py", "gate": "cadence", "write": True},
-    "fullres-check": {"kind": "python", "script": "fullres_check.py", "gate": "padfix", "write": True},
-    "rife-replacements": {"kind": "python", "script": "rife_padframes.py", "gate": "padfix", "write": True},
+    "fullres-check": {"kind": "python", "script": "fullres_check.py", "gate": "cadence", "write": True},
+    "rife-replacements": {"kind": "python", "script": "rife_padframes.py", "gate": "cadence", "write": True},
     "build-padfix": {"kind": "padfix", "gate": "cadence", "write": True},
     "encode-validate": {"kind": "encode", "pass": "validate", "gate": "encode", "write": False},
     "encode-final": {"kind": "encode", "pass": "final", "gate": "encode", "write": True},
@@ -113,7 +121,13 @@ def make_action(stage: str, episode: str, profile: dict, extra: list[str], repor
         return [py(profile), str(SCRIPTS / "validate_episode.py"), "--episode", episode,
                 "--stage", spec["manifest_stage"]]
     if kind == "python":
-        return python_command(profile, spec["script"], episode, extra)
+        fixed_args = spec.get("fixed_args", [])
+        fixed_options = {arg.split("=", 1)[0] for arg in fixed_args if arg.startswith("-")}
+        extra_options = {arg.split("=", 1)[0] for arg in extra if arg.startswith("-")}
+        conflicts = sorted(fixed_options & extra_options)
+        if conflicts:
+            raise LockError(f"stage {stage!r} fixes argument(s) {', '.join(conflicts)}; do not override them")
+        return python_command(profile, spec["script"], episode, [*extra, *fixed_args])
     if kind == "init":
         return [py(profile), str(SCRIPTS / "init_episode.py"), *extra]
     if kind == "download":

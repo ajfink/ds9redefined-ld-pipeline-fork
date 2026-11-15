@@ -100,3 +100,20 @@ FROM Version 7 -> Version 8
 - Validation: 63 passed, 7 Mac/VapourSynth-only skipped; Python compilation, PowerShell
   parsing, runbook generation, and timing/fallback tests passed. See `V8-RELEASE.md` and the
   V8 entry in the device execution log.
+
+Version 9 (2026-11-15)
+FROM Version 8 -> Version 9
+- Added a dry-run-first ordered workflow orchestrator over allowlisted `run_stage.py`
+  stages, with durable job status/logging, per-job locking, profile/plan/version identity
+  checks, input/output fingerprints, and conservative resume. Only explicitly resumable
+  Archive downloads can retry automatically.
+- Added automatic episode/title/UTC job IDs and execution-generated approval identity/time.
+  Added sanitized `CONFIGURE HERE FIRST.json` with separate read-only instructions and
+  editable values; all paths are placeholders and each setting retains its `_comment`.
+- Registered deterministic descriptor, motion-trace, DVD-alignment, break-edge, audio-rate,
+  LD-sync, and DVD-retime helpers. Corrected PAD-review prerequisites to require cadence
+  evidence and locked descriptor source arguments against caller override.
+- Added fake-runner orchestration tests and a local-fixture intake integration test; it makes
+  no network requests. Linux production remains blocked; the Mac cadence-dispatch integration
+  issue remains open. No full end-to-end or new macOS support claim is made.
+- Validation: see `V9-RELEASE.md` and authoring-device execution-log §35.
