@@ -88,9 +88,20 @@ def main() -> int:
     if args.stage not in ("manifest", "inputs"):
         c.require(bool(ref) and ref in labels, "reference", "a measured/declared stack reference is required after input validation")
     if not d.get("title"):
-        c.add("WARN", "title", "title is unconfirmed; verify from the DVD/Archive before delivery")
+        c.add("WARN", "title", "title is unconfirmed; verify from the Archive/capture filenames before delivery")
     dvd = resolve(ep, "dvd")
-    c.file(dvd, "dvd-reference")
+    dvd_available = d.get("dvd_reference_available")
+    if dvd_available is None:  # backward-compatible inference for pre-V6 manifests
+        dvd_available = dvd is not None
+    if dvd_available:
+        c.file(dvd, "dvd-reference")
+    else:
+        c.add("INFO", "dvd-reference", "not supplied; DVD-free mode must have explicit user approval")
+        c.require(d.get("no_dvd_proceed_approved") is True, "no-dvd-approval",
+                  "record the user's explicit choice to proceed without a DVD")
+        image_choice = d.get("cut_pad_images_choice")
+        c.require(image_choice in ("use", "skip", "not-available"), "cut-pad-image-choice",
+                  "record whether available shared cut-pad stills may be used")
 
     if args.stage in ("inputs", "manifest"):
         downloads = ep.downloads()
@@ -171,24 +182,38 @@ def main() -> int:
         if selected_cap:
             efm = selected_cap.get("efm_file")
             c.file(ep.downloads() / efm if efm else None, "selected-raw-EFM")
-        for key in ("rate_fit_ppm", "rate_fit_stderr_ppm", "asetrate", "skip_s"):
-            c.require(nonnull(d, "audio", key), f"audio.{key}", "record the measured value; do not use a theory/default")
+        if dvd_available:
+            for key in ("rate_fit_ppm", "rate_fit_stderr_ppm", "asetrate", "skip_s"):
+                c.require(nonnull(d, "audio", key), f"audio.{key}", "record the measured value; do not use a theory/default")
+        else:
+            for key in ("duration_candidate_rate_hz", "asetrate", "skip_s", "endpoint_residual_frames"):
+                c.require(nonnull(d, "audio", key), f"audio.{key}", "record the accepted duration/PAD result")
+            c.require(d.get("audio", {}).get("rate_method") == "dvd-free-duration-pad",
+                      "audio.rate_method", "use the accepted DVD-free duration/PAD method")
+            c.require(d.get("audio", {}).get("dvd_free_approved") is True,
+                      "audio.dvd_free_approved", "promote only via the explicit no-DVD audio stage")
+            c.require(d.get("audio", {}).get("absolute_av_reference_available") is False,
+                      "audio.absolute_av_reference", "record that no external DVD A/V reference was available")
         c.file(resolve(ep, "ld_native"), "ld-native-WAV")
         c.file(resolve(ep, "ld_corrected"), "ld-corrected-WAV")
         c.file(resolve(ep, "ld_synced"), "sample-accurate-LD-synced-FLAC")
 
     if args.stage == "retime":
-        c.file(resolve(ep, "dvd"), "dvd-reference")
-        c.file(resolve(ep, "align_npy"), "dvd-LD-alignment-path")
-        c.file(resolve(ep, "srt_source"), "English-source-SRT")
-        r = d.get("retime", {})
-        for key in ("breaks", "tail_off", "head_sil_end", "tail_sil_start"):
-            c.require(r.get(key) is not None and (key != "breaks" or bool(r.get(key))), f"retime.{key}", "measured/adjudicated input required")
-        for i, br in enumerate(r.get("breaks") or [], 1):
-            if br.get("merged") or not br.get("dvd_silence"):
-                continue
-            c.require(bool(br.get("ld_black")) and br.get("off_before") is not None and br.get("off_after") is not None,
-                      f"retime.breaks[{i}]", "adjudicated black and before/after offsets required")
+        tracks = list(d.get("deliverable_tracks") or ["ld"])
+        if not dvd_available and not ("51" in tracks or "srt" in tracks):
+            c.add("SKIP", "retime", "no DVD was supplied and the deliverable is LD-only")
+        else:
+            c.file(resolve(ep, "dvd"), "dvd-reference")
+            c.file(resolve(ep, "align_npy"), "dvd-LD-alignment-path")
+            c.file(resolve(ep, "srt_source"), "English-source-SRT")
+            r = d.get("retime", {})
+            for key in ("breaks", "tail_off", "head_sil_end", "tail_sil_start"):
+                c.require(r.get(key) is not None and (key != "breaks" or bool(r.get(key))), f"retime.{key}", "measured/adjudicated input required")
+            for i, br in enumerate(r.get("breaks") or [], 1):
+                if br.get("merged") or not br.get("dvd_silence"):
+                    continue
+                c.require(bool(br.get("ld_black")) and br.get("off_before") is not None and br.get("off_after") is not None,
+                          f"retime.breaks[{i}]", "adjudicated black and before/after offsets required")
 
     if args.stage == "encode":
         c.file(resolve(ep, "avs_padfix"), "source-derived-PAD-repaired-encode-AVS")
@@ -204,6 +229,10 @@ def main() -> int:
         c.file(probe / f"{ep.code}-pad-repair-frames.txt", "confirmed-PAD-repair-list")
         for key in ("map_pads", "rendered_isolated", "repaired", "cut_pads"):
             c.require(nonnull(d, "pads", key), f"pads.{key}", "record the audit result")
+        if not dvd_available and int((d.get("pads") or {}).get("cut_pads") or 0) > 0:
+            cut_frames = (d.get("pads") or {}).get("cut_pad_frames") or []
+            c.require(len(cut_frames) == int(d["pads"]["cut_pads"]), "pads.cut_pad_frames",
+                      "no-DVD cut repairs need the exact measured output-frame list")
 
     if args.stage == "deliverable":
         key = d.get("deliverable")

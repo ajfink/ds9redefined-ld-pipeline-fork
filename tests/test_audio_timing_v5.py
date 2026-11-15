@@ -6,7 +6,9 @@ import tempfile
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.audio_timing_diagnostic import summarize_timing
+from scripts.audio_timing_diagnostic import (NO_DVD_PAD_TOLERANCE_FRAMES,
+                                             no_dvd_audio_plan_gib, rate_filter,
+                                             summarize_timing)
 from scripts.build_ld_synced import sample_plan
 from scripts.measure_audio_rate import diagnostic_skip, robust_line_fit, summarize_saved_report
 
@@ -23,6 +25,27 @@ class V5AudioTimingTests(unittest.TestCase):
         self.assertAlmostEqual(report["audio_minus_map_content_frames"], 1.3216579, places=5)
         self.assertAlmostEqual(report["audio_minus_projected_content_frames"], 0.3216579, places=5)
         self.assertFalse(report["is_approval"])
+
+    def test_e06_no_dvd_contrast_keeps_intrinsic_rate_and_pad_stretch_distinct(self):
+        # E06 measured ~0 intrinsic rate change but needed a separate PAD stretch.
+        # The duration/PAD model is an effective timeline rate, not an intrinsic-disc fit.
+        samples = round(2776.250794 * 44_100)
+        report = summarize_timing(44_100, samples, 83_288, 84, 83)
+        self.assertAlmostEqual(report["duration_candidate_effective_rate_hz"], 44_055.69, delta=0.02)
+        self.assertAlmostEqual(report["audio_minus_projected_content_frames"], -0.68, delta=0.02)
+        self.assertLessEqual(abs(report["audio_minus_projected_content_frames"]),
+                             NO_DVD_PAD_TOLERANCE_FRAMES)
+
+    def test_no_soxr_build_uses_recorded_default_resampler_fallback(self):
+        filt, name = rate_filter(88_112, use_soxr=False)
+        self.assertIn("asetrate=88112", filt)
+        self.assertNotIn("soxr", filt)
+        self.assertEqual(name, "FFmpeg default resampler (swr)")
+
+    def test_no_dvd_audio_space_plan_uses_measured_native_wav_size(self):
+        # E07 native WAV is 488,688,896 bytes; the plan budgets two outputs and
+        # one temporary by multiplying the actual source size with margin.
+        self.assertAlmostEqual(no_dvd_audio_plan_gib(488_688_896), 3 * 488_688_896 / 1024**3)
 
     def test_sample_accurate_skip_and_video_sample_target(self):
         start, target = sample_plan(50.316933, 65_282)

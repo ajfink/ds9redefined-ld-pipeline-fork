@@ -64,7 +64,7 @@ RANGE_RE = re.compile(r"\[(\d+)\s+(\d+)\]")
 # build_map.ps1's own documented fallback (see the header it writes into the .avs):
 #   "Fallback if QTGMC fails: replace pp=0 with pp=2 and delete the
 #    ReplaceFramesSimple lines."
-REPAIR_CHOICES = ("none", "pp2")
+REPAIR_CHOICES = ("none", "qtgmc", "pp2")
 
 
 def parse_ranges(text: str) -> list[tuple[int, int]]:
@@ -124,29 +124,70 @@ def render(source: str, pad: int, trim_start: int, trim_end: int,
     a("# has no VS-mac use here).")
     a("src = core.bs.VideoSource(SOURCE)")
     a("src = core.std.Trim(src, SOURCE_PAD, None)")
+    a("# The master reports _FieldBased=0 (measured); TFM(order=-1) needs a real")
+    a("# field order. The cadence LOG was generated with _FieldBased=2, so the")
+    a("# encode chain must use the same value or TFM would decide differently")
+    a("# from the log whose repair map it is following.")
+    a("src = core.std.SetFrameProps(src, _FieldBased=2)")
     a("")
-    a("# --- field match --------------------------------------------------------")
-    a("# order=-1 reads _FieldBased; TFM raises if it is absent. Not invented here.")
-    a("fm = core.tivtc.TFM(src, order=-1, PP=0, chroma=1, slow=2)")
-    a("")
+
     if ranges and repair == "none":
         raise PipelineError(
             f"{len(ranges)} repair range(s) were measured {ranges}, so a "
-            "deinterlace stage is required. QTGMC's modern equivalent "
-            "(vsdeinterlace.QTempGaussMC().deinterlace) has not been parameter-"
-            "mapped against the Windows call "
-            "(Preset='Slower', SourceMatch=3, Lossless=2, TR2=2, Sharpness=0.2, "
-            "FPSDivisor=2), and inventing it would silently change the repair. "
-            "Choose: --repair pp2 (build_map.ps1's own documented fallback) or "
-            "record the mapped QTGMC arguments first."
+            "deinterlace stage is required. Pass --repair qtgmc (mapped from "
+            "Swap Folder/plugins/QTGMC.avsi) or --repair pp2 (build_map.ps1's "
+            "own documented fallback); do not leave the repair unwritten."
         )
+
+    pp = 2 if (ranges and repair == "pp2") else 0
+    a("# --- field match --------------------------------------------------------")
+    a("# order=-1 reads _FieldBased (set above). Not invented here.")
+    a(f"fm = core.tivtc.TFM(src, order=-1, PP={pp}, chroma=1, slow=2)")
+    a("")
+
     if ranges and repair == "pp2":
-        a("# --- repair (build_map.ps1's documented fallback) ----------------------")
-        a("# pp=0 -> pp=2 and the ReplaceFramesSimple lines are deleted, exactly as")
-        a("# the generated .avs header prescribes when QTGMC is unavailable.")
-        a("fm = core.tivtc.TFM(src, order=-1, PP=2, chroma=1, slow=2)")
+        a("# --- repair: build_map.ps1's documented fallback ------------------------")
+        a("# \"replace pp=0 with pp=2 and delete the ReplaceFramesSimple lines\" -")
+        a("# the generated .avs header's own instruction when QTGMC is unavailable.")
         a("")
     elif ranges:
+        a("# --- repair: targeted QTGMC map (ReplaceFramesSimple equivalent) --------")
+        a("# Windows: di = src.QTGMC(Preset=\"Slower\", SourceMatch=3, Lossless=2,")
+        a("#                      TR2=2, Sharpness=0.2, FPSDivisor=2)")
+        a("# Every mapping below is read out of Swap Folder/plugins/QTGMC.avsi:")
+        a("#   Preset=\"Slower\" -> QTGMC's OWN default (line 218 \"The default preset")
+        a("#        is Slower\" / 285 default(Preset,\"Slower\")), so QTempGaussMC()")
+        a("#        defaults stand in for it rather than an invented preset.")
+        a("#   SourceMatch=3    -> source_match__iterations=3")
+        a("#   Lossless=2       -> lossless__mode=PRESHARPEN; QTGMC.avsi:900 applies")
+        a("#        QTGMC_MakeLossless *before* resharpen/final temporal smooth (its")
+        a("#        own comment calls this not-true-lossless), i.e. the pre-sharpen")
+        a("#        slot. Mode 1 (true) is the *post*-smooth slot at :961.")
+        a("#   TR2=2            -> final__tr=2; QTGMC.avsi:943-946 maps TR2 to")
+        a("#        MDegrain1/2/3, i.e. the final-stage degrain radius.")
+        a("#   Sharpness=0.2    -> sharpen__strength=0.2. DELTA: QTGMC scales this")
+        a("#        internally via sharpAdj (TR1/TR2 dependent); that scaling is not")
+        a("#        replicated, so effective sharpness may differ slightly.")
+        a("#   FPSDivisor=2     -> QTGMC.avsi:1002 SelectEvery(FPSDivisor, 0):")
+        a("#        bob to double rate, then drop alternate frames, phase 0.")
+        a("from vsdeinterlace import QTempGaussMC")
+        a("di = QTempGaussMC(")
+        a("    source_match__iterations=3,")
+        a("    lossless__mode=QTempGaussMC.LosslessMode.PRESHARPEN,")
+        a("    final__tr=2,")
+        a("    sharpen__strength=0.2,")
+        a(").deinterlace(src)                       # tff inferred from _FieldBased")
+        a("di = core.std.SelectEvery(di, 2, 0)      # FPSDivisor=2, phase 0")
+        a("assert di.num_frames == fm.num_frames, (di.num_frames, fm.num_frames)")
+        a("assert (di.fps_num, di.fps_den) == (fm.fps_num, fm.fps_den), \\")
+        a("       (di.fps_num, di.fps_den, fm.fps_num, fm.fps_den)")
+        a("")
+        a("# ReplaceFramesSimple equivalent: 1:1 rate/count, pads only.")
+        a("REPAIR = frozenset(n for lo, hi in REPAIR_RANGES for n in range(lo, hi + 1))")
+        a("fm_raw = fm")
+        a("fm = core.std.FrameEval(fm_raw, lambda n, f=None: di if n in REPAIR else fm_raw)")
+        a("")
+    else:
         a("# --- repair (no ranges measured; nothing to replace) ------------------")
         a("")
     a("# --- decimation ---------------------------------------------------------")
@@ -156,7 +197,11 @@ def render(source: str, pad: int, trim_start: int, trim_end: int,
     a("# --- trims (post-decimation 23.976 output frames) -----------------------")
     a("# AviSynth Trim(start, 0) == keep to end; Trim(start, -N) == N from end.")
     if trim_end > 0:
-        a(f"out = core.std.Trim(out, TRIM_START, -TRIM_END)")
+        # VapourSynth's std.Trim rejects AviSynth-style negative-from-end indices
+        # (it raises "invalid last frame specified"). AviSynth treats -1 as the
+        # last frame, so -N maps to the absolute index (num_frames - N). The
+        # resulting frame count is verified later by the video.frames / QC gate.
+        a("out = core.std.Trim(out, TRIM_START, out.num_frames - TRIM_END)")
     else:
         a("out = core.std.Trim(out, TRIM_START, None)")
     a("")
@@ -187,7 +232,10 @@ def main() -> int:
                     help="measured tail trim (video.tail_trim, 0 if none)")
     ap.add_argument("--out", required=True, help=".vpy to write")
     ap.add_argument("--repair", choices=REPAIR_CHOICES, default="none",
-                    help="what to do when a repair set exists (default: refuse)")
+                    help="what to do when a repair set exists: 'qtgmc' (mapped "
+                         "from Swap Folder/plugins/QTGMC.avsi), 'pp2' "
+                         "(build_map.ps1's documented fallback), or 'none' "
+                         "(default: refuse and require a decision)")
     ap.add_argument("--dry-run", action="store_true", help="print, do not write")
     args = ap.parse_args()
 

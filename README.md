@@ -1,7 +1,12 @@
 # DS9 LaserDisc OpenCode Operator Pack
 
-**Workflow version: 5** — check `WORKFLOW_VERSION` and follow the core-change/device-log
+**Workflow version: 6** — check `WORKFLOW_VERSION` and follow the core-change/device-log
 rules in `WORKFLOW_VERSIONING.md` before editing or syncing workflow files.
+
+**Design goal:** make the workflow clear and reliable enough for capable free or low-cost
+models to run with its bounded steps, explicit ACTION/VERIFY/STOP gates, and deterministic
+helpers. Qwen3.5 4B and Big Pickle are examples of target users, not a guarantee or a claim
+that every model/version has been tested. Model convenience never lowers QC or safety gates.
 
 **GitHub source-only note:** this repository intentionally omits machine profiles, measured
 episode data, reference archives, media/caches, and third-party AviSynth DLLs. See
@@ -16,24 +21,31 @@ ACTION/VERIFY steps. If the configured fallback `opencode-go/gpt-6-luna` is avai
 use `DS9 LaserDisc OpenCode Runbook - Qwen4B-Luna.md` for its narrowly gated fallback
 protocol. The main runbook remains the technical source of truth.
 
-This is a **Windows x64 OpenCode workflow pack**, not a single unattended encoder.
-OpenCode performs episode-specific measurements and adjudications, records them
-in a manifest, runs the bundled helpers, and stops at ambiguous or failed gates.
-Topaz is never launched automatically.
+Windows x64 is the authoritative/reference workflow. V6 also includes an Apple-silicon
+macOS VapourSynth path; its helpers and M5 stage evidence are included, but a fresh-Mac
+end-to-end V6 delivery has not yet been validated. Linux and ARM64 platforms remain
+research-only unless marked otherwise. This is not a single unattended encoder: OpenCode
+measures per-episode values, records them in a manifest, runs gated helpers, and stops at
+ambiguity/failure. Topaz is never launched automatically.
 
 ---
 
 ## The job prompt
 
-The user only needs to provide the Archive item URL, the folder in which the
-LaserDisc files should be saved, and the matching DVD path. Episode/title should
-be independently verified from the Archive metadata and DVD; ask if they disagree.
+The user provides the Archive item URL, the folder in which the LaserDisc files
+should be saved, and—if available—the matching DVD episode/version. Verify the
+episode/title independently from Archive metadata, capture names, and DVD evidence.
+If no matching DVD is available, ask whether the user explicitly wants to proceed
+with the LD-only timing path; it cannot provide DVD 5.1/SRT or an external absolute
+A/V cross-correlation.
 The final destination defaults to `roots.out` in `machine.json`; the user may
 supply an override.
 
-If the supplied DVD is outside the configured `roots.dvd_root`, set that root to the
+If a supplied DVD is outside the configured `roots.dvd_root`, set that root to the
 DVD library folder for this job, rerun preflight, and record the exact DVD file in
-`files.dvd`. This is machine configuration, not an episode timing measurement.
+`files.dvd`. This is machine configuration, not an episode timing measurement. If
+the user chooses no-DVD mode, initialize with `--no-dvd`; do not invent a `files.dvd`
+path or DVD-derived tracks.
 
 ```text
 Read README.md and DS9 LaserDisc OpenCode Runbook.md in this folder. Run the
@@ -46,8 +58,19 @@ Use the Qwen4B-Luna variant and opencode-go/gpt-6-luna only at its explicit fall
 
 LaserDisc Archive URL: <https://archive.org/details/...>
 Save source files to: <absolute folder path>
-Matching DVD file: <absolute path to the correct DVD MKV>
+Matching DVD episode/version (optional; path or NONE): <path or NONE>
+If NONE, ask whether to proceed with LD-only timing before initializing.
+If NONE and Cut Pad Images/<episode> contains stills, ask whether the user wants to use them.
 Final output folder (optional; default is machine.json roots.out): <path or blank>
+
+If the DVD is NONE and the user chooses to proceed, use the V6 duration/PAD route to
+correct and sample-align the original LD audio to the measured, trimmed and pad-fixed
+video timeline. DVD 5.1/SRT and DVD-picture/act-break analysis are unavailable. QC verifies
+the capture-pad origin model and exact audio/video endpoint; it must disclose that no
+external absolute A/V cross-correlation was possible. If shared cut-pad stills exist, use
+them only after confirming the episode, DVD timestamp/scene, and exact cut-PAD mapping.
+Each still is a single prepared DVD frame for a confirmed one-frame black dropout at a
+shot cut—not a substitute for a DVD reference or a source for other tracks.
 
 Derive and verify the episode code/title. Preserve inputs. Measure every episode-
 specific value; never copy timings from a reference episode. Follow each runbook
@@ -97,9 +120,10 @@ fallback route is unavailable, ask the user rather than silently changing models
    This initializes/discovers paths; it is not the final readiness pass. It saves an
    existing profile to a unique dated backup before writing; keep that backup. If several
    plausible work roots exist, discovery warns and requires an explicit `roots.work` rather
-   than silently selecting one. On Mac, do not
-   run the Windows preflight: create a local POSIX `machine.json` as documented in
-   `PORTING.md`. Set custom roots that discovery could not determine, especially
+    than silently selecting one. On Mac, do not
+    run the Windows preflight: copy `machine-macos.example.json` to a local
+    `machine.json`, replace the example paths, and follow the fresh-Mac bootstrap in
+    `PORTING.md`. Set custom roots that discovery could not determine, especially
    `roots.work` and `roots.dvd_root`; set `upscale_root` only for legacy E01 files.
 2. With the local profile paths known, run the Tool-update gate below. If components are
    missing or out of date, present each installed/latest version and ask whether to
@@ -210,20 +234,18 @@ adjudicated values already in the manifest; it does not infer them. Never reuse 
 E04/E05 alignment or edge script. No README can make a missing measurement safe by
 pretending it is automated.
 
-The M5 log records native VapourSynth TFM logging via `vapoursynth-tivtc`, Orc/project
-and Python smoke checks, and a `vspipe`→FFmpeg Y4M encode smoke test. It also reports a
-Mac-local `build_map_vpy.py` and a successful local preflight. The helper source was
-recovered from the byte-verified Mac reference snapshot and is now included in this
-bundle. Its M5 test used a ProRes stand-in and does not establish a full episode run.
-The current bundled `preflight_mac.py` has passed syntax, `--help`, and the expected
-non-Mac guard here, but has not been run on macOS; the M5 42/1 result is from the Mac
-local copy. The M5 TFM parity result is historical; current workflow assumes compatibility
-when supported software is current and does not require a parity flag or clip. Component
-checks are **not** end-to-end Mac validation. Before Windows or Mac setup and before
-every new episode, follow the **Tool-update gate** in `PORTING.md`: check upstream
-versions, ask the user which detected updates to install (specific components, **Update
-all**, or **Continue anyway**), record the choice, and rerun capability checks. Freeze
-versions mid-episode; get explicit approval for any older compatibility pin.
+The M5 log documents a real macOS V5 port: native TFM logging, source reader, `.vpy`
+cadence/encode/PAD path, 4:2:2 PAD conversion, stream-copy remux, plugin setup, and a
+successful Mac preflight. The validated Mac helper set is now included in `scripts/` and
+the source-available M5 regression tests are included. **This still is not a claim of a
+fresh-Mac, full-delivery pass:** the M5 project log ends before a final V5 delivery/QC
+result, and the V6 files in this authoring copy have not been run on a Mac. Follow the
+new-machine setup and Mac smoke gates in `PORTING.md`, then validate a complete episode
+on real Apple-silicon hardware before calling macOS end-to-end supported. The historical
+TFM parity result is background evidence; current supported software needs no recurring
+parity test. Before Windows or Mac setup and every new episode, follow the **Tool-update
+gate** in `PORTING.md`, record version choices, rerun capability checks, and freeze the
+toolchain during the episode.
 
 ---
 
@@ -324,13 +346,15 @@ missing, verify and regenerate it before continuing.
     manifest fields with confirmed facts; keep the detailed DVD probe and its provenance
     in `roots.probe` / `roots.logs`. Do not add ad hoc manifest keys. Keep uncertain values
     unset.
- 3. **Initialize and validate the episode manifest.** Run
-    `python scripts/init_episode.py --url <URL> --downloads <folder> --dvd <DVD.mkv>`.
-    It checks the verified download manifest and Archive metadata, records the DVD and
-    capture files, and emits capture-independent AVS/DVD-audio paths in `files`. The
-     `ld_native` and `ld_corrected` paths depend on the measured audio capture and rate;
-     add them only at the audio stage, never invent them during initialization. Confirm
-     the title and any uncertain capture metadata, then run
+ 3. **Initialize and validate the episode manifest.** With a DVD, run
+     `python scripts/init_episode.py --url <URL> --downloads <folder> --dvd <DVD.mkv>`.
+     If the user explicitly approved no-DVD mode, run
+     `python scripts/init_episode.py --url <URL> --downloads <folder> --no-dvd`
+     (and add `--cut-pad-images use|skip` when shared cut-pad PNGs are available).
+     The helper checks the verified download and Archive metadata, records whether a DVD
+     was supplied, and emits platform script paths (`.avs` Windows / `.vpy` macOS).
+     `ld_native` and `ld_corrected` remain unset until measured at the audio stage. Confirm
+     the title and uncertain capture metadata, then run
    `python scripts/validate_episode.py --episode <code> --stage inputs`. Set expected
    output file roots/keys, `deliverable`, `mux_tracks`, and `ld_audio_source`. Keep the
    default track set LD stereo only; add DVD 5.1/SRT only when verified sources and
@@ -360,67 +384,53 @@ missing, verify and regenerate it before continuing.
      to the refreshed `source_align` output. E07's five-capture/one-pressing report had 10
      pairs (= 5 choose 2); that is an example, not a fixed expectation. Record stack metrics
      and run `python scripts/validate_episode.py --episode <code> --stage stack`.
-  5. **Measure cadence, trims, and capture quality.** Follow the detailed runbook. Generate a
-    full-side TFM log and motion trace, inspect any hybrid/interlaced inserts, use
-    `scripts/build_map.ps1` to create the cadence/deinterlace map, and then apply the
-    *measured* trims. Decode the available raw EFM captures with Orc and compare their
-    reports before selecting a source WAV: report post-C2 loss, concealment,
-    uncorrectable/missing sections, and Q-timecode continuity. Interpret `POOR` against
-    the report definition; missing sections can trigger it even when loss is low. Report
-      times are `MM:SS:FF`, not `HH:MM:SS`. Preserve each native WAV/report, then choose
-      based on the measured evidence. Run `scripts/audio_timing_diagnostic.py --report-out
-      <new-json>` for the DVD-free duration/PAD candidate; it never commits a rate.
-      Set `audio.pad_frames` to the selected
-     capture's offset in `alignment_map`, mapping by the selector report's final Orc input
-     order (not the manifest capture inventory); cross-check Orc's `Padding prepended`.
-     Never substitute `video.head_trim` or `video.delta_s`.
-  6. **Align DVD and corroborate audio before final encoding.** Decode sequentially; never seek a reference
-     DVD with non-monotonic PTS. Extract both grids with
-     `scripts/extract_video_descriptors.py --episode <code> --source master` and
-   `--source dvd`. It intentionally matches the validated FFmpeg default rawvideo
-   sync behavior. In the controlled E05 probe, default sync produced the exact
-   81,654-frame reference; adding `-fps_mode passthrough` alone produced 68,555,
-   while `-vsync 0` failed. Do not add output-sync overrides, `setpts`, or an `fps`
-   filter. Verify descriptor counts and 29.97-fps coverage before running
-   `scripts/measure_dvd_alignment.py`, then independently check reverse/scene matches.
-     After the picture map and `video.delta_s` are measured, run
-      `scripts/measure_audio_rate.py --raw-provisional --out <new.tsv> --summary-out
-      <new.json>` on the native WAV; this centers
-     windows geometrically and does not approve/write an origin or rate. Compare its robust
-     and OLS fits against the duration/PAD estimate and pad-corrected fade fit. Resolve by
-      evidence, never by method label alone. Generate the selected `ld_corrected` as a new
-      file with `audio_timing_diagnostic.py --rate-hz <selected> --candidate-out <new.flac>
-      --report-out <new.json>`; record the approved path as `files.ld_corrected`. Then build
-      `ld_synced` with `scripts/build_ld_synced.py --dry-run` and the real audio-only command.
-      Do not run an x265 encode to revise audio.
-    Put candidate LD black intervals in `retime.breaks[].ld_black` and run
-   `scripts/measure_break_edges.py`. These scripts emit evidence; they do not
-   adjudicate ambiguous edges or modify the manifest.
-   7. **Prepare confirmed PAD repairs before final encoding.** First run the non-encoding
-      AVS validation to record `video.frames` and `video.duration_s`. Then run `pad_audit.py`
-      against the source-derived `avs_encode` (post-IVTC, still 10-bit), then `fullres_check.py`,
-     `rife_padframes.py` for confirmed non-cut PADs, and `build_padfix_avs.py`. Use the
-     verified DVD picture map for cut PADs. Only map-matched repair frames may be replaced;
-     genuine dark frames stay untouched. This creates `avs_padfix` from the original
-     source-derived AVS, never from an encoded MKV.
-  8. **Retime DVD tracks.** Adjudicate every silence edge and
-   record `off_before`/`off_after`, head/tail silence and `tail_off`. Then run
-   `python scripts/retime_dvd_assets.py --episode <code> --dry-run`; inspect every
-   segment/gap/tempo and cue count before rerunning without `--dry-run`. It generates
-   the piecewise 5.1 FLAC, retimed SRT, filter graph, and map; it refuses missing
-   measurements, invalid gaps, dropped cues, or overwriting files.
-    9. **Encode video once, then remux audio.** After `avs_padfix` and the measured frame
-       count/duration are ready, validate the patched AVS (metadata plus a short null decode;
-       no x265 encode), then run `encode_episode.ps1 -Pass final` once. It writes video-only
-       `padfixed_video` with x265 CRF 14 / slow / tune grain / Main 10. Independently build
-       and validate `ld_synced`, then `remux_padfixed.ps1` stream-copies it with the picture;
-       packet identity is checked. Audio-only corrections rebuild `ld_synced` and remux—never
-       rerun x265. Do not run the retired `encode_padfixed.ps1`.
-  10. **Deliver only after QC.** Run `python scripts/qc_report.py --episode <code>`.
-   Require exit code 0 and inspect the report. QC targets the manifest's declared
-   deliverable, checks frame count/stream inventory/titles/dispositions/packet
-   hashes, PAD blinks, replacement identity, absolute A/V, between-track drift, and
-   subtitle timeline. Optional tracks may be omitted only when the manifest says so.
+   5. **Measure cadence, trims, and capture quality.** Generate the full-side TFM log and
+      motion trace; on Windows use `build_map.ps1`, on macOS use the included
+      `build_motion_trace.py` + `build_map_vpy.py`. Inspect hybrid/interlaced inserts and
+      apply only measured trims. Decode all available raw EFMs with Orc and compare the
+      reports before selecting a WAV. Preserve each native WAV/report and set
+      `audio.pad_frames` from the selected capture's final Orc input-order alignment.
+   6. **Choose the audio/reference path.** If a DVD is available, keep the DVD-reference
+      workflow: decode it sequentially (never `-ss` a non-monotonic DVD), extract the DVD
+      and master descriptor grids, adjudicate the picture map/edges and robust-rate/fade
+      evidence, then build `ld_corrected` and sample-accurate `ld_synced`. Do not use the
+      DVD-rate fit as an assumed value. If the user explicitly chose no-DVD mode, run
+       `python scripts/audio_timing_diagnostic.py --episode <code> --promote-dvd-free --report-out <new-unique.json>` only
+       after measured video frames/DELTA and PAD counts/endpoints are available. It applies
+       the E07-validated duration/PAD rate and capture-pad geometry, runs a measured
+       audio-volume space gate, and records its report and
+      hashes, and refuses endpoint residuals beyond one frame. It produces LD stereo only.
+      QC then verifies exact audio sample count/origin method but must state that no external
+      absolute A/V cross-correlation was possible; do not report a DVD-based A/V pass.
+   7. **Prepare confirmed PAD repairs before final encoding.** Validate the source-derived
+      script without x265, then run `pad_audit.py`, `fullres_check.py`, `rife_padframes.py`,
+      and the platform's padfix builder (`build_padfix_avs.py` on Windows,
+      `build_padfix_vpy.py` on macOS). Use RIFE only for confirmed non-cut PADs. If no DVD
+      was supplied and the user chose the shared images, match timestamp-named
+      `Cut Pad Images/<episode>/` PNGs to exact confirmed cut-PAD output frames and pass
+      `--cut-pad-image <output-frame>=<PNG>`; otherwise use `--hold-cut`. Never RIFE across
+       a shot cut. Record the exact measured `pads.cut_pad_frames` list so the image-to-pad
+       mapping is auditable. Require source-raster and replacement-identity checks; do not
+       repair genuine dark content or derive repairs from an encode.
+   8. **Retime DVD tracks only when available and requested.** With a DVD, adjudicate every
+      silence edge, then dry-run and review `retime_dvd_assets.py` before writing 5.1/SRT.
+       After both retimed assets pass their gates, set `mux_tracks` and `deliverable_tracks`
+       together to `['ld','51','srt']`; keep `ld_audio_source='ld_synced'`. V6 remux maps
+       `retimed_51` and `retimed_srt` directly, so no preassembled `pre_upscale` input is
+       needed. Without a DVD, leave DVD-derived retime fields unset and keep both track
+       lists at `['ld']`; do not invent 5.1 or subtitles.
+   9. **Encode video once, then remux audio.** After PAD repairs and measured frame count/
+      duration, validate without x265, then run the platform's single-pass encoder:
+      `encode_episode.ps1 -Pass final` on Windows or
+      `python scripts/encode_episode_mac.py --episode <code> --pass final` on macOS.
+      Both produce video-only `padfixed_video` with the V5 CRF 14 / slow / grain / Main 10
+      recipe. Build/verify `ld_synced` first; use `remux_padfixed.ps1` or
+      `remux_padfixed_mac.py` to stream-copy and packet-check the available tracks. Audio-only
+      corrections rebuild `ld_synced` and remux—never rerun x265.
+   10. **Deliver only after QC.** Run `python scripts/qc_report.py --episode <code>` and
+       inspect the report. Require exit code 0. DVD mode checks the normal absolute A/V,
+       retimed-track, and subtitle gates. No-DVD mode uses the explicit LD-only timebase and
+       exact endpoint check; QC records that independent absolute A/V was not available.
 
 Use `scripts/validate_episode.py --episode <code> --stage cadence|audio|retime|encode|padfix|deliverable`
 at the corresponding gates. It reports missing prerequisites without filling them in.
@@ -455,9 +465,11 @@ permission.
 | `preflight.ps1` | Backup-safe profile discovery, ambiguity-safe root selection, and checks; Windows also smoke-tests LSMASHSource/TFM/TDecimate, with QTGMC conditional on measured inserts |
 | `scripts/preflight_mac.py` | Mac profile/tool/root/VapourSynth capability check (`--episode` and `--json` supported); checks workflow version and does not prove full workflow readiness |
 | `WORKFLOW_VERSION` / `WORKFLOW_VERSIONING.md` | Authoritative workflow version and core-change/device-log rules |
+| `changelog.txt` | Short release history; retrospective V1–V5 notes and accepted V6 changes |
+| `Cut Pad Images/<episode>/` | Curated single-frame DVD cut-PAD repair stills, named by verified DVD timestamp/frame; not a DVD reference substitute |
 | `scripts/download_archive.ps1` | Metadata-verified, resumable source download; ListOnly prints capture/file totals, aggregate bytes, and a projected free-space gate |
 | `scripts/check_space_budget.py` | Projected per-stage free-space gate that preserves the configured reserve |
-| `scripts/init_episode.py` | Three job inputs + verified download manifest -> draft episode manifest; no timings guessed |
+| `scripts/init_episode.py` | Verified Archive/download + optional DVD -> draft manifest; `--no-dvd` records explicit approval, and macOS gets `.vpy` script paths |
 | `scripts/validate_episode.py` | Stage-specific manifest/artifact prerequisites; optional expensive source MD5 recheck |
 | `scripts/select_stack_reference.py` | Orc refresh loop that chooses/stabilizes the reference and writes a refreshed project; never renders |
 | `scripts/build_stack_project.py` | Manifest-driven Orc graph skeleton; scratch `--reference-override` does not edit the manifest |
@@ -465,17 +477,20 @@ permission.
 | `scripts/measure_dvd_alignment.py` | Continuity-constrained DVD-minus-master Viterbi candidate path and confidence report |
 | `scripts/measure_break_edges.py` | Long-window content offsets, DP comparison, score/runner-up for each candidate break |
 | `scripts/measure_audio_rate.py` | Multi-window audio-vs-picture-map diagnostic with OLS and robust checks; never auto-selects a correction |
-| `scripts/audio_timing_diagnostic.py` | DVD-free exact-duration/PAD candidate report; optionally creates a separate experimental audio candidate; never edits the manifest |
+| `scripts/audio_timing_diagnostic.py` | DVD-free duration/PAD report; candidate-only by default, or `--promote-dvd-free` for the user's explicit no-DVD selection |
 | `scripts/build_ld_synced.py` | Sample-accurate AudioSkip + exact target sample count into FLAC; audio-only, refuses overwrites and records recipe/hashes |
 | `scripts/build_map.ps1` | TFM log + optional motion trace to cadence report, deinterlace map, AVS |
-| `scripts/build_map_vpy.py` | Re-express measured cadence outputs as a VapourSynth chain; does not re-measure |
-| `scripts/encode_episode.ps1` | Non-encoding AVS validation and the single final video-only x265 encode from the source-derived PAD-repaired AVS |
+| `scripts/build_map_vpy.py` | macOS VapourSynth rendering of measured cadence outputs; does not re-measure and refuses an unselected deinterlace path |
+| `scripts/build_motion_trace.py` | macOS N−1 raw-unit motion trace paired with the TFM log frame domain |
+| `scripts/build_padfix_vpy.py` / `scripts/encode_episode_mac.py` | macOS source-derived PAD replacement and non-encoding validation/single video-only final x265 pass via `vspipe` |
+| `scripts/remux_padfixed_mac.py` / `scripts/vspipe_util.py` | macOS stream-copy remux with packet identity; shared safe VapourSynth→FFmpeg transport |
+| `scripts/encode_episode.ps1` | Windows non-encoding AVS validation and the single final video-only x265 encode from the source-derived PAD-repaired AVS |
 | `scripts/retime_dvd_assets.py` | Measured manifest break schedule -> DVD 5.1 FLAC, retimed SRT, and retime map |
-| `scripts/pad_audit.py` / `fullres_check.py` | Detect map-matched PADs in the source-derived post-IVTC AVS and confirm them at full raster |
+| `scripts/pad_audit.py` / `fullres_check.py` | Detect map-matched PADs in the source-derived post-IVTC `.avs`/`.vpy` and confirm them at full raster |
 | `scripts/rife_padframes.py` / `build_padfix_avs.py` | Generate replacements only for confirmed PADs and wrap the source-derived AVS without changing frame count |
 | `scripts/encode_padfixed.ps1` / `remux_padfixed.ps1` | Former second-pass encoder is retired; remux stream-copies tracks with packet-identity checks |
 | `scripts/scan_padfixed_black.py` / `verify_pad_identities.py` | PAD-black and replacement identity gates |
-| `scripts/av_check_output.py` / `sync_check.py` | Absolute A/V and between-track drift checks |
+| `scripts/av_check_output.py` / `scripts/ld_only_sync_check.py` / `sync_check.py` | DVD-referenced absolute A/V, no-DVD exact timeline/sample-budget validation, and between-track drift checks |
 | `scripts/qc_report.py` | Final delivery report; skipped/unverified required checks fail closed |
 | `scripts/regen_plain_text.py` | Rebuild the ASCII companion from the main Markdown runbook |
 
@@ -577,32 +592,20 @@ output-sync behavior.
 
 ### Mac-side component smoke evidence
 
-The M5 log records that 16 Python scripts compiled and their CLIs answered `--help`
-under Python 3.15, `build_stack_project.py` passed on the E05 regression manifest, Orc
-2.11.1 parsed its generated project, and `init_episode.py` passed a synthetic verified
-download-manifest test without inventing measurements. The initial Mac-local preflight
-reported **42 pass, 1 warn, 0 fail**. After adopting the fresh workflow, macOS execution
-found and fixed defects in the embedded Python probe, Orc core-stage query, binary Y4M
-frame count, and POSIX download-space query. The corrected Mac-local checker reported
-**33 pass, 1 warn, 0 fail** (optional 7-Zip absent); the downloader ListOnly gate projected
-260.9 GiB free after the E10 transfer with the 80 GiB reserve. These are M5-machine
-results, not a full Mac episode run or validation of the exact adapted Z scripts.
+The M5 log records a verified 18/18-file E10 download, input/stack/cadence/audio stages,
+native TFM parity evidence, and the V5 VapourSynth ports. Its V5 PAD chain passed
+`pad_audit`, `fullres_check`, 81 replacements, padfix validation, and encoder validation;
+the log does **not** record a final encode/remux/delivery-QC completion. The M5-local V5
+preflight reported **36 pass, 1 warn, 0 fail** after the four observed macOS fixes. The
+reusable Mac helpers and the Mac-specific preflight fix have now been included in this
+bundle. These are strong component/stage results on M5, not a complete fresh-Mac V6 pass.
 
-The Z `preflight_mac.py` now includes the M5 fixes; its embedded probe and binary Y4M
-parser have local regression tests, but the adapted checker has **not** been run on macOS.
-The M5 log also reports `build_map_vpy.py` passed a synthetic `vspipe`→FFmpeg→x265 test
-(1301→1040 frames); that exact source is included from the byte-verified Mac snapshot, but
-has not been rerun on the current bundle/profile. `download_archive.ps1` now uses
-`System.IO.DriveInfo` for POSIX space checks with a Windows `Get-PSDrive` fallback; the
-Z copy still needs a Mac ListOnly verification. `align_dvd.py` from the snapshot was not
-copied: Z's `extract_video_descriptors.py` and `measure_dvd_alignment.py` provide the
-current `align_npy` path, and `av_check_output.py` points to them. Do not claim Mac
-readiness until the current checker, helper, and ListOnly gate are exercised on the target
-Mac and a complete episode workflow passes. The latest M5 log still had E10 downloading
-(163/457.3 GiB); it deferred manifest creation and all downstream stages until verified
-completion. E10's ~227 GiB
-projected post-job headroom is specific to that Mac/profile; recompute free space on every
-machine and keep the configured minimum unchanged.
+`download_archive.ps1` uses `System.IO.DriveInfo` for POSIX free-space checks with a
+Windows `Get-PSDrive` fallback. `align_dvd.py` from the snapshot remains excluded: the
+authoritative descriptor pair supplies `align_npy`. Before claiming Mac readiness, run
+the updated preflight/tests and ListOnly gate from a fresh local bundle/profile, then
+complete a real episode through final video encode, stream-copy remux, and QC. Recompute
+free-space budgets on every host; the M5 measurements do not transfer.
 
 ## Runbook files in this folder
 

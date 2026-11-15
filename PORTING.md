@@ -23,10 +23,98 @@ host without a script change. The profile, not a machine-specific path table, is
 source of truth.
 
 **Platform boundary:** Windows uses the PowerShell/AviSynth+ workflow and
-`preflight.ps1`. macOS uses POSIX profile paths and VapourSynth; it cannot use the
-Windows AviSynth demuxer or Windows preflight. A bundled `preflight_mac.py` is now
-available, but this copy has not been run on macOS and the end-to-end episode workflow
-is still **not validated**. Do not treat component smoke tests as a full workflow pass.
+`preflight.ps1`. macOS uses POSIX profile paths and the bundled VapourSynth companions;
+it cannot use the Windows AviSynth demuxer or Windows preflight. M5-specific scripts and
+the preflight have been exercised on Apple silicon, but the complete V6 workflow has not
+passed a fresh-Mac end-to-end delivery/QC. Do not treat component smoke tests as full
+workflow support.
+
+## Fresh macOS / Apple-silicon setup (V6)
+
+Use a **local writable copy** of this bundle and local fast storage for work/render files.
+Do not process large captures from SMB. Start from the portable Mac example, not an
+imported Windows profile:
+
+```zsh
+cp machine-macos.example.json machine.json
+# Edit machine.json: replace /Users/YOUR_ACCOUNT and /Volumes/YOUR_FAST_VOLUME,
+# use absolute executable paths, and create the roots directories on local storage.
+```
+
+Before installing/updating, run the PORTING tool-version gate and let the user choose the
+components. The following is the **tested M5 baseline snapshot from 2026-11-14**, not a
+permanent version pin; re-check upstream releases and plugin wheels before every fresh
+setup. Keep Decode-Orc at the Windows-master parity version for an episode (v2.11.1 was
+the tested parity/current release in that snapshot); do not upgrade mid-episode.
+
+The M5 first-run route was user-space micromamba rather than assuming Homebrew/admin access.
+After the update gate and the user's install choice, the setup shape is:
+
+```zsh
+MM="$HOME/tools/mm/bin/micromamba"
+"$MM" create -y -p "$HOME/tools/vsenv" -c conda-forge \
+  python=3.15 ffmpeg xxhash zimg pkg-config fftw
+PY="$HOME/tools/vsenv/bin/python"
+"$PY" -m pip install vapoursynth vapoursynth-tivtc vapoursynth-bestsource \
+  numpy opencv-python-headless pillow
+"$PY" -m vapoursynth config
+```
+
+Treat this as a **setup template, not a blind install command**: inventory current
+versions/wheel tags first, show the user the tool list, and apply only their choice. The
+production `tools.ffmpeg`/`tools.ffprobe` paths may point to a separate arm64 static build
+with `libx265`; the conda FFmpeg libraries support plugins. Set all executable paths in
+`machine.json`, then verify the same selected Python/environment through `vspipe` and
+`preflight_mac.py`. The V6 wrapper supplies the tested `DYLD_LIBRARY_PATH` for plugins
+linked to the environment's libraries.
+
+### Required baseline toolchain
+
+| Component | Role / requirement |
+|---|---|
+| Decode-Orc GUI + `orc-cli` | Install the official macOS arm64 DMG. Resolve `orc-cli` inside the `.app` bundle and set `tools.orc`; verify its stage list and parity version. |
+| FFmpeg + FFprobe | Set absolute paths in `tools.ffmpeg`/`tools.ffprobe`; must have `libx265` and `yuv4mpegpipe`. The tested static arm64 build was FFmpeg 9.0.2 with x265 4.2. If `libsoxr` is absent, V6 audio timing records and uses the tested FFmpeg default/SWR fallback. |
+| PowerShell 7 (`pwsh`) | Needed for shared `.ps1` download/cadence helpers. The tested user-space build was 7.7.0; set `tools.pwsh`. |
+| micromamba + one Python environment | The M5 used micromamba 2.10.0 and Python 3.15.2; set both `python.interpreter` and `tools.vspipe` to that same environment. |
+| VapourSynth + `vspipe` | The tested version was R82. Run `vapoursynth config` once. Always smoke-test through `vspipe`; Python import alone does not prove plugin/library loading. |
+| `vapoursynth-tivtc` v4 + `vapoursynth-bestsource` R23 | Native TFM log (`TFM(output=...)`), TDecimate, and the tested ProRes/DVD source reader. Prefer current compatible PyPI wheels in the selected arm64 Python environment over the old M5 source builds. |
+| Python modules | `numpy`, Pillow (`PIL`), and headless OpenCV (`cv2`) are required for QC/PAD identity. Install in the profile-selected Python environment. |
+
+RIFE is conditional on measured non-cut PADs: record the engine and weights separately.
+The tested M5 combination was upstream engine 20221029 plus `rife-v4.6`, native arm64 /
+Vulkan. 7-Zip (`7zz`) is optional and needed only if the selected Archive item has
+`.efm.7z` files.
+
+### Conditional VapourSynth deinterlace dependencies
+
+Install these only if the episode's measured cadence reports interlaced inserts and the
+user has approved the needed tool updates. The M5 validated `QTempGaussMC().deinterlace()`
+path from `vsdeinterlace` with its mapped parameter set; required plugin packages at the
+time included `vapoursynth-znedi3`, `vapoursynth-resize2`, `vapoursynth-mvutensils`,
+`vapoursynth-dmetrics`, `vapoursynth-mvtools`, and `vapoursynth-zsmooth`. Confirm current
+package names/versions and transitive dependencies in the actual environment. Do **not**
+use the similarly named PyPI `havsfunc` decoy or install the whole `vsjetpack[deinterlace]`
+extra without reviewing its extra dependencies. If the measured repair is not configured,
+the Mac cadence builder must refuse rather than silently omit the deinterlace.
+
+### First-run validation order
+
+1. Run `python scripts/preflight_mac.py --json` and resolve required failures. This is a
+   capability check, not a quality pass.
+2. Run the Python unit suite with the selected environment and bundle on `PYTHONPATH`:
+   `PYTHONPATH="$PWD" "$PY" -m unittest discover -s tests -p 'test_*.py'`.
+   VapourSynth-only tests are explicitly skipped when that module is not installed.
+3. Run the preflight's TIVTC → `vspipe` → Y4M smoke; confirm `build_map_vpy.py` output,
+   frame count, field property, trims, and measured map. Use `encode_episode_mac.py --pass
+   validate` (three-frame null decode; no x265) on the current source-derived chain.
+4. Validate the PAD transport on real measured PADs: `pad_audit.py` and `fullres_check.py`
+   must read the `.vpy` source; `rife_padframes.py` must preserve exact frame indices;
+   `build_padfix_vpy.py` must pass both frame-count assertions; validate again before the
+   one final encode. Keep DVD and no-DVD choices and QC limits the same as Windows.
+5. Run a full episode through final video-only encode, `remux_padfixed_mac.py`, and
+   `qc_report.py` before calling the Mac end-to-end path supported. The existing M5 log
+   records extensive component/stage passes but does not establish a completed fresh-Mac
+   V6 delivery.
 
 ---
 
@@ -101,13 +189,14 @@ The M5 log §9.3 records fixes found by executing the freshly adopted workflow o
   `Get-PSDrive` gate reports UNKNOWN and refuses Mac downloads. The current downloader
   tries `System.IO.DriveInfo` first and retains `Get-PSDrive` as the Windows fallback.
 
-The corrected M5-local preflight reported **33 pass, 1 warn, 0 fail**; its sole warning
-was optional 7-Zip for an item with no `.efm.7z`. A Mac ListOnly space-gate check projected
-260.9 GiB free after E10's selected transfer while retaining the 80 GiB reserve. Those
-results validate the fixes on M5; the adapted Z copies still need a Mac run. The latest M5
-log still had the 457.3 GiB E10 download in progress at 163 GiB, so no manifest or
-downstream stage was yet authorized by the verified-download rule. Its tool inventory
-found the listed software current, saved the report, and froze that toolchain for E10.
+The M5 V5 adoption log records **36 pass, 1 warn, 0 fail** after the corrected preflight
+and a successful POSIX ListOnly space gate. E10's 18/18-file download was later verified;
+M5 then completed manifest/input/stack/cadence/audio stages and exercised the V5 Mac PAD
+and validate ports. The log does not contain a final V6 delivery/QC result. Those are
+machine-specific validations, not a fresh-Mac guarantee. Re-run the current checker and
+ListOnly gate on the target Mac/profile, and finish a complete episode before claiming
+end-to-end Mac support. The M5 tool inventory was current at its logged check; perform the
+required upstream version check again before any new setup.
 
 Homebrew on that particular M5 was stale, unwritable without admin rights, and rejected
 macOS 27.2.1. That is an environment-specific diagnosis, not a general Mac requirement:
@@ -179,8 +268,10 @@ updated, use a current user-space distribution rather than relying on stale pack
   timestamps/frame rate and cross-check frame count, audio-frame duration, and
   container duration. Decode sequentially when packet PTS are non-monotonic.
 - **Track defaults:** `init_episode.py` initializes `deliverable_tracks` and
-  `mux_tracks` to `['ld']` even when a DVD is supplied. Keep LD stereo only until DVD
-  sources and retiming data are verified; add `51`/`srt` explicitly only after that.
+  `mux_tracks` to `['ld']`. With a DVD, add `51`/`srt` to both only after their sources
+  and retiming data are verified. V6 remux maps `ld_synced`, `retimed_51`, and
+  `retimed_srt` from separate files; a legacy `pre_upscale` aggregate is supported only
+  for older manifests. No-DVD mode remains LD stereo only.
 
 ### TFM compatibility policy
 
@@ -191,32 +282,30 @@ or parity clips before cadence. A historical cross-machine PASS is documented in
 a recurring gate. If an actual TFM error or disagreement is observed during processing,
 stop and diagnose it; do not infer the episode's cadence from the historical clips.
 
-### Still open — do not call the Mac workflow complete
+### Still open — Mac V6 end-to-end acceptance
 
-The Mac reference snapshot also contains an `align_dvd.py` implementation, but this
-bundle already has the current descriptor workflow (`extract_video_descriptors.py` +
-`measure_dvd_alignment.py`) that produces `align_npy` for the A/V gate. Do not add a
-competing alignment implementation; `av_check_output.py` now points to the current pair.
-Mac machine profiles and episode-specific manifests from that snapshot remain local and
-are not copied into the authoritative bundle.
+The Mac reference snapshot's `align_dvd.py` is not included: the authoritative
+`extract_video_descriptors.py` + `measure_dvd_alignment.py` pair is the only supported
+DVD-map implementation. Mac machine profiles and episode manifests remain local and are
+not copied into the authoritative bundle.
 
-1. Run the included `scripts/build_map_vpy.py` with the selected Mac profile and verify
-   the emitted VapourSynth chain on the current stack master. The M5 synthetic stand-in
-   test is historical evidence, not a current-episode pass. Windows `.dll` plugins are
-   not macOS plugins.
-2. Run the bundled `scripts/preflight_mac.py` on macOS and resolve any required failures.
-   It is a capability check, not a substitute for Windows preflight or an end-to-end
-   episode run.
-3. The QTGMC path is conditional on measured interlaced inserts. `mvtools` is built,
-   but the current QTGMC implementation is `vsdeinterlace`'s
-   `QTempGaussMC().deinterlace()` API; it is not the old `QTGMC(clip, Preset=...)`
-   call, and real `havsfunc` v34 no longer contains QTGMC. Map the Windows settings
-   (`Preset="Slower", SourceMatch=3, Lossless=2, TR2=2, Sharpness=0.2,
-   FPSDivisor=2`) to the current API and validate parity only if measured inserts make
-   this stage necessary. The similarly named PyPI `havsfunc` decoy does not provide
-   QTGMC.
-4. Run the full manifest-driven workflow and end-to-end QC on the Mac; component and
-   smoke tests alone do not validate an episode.
+The M5 log establishes a working Mac-specific V5 tool path, TFM parity, source reader,
+PAD-repair translation, a real-stack validate pass, and extensive stage checks. It does
+**not** record a complete final encode/remux/delivery QC on the current Z V6 bundle or on
+a fresh Mac. Therefore:
+
+1. On a fresh Mac, copy `machine-macos.example.json` to a local `machine.json`, replace
+   every example path, install the user-approved current compatible toolchain, and run
+   `preflight_mac.py` plus the test suite before download/render.
+2. Validate the current `build_map_vpy.py` and `encode_episode_mac.py --pass validate`
+   against the actual stack master; M5 synthetic/fixture tests are not a substitute.
+3. For measured interlaced inserts, use `build_map_vpy.py --repair qtgmc` only after
+   confirming the M5-mapped `QTempGaussMC().deinterlace()` dependencies load and the
+   frame/FPS assertions pass. The PyPI package named `havsfunc` may be a decoy; do not
+   assume it contains QTGMC.
+4. Run the complete V6 workflow through one video-only final encode, platform remux, and
+   `qc_report.py` exit 0 on actual Mac hardware before calling the Mac target end-to-end
+   supported. Component and smoke-test passes alone are not a delivery pass.
 
 ---
 
@@ -264,7 +353,7 @@ found elsewhere on `PATH` is not proof that the pipeline uses it.
 | Machine | Check these key tools and assets |
 |---|---|
 | Windows | FFmpeg/FFprobe (`libx265`, AviSynth demuxer); AviSynth+; TIVTC/TFM and TDecimate; L-SMASHSource, FFMS2 and RemapFrames; QTGMC dependencies when needed; Decode-Orc and its plugins; Python interpreter plus `numpy`, `opencv-python`, and Pillow; PowerShell; RIFE engine **and model** as separate versions; 7-Zip if used. |
-| macOS | FFmpeg/FFprobe (`libx265`, `yuv4mpegpipe`); Decode-Orc and plugins; PowerShell; micromamba; the profile-selected Python and its `numpy`, OpenCV, Pillow and VapourSynth bindings; VapourSynth; `vapoursynth-tivtc`, `vivtc`, `bestsource`; `mvtools`/`vsdeinterlace` if measured inserts require them; RIFE engine/model or 7-Zip if adopted for Mac stages; build dependencies such as Meson, Ninja, Cython and FFTW. Check the exact environment used by `vspipe`, not a different system Python. |
+| macOS | FFmpeg/FFprobe (`libx265`, `yuv4mpegpipe`); Decode-Orc and core stages; PowerShell; micromamba; profile-selected Python/VapourSynth/`vspipe`; `vapoursynth-tivtc` v4 and `vapoursynth-bestsource`; `numpy`, headless OpenCV, Pillow. Conditional QTGMC plugins only if measured inserts require them. RIFE engine and model, and 7-Zip only if selected input needs them. Use the exact environment used by `vspipe`, not another system Python. |
 
 For workflow purposes, current supported software on Windows and Mac is treated as
 sufficient for TFM compatibility. Do not gate cadence on a parity flag, evidence lookup,
@@ -289,16 +378,17 @@ Updates Log.md`, §8, as background only.
   must not trigger x265. The old second-pass encoder is retired.
 - **macOS:** FFmpeg/FFprobe must provide `libx265` and `yuv4mpegpipe`; the selected
   VapourSynth Python environment, `vspipe`, `vapoursynth-tivtc`, `bestsource`, and
-  plugin-linked libraries must work together. Resolve Decode-Orc from the app bundle
-  through `machine.json`. Windows `.dll` plugins and the AviSynth demuxer do not apply.
-  The Version 4 PAD-before-final-encode route has not yet been adapted or validated on the
-  M5 VapourSynth path; do not claim V4 Mac readiness or run the retired second-pass flow
-  there until an equivalent source-derived VapourSynth wrapper is implemented and tested.
-  Version 5's `audio_timing_diagnostic.py` and `build_ld_synced.py` are Python/FFmpeg tools
-  with no Windows-only audio filters, but have not been run on the M5 environment; verify
-  its exact FFmpeg build and Orc-project access before adopting them. V5 also adds the
-  DVD-picture diagnostic's robust fit summary and an experimental DVD-free timing candidate;
-  no M5 audio result is validated by the Windows tests.
+  `vspipe`, and plugin-linked libraries must work together. Resolve Decode-Orc from the
+  app bundle through `machine.json`. Windows `.dll` plugins and the AviSynth demuxer do not
+  apply. V6 includes `build_map_vpy.py`, `build_padfix_vpy.py`, `encode_episode_mac.py`,
+  `remux_padfixed_mac.py`, `vspipe_util.py`, and `.vpy` transports for PAD audit, full-raster
+  checks, RIFE neighbor extraction, and motion traces. The M5 log records unit/smoke passes
+  and a V5 audio stage; a complete final delivery/QC on M5 or a fresh Mac is not yet recorded.
+  Do not claim end-to-end Mac support until the full V6 chain passes on real Mac hardware.
+  The V6 no-DVD timing path is available on Mac through the same Python/FFmpeg helper; check
+  the exact FFmpeg build for `libsoxr` (the M5 static build lacked it and uses a logged SWR
+  fallback). The no-DVD QC verifies capture-pad geometry and exact sample duration, but does
+  not claim external absolute A/V correlation.
 - **Both:** record RIFE engine and model separately if used; check Python and all
   profile-required packages; use 7-Zip only when `.efm.7z` inputs require it. The
   cross-platform Tool-update gate is the authoritative version inventory.

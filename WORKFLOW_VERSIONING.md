@@ -1,6 +1,6 @@
 # Workflow versioning
 
-**Authoritative workflow version: 5** (`WORKFLOW_VERSION` is the machine-readable
+**Authoritative workflow version: 6** (`WORKFLOW_VERSION` is the machine-readable
 counter). The authoritative bundle is `Z:\ld-pipeline` on the authoring machine.
 
 ## What requires a version change
@@ -30,6 +30,10 @@ and work data.
 
 Use `templates/device-workflow-change.template.md` for a consistent device-log entry.
 
+`V6-QUEUE.md` records the original V6 plan, the items integrated in V6, and deferred
+proposals. An unimplemented queue item is not a workflow instruction or permission to
+bypass an accepted gate.
+
 ## Version history
 
 | Version | Origin | Summary | Validation status |
@@ -39,9 +43,10 @@ Use `templates/device-workflow-change.template.md` for a consistent device-log e
 | 3 | `LENOVO-LEGION-5`, 2026-11-14; from Version 2 | Incorporated cross-device fixes: backup existing machine profiles before `-Write`, refuse ambiguous root auto-selection, report Python import failures without aborting preflight, support an optional profile-resolved AviSynth loader, and save exact FFmpeg argument/version sidecars. Added the non-workflow reference pool and index, retime detector-threshold matching, and Temp-intermediate retention guidance. | Windows preflight/AVS smoke and sidecar tests, PowerShell parse checks, and the full unit suite are recorded in the device log. The 80 GiB free-space gate still fails on the current Z: volume; no threshold was lowered. |
 | 4 | `LENOVO-LEGION-5`, 2026-11-14; from Version 3 | Moved confirmed PAD repair before the sole final encode: audit and replacement frames now come from the source-derived post-IVTC AVS, the padfix AVS imports that original chain, and the final CRF 14/slow/grain x265 output is encoded once. Replaced the full-side validation encode with AVS metadata probing plus a three-frame null decode; retired the second-pass encoder; restricted replacements to map-matched repair frames. Made “work ahead during downloads” explicit in the job prompt and Qwen runbooks. | **14 unit tests passed**; changed Python files compiled; PowerShell AST parsing passed. Temporary source-import PAD (including source-format match), no-PAD wrapper, non-encoding validate, and final-command dry-run checks passed. No full episode encode; Mac VapourSynth path remains unadapted/unverified. |
 | 5 | `LENOVO-LEGION-5`, 2026-11-14; from Version 4 | Made audio timing an explicit pre-video decision: added a DVD-free duration/PAD diagnostic with separately reported full-map/trimmed PAD counts and optional disposable candidates; added robust Theil–Sen/leave-one-window-out checks to the DVD-picture diagnostic; added sample-accurate `ld_synced` production with recipe/hash evidence; made final x265 video-only and audio-only remux/AB checks possible. Preserved DVD-based audio as the default pending head-to-head evidence. | 19 unit tests passed; Python compilation and PowerShell parsing passed. Synthetic duration/PAD, robust-fit, saved-report-only, sample-offset, video-only encode, and stream-copy remux checks passed. No E07 candidate-rate A/B test or full encode was run; M5 audio behavior remains untested. |
+| 6 | `LENOVO-LEGION-5`, 2026-11-14; from Version 5 | Added the explicit optional no-DVD route using the E07-validated duration/PAD rate, capture-pad geometry, exact output sample budget, and a distinct QC result that does not claim external absolute A/V cross-correlation. Made DVD input optional at initialization; added timestamped shared cut-PAD stills and no-cross-shot-RIFE handling. Integrated the M5 VapourSynth/macOS helper set, Mac profile example, preflight/tests, direct-source optional-track remux, and fresh-Mac setup instructions. Removed the hard-coded WinGet FFmpeg path from `motion-probe.ps1`; added the low-cost-model design goal and retrospective `changelog.txt`. | E07 candidate and final-format test are documented in `Z:\work\logs\S01E07-v5-rerun.md`; the official V5 E07 manifest/deliverable remain unchanged. V6 unit tests, Python compilation, PowerShell parsing, and a profile-resolved FFmpeg smoke check passed. Mac-only tests were skipped on Windows; M5 stage evidence is cited, but no fresh-Mac V6 end-to-end delivery is claimed. Linux and ARM64 remain untested. |
 
 Version records are in `W:\ld-pipeline-execution-log.md`: Version 1 §16, Version 2 §17,
-Version 3 §§18–19, Version 4 §21, and Version 5 §§22–23. E07 findings are in `Z:\S01E07-flow-log.md`.
+Version 3 §§18–19, Version 4 §21, Version 5 §§22–23, and Version 6 §27. E07 findings are in `Z:\S01E07-flow-log.md` and `Z:\work\logs\S01E07-v5-rerun.md`.
 The M5 source/adoption evidence is in `W:\M5 Mac LaserDisc Project Updates Log.md`;
 its last recorded adoption is Version 2, and its current on-device marker still needs
 confirmation before any sync. Record future adoption or local changes FROM that machine's

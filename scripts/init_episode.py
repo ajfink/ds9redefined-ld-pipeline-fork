@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Initialize an episode manifest from the three job inputs.
 
-This records identity, verified download inventory, the supplied DVD path, and
-planned profile-root file locations. It deliberately leaves measurements null.
+This records identity, verified download inventory, an optional DVD reference,
+and planned profile-root file locations. It deliberately leaves measurements null.
 
   python scripts\\init_episode.py --url <archive-url> --downloads <folder> --dvd <dvd.mkv>
+  python scripts\\init_episode.py --url <archive-url> --downloads <folder> --no-dvd
 
 It refuses to overwrite an existing manifest. It currently supports one-part
 episodes only; E01/E02 Emissary needs its existing two-part manifest/workflow.
@@ -57,9 +58,26 @@ def title_from_dvd(path: Path, code: str, ffprobe: str) -> str:
     return ""
 
 
-def episode_files(code: str, title: str = "") -> dict:
+def title_from_capture(captures: list[dict], code: str) -> str:
+    """Read the episode title from a verified capture filename when no DVD exists."""
+    for capture in captures:
+        name = Path(str(capture.get("tbc_file", ""))).stem
+        label = str(capture.get("label", ""))
+        if not name or not label:
+            continue
+        match = re.search(
+            re.escape(code) + r"\s*[-_]\s*(.+?)\s*[-_]\s*" + re.escape(label) + r"$",
+            name, re.IGNORECASE)
+        if match:
+            return match.group(1).strip(" -_")
+    return ""
+
+
+def episode_files(code: str, title: str = "", script_ext: str = ".avs") -> dict:
     low = code.lower()
     label = f"{code}-{title}" if title else code
+    if script_ext not in (".avs", ".vpy"):
+        raise PipelineError(f"unsupported script extension for this platform: {script_ext}")
     return {
         "stack_project": {"root": "stack", "name": f"stack-full-{low}.orcprj"},
         "stack_master": {"root": "prores", "name": f"{code}-stack-master.mov"},
@@ -67,12 +85,12 @@ def episode_files(code: str, title: str = "") -> dict:
         "motion": {"root": "probe", "name": f"motion-{low}.txt"},
         "cadence_summary": {"root": "probe", "name": f"cadence-summary-{low}.txt"},
         "di_map": {"root": "probe", "name": f"di-map-{low}.txt"},
-        "avs_log": {"root": "avs", "name": f"{code}-log.avs"},
-        "avs_trim": {"root": "avs", "name": f"{code}-trim.avs"},
-        "avs_encode": {"root": "avs", "name": f"{code}-encode.avs"},
+        "avs_log": {"root": "avs", "name": f"{code}-log{script_ext}"},
+        "avs_trim": {"root": "avs", "name": f"{code}-trim{script_ext}"},
+        "avs_encode": {"root": "avs", "name": f"{code}-encode{script_ext}"},
         # The one-pass final encode writes padfixed_video. encode_full and
         # encode_validate remain only in older hand-maintained episode records.
-        "avs_padfix": {"root": "avs", "name": f"{code}-padfix.avs"},
+        "avs_padfix": {"root": "avs", "name": f"{code}-padfix{script_ext}"},
         "padfixed_video": {"root": "out", "name": f"{code}-23.976-padfixed-video.mkv"},
         "padfixed": {"root": "out", "name": f"{code}-23.976-padfixed.mkv"},
         "pre_upscale": {"root": "out", "name": f"{code}-23.976-pre-upscale.mkv"},
@@ -102,7 +120,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", required=True, help="verified Archive /details/<item-id> URL")
     ap.add_argument("--downloads", required=True, help="destination used by download_archive.ps1")
-    ap.add_argument("--dvd", required=True, help="absolute path to the verified DVD MKV")
+    dvd_group = ap.add_mutually_exclusive_group(required=True)
+    dvd_group.add_argument("--dvd", help="absolute path to the verified matching DVD MKV")
+    dvd_group.add_argument("--no-dvd", action="store_true",
+                           help="record the user's explicit choice to proceed without a DVD reference")
+    ap.add_argument("--cut-pad-images", choices=("use", "skip"),
+                    help="when --no-dvd and shared episode cut-pad PNGs exist, record the user's choice")
     ap.add_argument("--manifest-out", help="alternate manifest path for testing")
     args = ap.parse_args()
 
@@ -116,20 +139,14 @@ def main() -> int:
 
     ld = Ld()
     download_dir = Path(args.downloads).resolve()
-    dvd = Path(args.dvd).resolve()
     if not download_dir.is_dir():
         raise PipelineError(f"download destination is not a directory: {download_dir}")
-    if not dvd.is_file():
+    dvd = Path(args.dvd).resolve() if args.dvd else None
+    if dvd is not None and not dvd.is_file():
         raise PipelineError(f"DVD file does not exist: {dvd}")
+    if not args.no_dvd and args.cut_pad_images is not None:
+        raise PipelineError("--cut-pad-images is only valid with --no-dvd")
     root_overrides = {}
-    dvd_root = (ld.profile.get("roots") or {}).get("dvd_root")
-    dvd_spec = {"path": str(dvd)}
-    if dvd_root:
-        try:
-            rel = dvd.relative_to(Path(dvd_root).resolve())
-            dvd_spec = {"root": "dvd_root", "name": rel.as_posix()}
-        except ValueError:
-            pass
     roots = ld.profile.get("roots") or {}
     dl_root = roots.get("downloads_root")
     dl_template = roots.get("downloads_template") or "DS9 {episode} LaserDisc"
@@ -202,16 +219,44 @@ def main() -> int:
     if len(labels) != len(set(labels)):
         raise PipelineError(f"capture labels are not unique: {labels}")
 
-    dvd_info = subprocess.run([ld.ffprobe(), "-v", "error", "-show_entries",
-        "stream=codec_type,codec_name,channels:format=duration:format_tags=title", "-of", "json", str(dvd)],
-        capture_output=True, text=True, encoding="utf-8", errors="replace")
-    if dvd_info.returncode:
-        raise PipelineError(f"ffprobe failed on supplied DVD: {dvd_info.stderr[-800:]}")
-    dvd_data = json.loads(dvd_info.stdout or "{}")
-    if not any(s.get("codec_type") == "video" for s in dvd_data.get("streams", [])):
-        raise PipelineError("supplied DVD has no video stream")
-    title = title_from_dvd(dvd, code, ld.ffprobe())
-    if not title:
+    dvd_spec = None
+    if dvd is not None:
+        dvd_root = (ld.profile.get("roots") or {}).get("dvd_root")
+        dvd_spec = {"path": str(dvd)}
+        if dvd_root:
+            try:
+                rel = dvd.relative_to(Path(dvd_root).resolve())
+                dvd_spec = {"root": "dvd_root", "name": rel.as_posix()}
+            except ValueError:
+                pass
+        dvd_info = subprocess.run([ld.ffprobe(), "-v", "error", "-show_entries",
+            "stream=codec_type,codec_name,channels:format=duration:format_tags=title", "-of", "json", str(dvd)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if dvd_info.returncode:
+            raise PipelineError(f"ffprobe failed on supplied DVD: {dvd_info.stderr[-800:]}")
+        dvd_data = json.loads(dvd_info.stdout or "{}")
+        if not any(s.get("codec_type") == "video" for s in dvd_data.get("streams", [])):
+            raise PipelineError("supplied DVD has no video stream")
+        title = title_from_dvd(dvd, code, ld.ffprobe())
+    else:
+        title = title_from_capture(captures, code)
+        if not title:
+            archive_title = (metadata.get("metadata") or {}).get("title") or ""
+            title = str(archive_title).strip()
+        if not title:
+            print("WARN: could not derive a human title from verified capture filenames or Archive metadata; "
+                  "confirm it before reporting.", file=sys.stderr)
+
+    cut_pad_dir = BUNDLE / "Cut Pad Images" / code
+    cut_pad_images = sorted(cut_pad_dir.glob("DVD-*.png")) if cut_pad_dir.is_dir() else []
+    if args.no_dvd and cut_pad_images and args.cut_pad_images is None:
+        raise PipelineError(
+            f"shared cut-pad stills are available in {cut_pad_dir}; ask the user whether to use them, "
+            "then pass --cut-pad-images use or --cut-pad-images skip")
+    if args.no_dvd and args.cut_pad_images == "use" and not cut_pad_images:
+        raise PipelineError(f"--cut-pad-images use was selected but no shared PNGs exist in {cut_pad_dir}")
+    image_choice = (args.cut_pad_images if cut_pad_images else "not-available") if args.no_dvd else "not-applicable"
+    if not title and dvd is not None:
         print("WARN: could not derive a human title from DVD tags/filename; confirm it and update title before reporting.", file=sys.stderr)
 
     out = Path(args.manifest_out) if args.manifest_out else BUNDLE / "episodes" / f"{code}.json"
@@ -221,12 +266,18 @@ def main() -> int:
     template.update({
         "episode": code, "title": title, "pad_report_label": code,
         "record_status": "draft", "format": "one_part", "archive_item": item,
+        "dvd_reference_available": dvd is not None,
+        "no_dvd_proceed_approved": bool(args.no_dvd),
+        "cut_pad_images_choice": image_choice,
         "captures": captures,
         "reference": "", "alignment_map": "",
-        "files": {"dvd": dvd_spec, **episode_files(code, title)},
+        "files": ({"dvd": dvd_spec} if dvd_spec else {}) | episode_files(
+            code, title, ".vpy" if (ld.profile.get("os") or "windows").casefold() == "darwin" else ".avs"),
         "deliverable": "pre_upscale", "deliverable_tracks": ["ld"],
         "mux_tracks": ["ld"], "ld_audio_source": "ld_synced",
-        "_init_note": "DVD/download locations use machine profile roots when possible and explicit paths only for outside roots. Episode measurements are intentionally null; measure them before running stage scripts.",
+        "_init_note": ("DVD/download locations use machine profile roots when possible and explicit paths only for outside roots. "
+                       "Episode measurements are intentionally null; measure them before running stage scripts. "
+                       "No-DVD mode is permitted only after the user explicitly chose --no-dvd; DVD-derived tracks are unavailable."),
     })
     if root_overrides:
         template["roots"] = root_overrides
@@ -234,6 +285,7 @@ def main() -> int:
     out.write_text(json.dumps(template, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"initialized {out}")
     print(f"episode={code} title={title or '<confirm>'} archive={item}")
+    print(f"dvd_reference_available={dvd is not None}; cut_pad_images_choice={image_choice}")
     print(f"captures={','.join(c['label'] for c in captures)} reference=UNMEASURED")
     print("No stack, cadence, audio, trim, alignment, or retime values were guessed.")
     return 0

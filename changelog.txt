@@ -1,0 +1,51 @@
+DS9 LaserDisc OpenCode Operator Pack
+====================================
+
+Version history
+---------------
+
+Version 1 (retrospective summary; reconstructed 2026-11-14)
+FROM unversioned baseline -> Version 1
+- Adopted the fresh workflow and the M5-tested macOS preflight/download fixes.
+- Added reusable cadence/VapourSynth tooling and the current descriptor-based DVD alignment path.
+- Validation: see the authoring and M5 device logs; Mac end-to-end delivery was not established.
+
+Version 2 (retrospective summary; reconstructed 2026-11-14)
+FROM Version 1 -> Version 2
+- Added the Windows AviSynth capability gate, explicit Orc render evidence, per-stage free-space budgets,
+  manifest/input checks, multi-capture EFM selection, capture-order PAD accounting, and version-frozen stages.
+- Validation: see WORKFLOW_VERSIONING.md and device logs; full end-to-end platform validation remained partial.
+
+Version 3 (retrospective summary; reconstructed 2026-11-14)
+FROM Version 2 -> Version 3
+- Improved machine portability and profile discovery; added resolved FFmpeg command/version sidecars,
+  reference-pool evidence, retime guidance, and safer temporary-file handling.
+- Validation: see the authoring device log and the tests recorded there.
+
+Version 4 (retrospective summary; reconstructed 2026-11-14)
+FROM Version 3 -> Version 4
+- Moved confirmed PAD repair into the source-derived video chain before the sole final x265 encode.
+- Retired the second-pass video encoder and replaced the full-program validation encode with a short,
+  non-encoding source-script validation.
+- Validation: unit, syntax, and targeted synthetic checks passed; these did not constitute a full episode encode.
+
+Version 5 (retrospective summary; reconstructed 2026-11-14)
+FROM Version 4 -> Version 5
+- Added explicit audio timing diagnostics, robust DVD-picture/audio fit summaries, and sample-accurate
+  LD audio generation. The final x265 encode is video-only; audio is attached by stream-copy remux.
+- Added an experimental DVD-free duration/PAD estimator, gated on E07 head-to-head evidence.
+- Validation at the original V5 release: 19 tests passed; no E07 DVD-free A/B or full E07 rerun had yet been performed.
+
+Version 6 (2026-11-14)
+FROM Version 5 -> Version 6
+- Promoted the E07-tested, optional no-DVD LD-audio path for users who explicitly proceed without a
+  matching DVD. It records the duration/PAD method and exact audio sample budget; QC clearly reports
+  that external absolute A/V cross-correlation is unavailable without a DVD.
+- Added a user choice for curated, timestamp-named single-frame cut-PAD stills when no DVD is supplied;
+  included verified stills and provenance for the completed E04/E07 cut-PAD cases.
+- Added the V5 VapourSynth/macOS helper set and a fresh-Mac setup/profile guide based on M5 field tests.
+  A complete V6 final delivery on a fresh Mac remains unvalidated.
+- Removed the author-machine FFmpeg path from motion-probe; it now resolves FFmpeg from the machine profile.
+- Added a changelog, optional-DVD manifest initialization, and a no-DVD synchronization QC path.
+- Validation: see the committed V6 test/compile/PowerShell checks and the E07/M5 device logs; Linux and
+  ARM64 platform targets remain research-only unless separately validated.

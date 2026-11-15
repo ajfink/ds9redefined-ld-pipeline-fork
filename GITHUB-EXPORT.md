@@ -6,17 +6,19 @@ templates. It intentionally does **not** contain:
 - `machine.json` or machine-specific profiles;
 - measured episode manifests or work outputs;
 - the archival `reference-pool/` and historical `reference-runs/` data;
-- TBC/EFM captures, WAV/FLAC audio, video, descriptor caches, or generated images;
+- TBC/EFM captures, WAV/FLAC audio, video, descriptor caches, or other generated images;
+- all but the intentionally curated, single-frame cut-PAD stills in `Cut Pad Images/<episode>/`;
 - the third-party AviSynth plugin DLLs in `avsplugins/`.
 
-`episodes/_template.json` and the generic `machine.example.json` are included. A clone is
-not a ready-to-run operator pack: create a local profile/episode manifest, provide the
-source media, and obtain the required AviSynth plugins under their respective upstream
-terms before running the PAD workflow.
+`episodes/_template.json` and the generic Windows and macOS example profiles are included.
+A clone is not a ready-to-run operator pack: create a local profile/episode manifest,
+provide the source media, and obtain the required platform tools/plugins before running
+the workflow. The curated cut-PAD stills are single-frame PNG repair aids, not source
+DVDs, video sequences, or episode footage.
 
 No project-wide license has been selected yet. Public visibility does not grant a license
 to reuse the project; add a LICENSE file only after the owner chooses the intended terms.
 
-Known portability limitation: `scripts/motion-probe.ps1` still resolves FFmpeg through an
-authoring-machine absolute path and needs a profile-based follow-up before this source
-snapshot can be treated as portable on another Windows host.
+The workflow supports the documented Windows x64 path. macOS Apple-silicon tooling is
+included, but end-to-end delivery on a fresh Mac remains unvalidated; Linux and ARM64
+targets remain research/untested unless a release explicitly says otherwise.

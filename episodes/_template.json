@@ -15,6 +15,9 @@
   "record_status": "template",
   "format": "one_part",
   "archive_item": "",
+  "dvd_reference_available": null,
+  "no_dvd_proceed_approved": null,
+  "cut_pad_images_choice": null,
   "captures": [],
   "reference": "",
   "alignment_map": "",
@@ -35,7 +38,17 @@
     "rate_fit_stderr_ppm": null,
     "asetrate": null,
     "corrected_duration_s": null,
-    "origin_verified_by_duration": null
+    "origin_verified_by_duration": null,
+    "rate_method": null,
+    "duration_candidate_rate_hz": null,
+    "intermediate_asetrate_hz": null,
+    "resampler": null,
+    "skip_method": null,
+    "wav0_master_frame": null,
+    "endpoint_residual_frames": null,
+    "endpoint_tolerance_frames": null,
+    "absolute_av_reference_available": null,
+    "dvd_free_approved": null
   },
   "video": {
     "frames": null,
@@ -58,6 +71,7 @@
     "inside_break_black": null,
     "never_rendered": null,
     "cut_pads": null,
+    "cut_pad_frames": [],
     "content_blacks_left_alone": []
   },
   "retime": {

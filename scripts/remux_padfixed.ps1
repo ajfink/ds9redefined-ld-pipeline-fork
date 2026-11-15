@@ -5,8 +5,9 @@
 .DESCRIPTION
   Which tracks are muxed and where they come from is decided by the manifest:
     mux_tracks            ["ld"] or ["ld","51","srt"]
-    ld_audio_source       key of the track file holding the LD stereo
-  so one script serves every episode without an episode-specific branch.
+  ld_audio_source       key of the track file holding the LD stereo
+  V6 maps retimed 5.1/SRT from their own manifest file keys; older manifests may
+  still use a pre_upscale container. Default output is the manifest deliverable.
 
   Nothing is re-encoded: every output stream must be packet-identical to its
   source, which is asserted after the mux. Optional -AudioSource/-Output paths
@@ -31,7 +32,8 @@ $ep = Get-LdEpisode -Code $Episode
 $ff = Get-LdTool $prof 'ffmpeg'
 $fp = Get-LdTool $prof 'ffprobe'
 $video = if ($Video) { $Video } else { Resolve-LdFile $prof $ep 'padfixed_video' }
-$out = if ($Output) { $Output } else { Resolve-LdFile $prof $ep 'padfixed' }
+$deliverableKey = if ($ep.deliverable) { [string]$ep.deliverable } else { 'padfixed' }
+$out = if ($Output) { $Output } else { Resolve-LdFile $prof $ep $deliverableKey }
 $dur = Get-LdNumber $ep.video.duration_s 'video.duration_s'
 $tracks = @($ep.mux_tracks)
 if (-not $tracks) { throw "manifest has no mux_tracks - record ['ld'] or ['ld','51','srt']" }
@@ -49,25 +51,45 @@ if (-not $DryRun -and (Test-Path -LiteralPath $out)) {
     throw "refusing to overwrite existing output: $out"
 }
 
-# ld_audio_source doubles as the source of the DVD-derived tracks when present
+# V6 maps requested retimed DVD tracks from their own measured files. Keep the
+# legacy pre_upscale-container mapping for older manifests.
 $full = Resolve-LdFile $prof $ep 'pre_upscale' -Optional
+$fiveone = Resolve-LdFile $prof $ep 'retimed_51' -Optional
+$srt = Resolve-LdFile $prof $ep 'retimed_srt' -Optional
+$legacyFull = $full -and (Test-Path -LiteralPath $full) -and ($ldSrc -eq $full)
+$ffInputs = @('-i', $video, '-i', $ldSrc)
+$maps = @('-map', '0:v:0', '-map', '1:a:0')
+$meta = @('-metadata:s:a:0', 'title=LD 2.0 (original Dolby Surround)', '-metadata:s:a:0', 'language=eng',
+          '-disposition:a:0', 'default')
+$optionalHashPairs = @()
+$inputIndex = 2
 if ($want51) {
-    if ($ldSrc -ne $full) {
-        throw "mux_tracks includes 51/srt, so ld_audio_source ($ldSrcKey) must be the file that already holds them ($full)"
-    }
-    if (-not (Test-Path -LiteralPath $full)) { throw "missing input: $full" }
-    $maps = @('-map', '0:v:0', '-map', '1:a:0', '-map', '1:a:1', '-map', '1:s:0')
-    $meta = @('-metadata:s:a:0', 'title=LD 2.0 (original Dolby Surround)', '-metadata:s:a:0', 'language=eng',
-              '-metadata:s:a:1', 'title=DVD 5.1 (retimed)', '-metadata:s:a:1', 'language=eng',
-              '-metadata:s:s:0', 'title=English SDH (retimed)', '-metadata:s:s:0', 'language=eng',
-              '-disposition:a:0', 'default', '-disposition:a:1', '0', '-disposition:s:0', '0')
-} else {
-    $maps = @('-map', '0:v:0', '-map', '1:a:0')
-    $meta = @('-metadata:s:a:0', 'title=LD 2.0 (original Dolby Surround)', '-metadata:s:a:0', 'language=eng',
-              '-disposition:a:0', 'default')
+    if ($fiveone -and (Test-Path -LiteralPath $fiveone)) {
+        $ffInputs += @('-i', $fiveone)
+        $maps += @('-map', "${inputIndex}:a:0")
+        $optionalHashPairs += [pscustomobject]@{ Label='DVD 5.1'; Source=$fiveone; SourceMap='0:a:0'; OutputMap='0:a:1' }
+        $inputIndex++
+    } elseif ($legacyFull) {
+        $maps += @('-map', '1:a:1')
+        $optionalHashPairs += [pscustomobject]@{ Label='DVD 5.1'; Source=$full; SourceMap='0:a:1'; OutputMap='0:a:1' }
+    } else { throw "requested DVD 5.1 source is missing: $fiveone" }
+    $meta += @('-metadata:s:a:1', 'title=DVD 5.1 (retimed)', '-metadata:s:a:1', 'language=eng',
+               '-disposition:a:1', '0')
+}
+if ($wantSrt) {
+    if ($srt -and (Test-Path -LiteralPath $srt)) {
+        $ffInputs += @('-i', $srt)
+        $maps += @('-map', "${inputIndex}:s:0")
+        $optionalHashPairs += [pscustomobject]@{ Label='English SDH'; Source=$srt; SourceMap='0:s:0'; OutputMap='0:s:0' }
+    } elseif ($legacyFull) {
+        $maps += @('-map', '1:s:0')
+        $optionalHashPairs += [pscustomobject]@{ Label='English SDH'; Source=$full; SourceMap='0:s:0'; OutputMap='0:s:0' }
+    } else { throw "requested English SRT source is missing: $srt" }
+    $meta += @('-metadata:s:s:0', 'title=English SDH (retimed)', '-metadata:s:s:0', 'language=eng',
+               '-disposition:s:0', '0')
 }
 
-$ffArgs = @('-y', '-hide_banner', '-loglevel', 'warning', '-i', $video, '-i', $ldSrc) + $maps +
+$ffArgs = @('-y', '-hide_banner', '-loglevel', 'warning') + $ffInputs + $maps +
     @('-c', 'copy', '-map_metadata', '1',
       '-metadata:s:v:0', "title=LaserDisc $($ep.audio.capture), 3:2 pulldown removed, 23.976p, PAD blips repaired",
       '-disposition:v:0', 'default') + $meta +
@@ -127,10 +149,7 @@ $hashPairs = @(
     [pscustomobject]@{ Label='video'; Source=$video; SourceMap='0:v:0'; OutputMap='0:v:0' },
     [pscustomobject]@{ Label='LD audio'; Source=$ldSrc; SourceMap='0:a:0'; OutputMap='0:a:0' }
 )
-if ($want51) {
-    $hashPairs += [pscustomobject]@{ Label='DVD 5.1'; Source=$full; SourceMap='0:a:1'; OutputMap='0:a:1' }
-    $hashPairs += [pscustomobject]@{ Label='English SDH'; Source=$full; SourceMap='0:s:0'; OutputMap='0:s:0' }
-}
+$hashPairs += $optionalHashPairs
 foreach ($pair in $hashPairs) {
     $sourceHash = Get-PacketMd5 $pair.Source $pair.SourceMap
     $outputHash = Get-PacketMd5 $out $pair.OutputMap

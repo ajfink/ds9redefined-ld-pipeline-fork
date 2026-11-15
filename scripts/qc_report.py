@@ -11,6 +11,7 @@ Gates, each with an explicit threshold (runbook section 10):
   4. no PAD-aligned single-frame black survives        scan_padfixed_black.py
   5. replacement images match their own frame          verify_pad_identities.py
   6. absolute A/V within +/-100 ms, +/-30 ppm, rms<=40 ms   av_check_output.py
+     (or DVD-free timeline/sample-budget validation when the user elected no-DVD mode)
   7. between-track drift within +/-30 ppm, rms<=40 ms   sync_check.py
   8. retimed SRT: count, monotonic, inside the timeline
   9. measured values agree with what the manifest recorded (warnings, not failures)
@@ -42,6 +43,8 @@ STANDING_WARNINGS = [
     "respect machine.json limits.heavy_jobs and the recorded hardware; never run two downloaders for one item",
     "Flowframes CLI needs elevation/dev mode - use the upstream rife-ncnn-vulkan engine",
     "measure every episode: never copy another episode's AudioSkip, DELTA, rate or trim",
+    "DVD-free deliveries can verify the capture-origin/duration/PAD model and exact audio/video endpoint, "
+    "but cannot claim an external absolute A/V cross-correlation",
 ]
 
 
@@ -135,13 +138,27 @@ def main() -> int:
     add("replacement identity", *run_gate("verify_pad_identities.py",
                                           ["--episode", ep.code, "--encode", str(deliverable)],
                                           args.skip_heavy))
-    print("[3/9] absolute A/V ...", flush=True)
-    add("absolute A/V", *run_gate("av_check_output.py",
-                                  ["--episode", ep.code, "--video", str(deliverable)],
-                                  args.skip_heavy))
-    print("[4/9] between-track sync ...", flush=True)
-    add("between-track sync", *run_gate("sync_check.py",
-                                        ["--episode", ep.code], args.skip_heavy))
+    dvd_available = ep.data.get("dvd_reference_available")
+    if dvd_available is None:  # existing V1-V5 manifests carry files.dvd instead
+        dvd_available = bool((ep.data.get("files") or {}).get("dvd"))
+    if dvd_available:
+        print("[3/9] absolute A/V ...", flush=True)
+        add("absolute A/V", *run_gate("av_check_output.py",
+                                       ["--episode", ep.code, "--video", str(deliverable)],
+                                       args.skip_heavy))
+    else:
+        print("[3/9] DVD-free timeline sync ...", flush=True)
+        add("absolute A/V", "SKIP",
+            "no DVD reference supplied; external absolute A/V cross-correlation is unavailable")
+        add("DVD-free sync", *run_gate("ld_only_sync_check.py",
+                                        ["--episode", ep.code, "--video", str(deliverable)],
+                                        args.skip_heavy))
+    if "51" in list(ep.data.get("deliverable_tracks") or ["ld"]):
+        print("[4/9] between-track sync ...", flush=True)
+        add("between-track sync", *run_gate("sync_check.py",
+                                            ["--episode", ep.code], args.skip_heavy))
+    else:
+        add("between-track sync", "SKIP", "no DVD 5.1 track in deliverable_tracks")
 
     # ---- container / stream inventory ----
     print("[5/9] stream inventory ...", flush=True)
@@ -322,6 +339,8 @@ def main() -> int:
     # A sync check is legitimately not applicable when the delivered file has no
     # 5.1 track. Any other skipped gate (including --skip-heavy) is unverified.
     allowed_skips = set()
+    if not dvd_available:
+        allowed_skips.add("absolute A/V")
     if "51" not in tracks:
         allowed_skips.add("between-track sync")
     if "srt" not in tracks:

@@ -91,7 +91,8 @@ def check_tool(results: Results, profile: dict, key: str,
 
 def run_python_probe(python: Path, required_modules: list[str]) -> tuple[dict | None, str]:
     code = r'''
-import importlib.util, json, sys
+import importlib.util, json, sys, warnings
+warnings.simplefilter("ignore")   # keep stderr clean; the caller parses stdout JSON
 import importlib
 mods = json.loads(sys.argv[1])
 missing, import_errors, versions = [], {}, {}
@@ -125,10 +126,18 @@ print(json.dumps(data))
     code_rc, output = run_text([str(python), "-c", code, json.dumps(required_modules)])
     if code_rc != 0:
         return None, output.strip()
-    try:
-        return json.loads(output.strip().splitlines()[-1]), ""
-    except (json.JSONDecodeError, IndexError):
-        return None, "Python probe returned no valid JSON: " + output[-1000:]
+    # Do not assume the JSON is the last line: warnings (e.g. VapourSynth R82's
+    # `__version__` DeprecationWarning) are merged from stderr and can be printed
+    # *after* the JSON. Whether they appear depends on whether that warning has
+    # already fired in this process, so taking the last line is order-dependent
+    # and passes the main run while failing a fresh test process.
+    for line in reversed([ln for ln in output.splitlines() if ln.strip()]):
+        if line.lstrip().startswith("{"):
+            try:
+                return json.loads(line), ""
+            except json.JSONDecodeError:
+                continue
+    return None, "Python probe returned no valid JSON: " + output[-1000:]
 
 
 def count_y4m_frames(data: bytes) -> int:
@@ -426,8 +435,12 @@ def main() -> int:
         "build_map_vpy.py", "build_map.ps1", "build_stack_project.py",
         "select_stack_reference.py", "extract_video_descriptors.py",
         "measure_dvd_alignment.py", "measure_break_edges.py",
-        "measure_audio_rate.py", "retime_dvd_assets.py", "av_check_output.py",
-        "qc_report.py", "verify_pad_identities.py", "check_space_budget.py",
+        "measure_audio_rate.py", "audio_timing_diagnostic.py", "build_ld_synced.py",
+        "retime_dvd_assets.py", "av_check_output.py", "ld_only_sync_check.py",
+        "pad_audit.py", "fullres_check.py", "rife_padframes.py",
+        "build_padfix_vpy.py", "encode_episode_mac.py", "remux_padfixed_mac.py",
+        "vspipe_util.py", "build_motion_trace.py", "qc_report.py",
+        "verify_pad_identities.py", "check_space_budget.py",
     )
     missing_scripts = [name for name in required_scripts if not (scripts_dir / name).is_file()]
     results.add("bundle:workflow-scripts", "PASS" if not missing_scripts else "FAIL",

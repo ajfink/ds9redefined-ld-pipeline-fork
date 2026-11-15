@@ -1,6 +1,7 @@
 # Machine-local profiles; keep only the portable generic profile template.
 /machine*.json
 !/machine.example.json
+!/machine-macos.example.json
 /machine-authoring-profile.original.json
 
 # Measured episode state and offline archival/reference material are not part of
@@ -22,6 +23,8 @@
 *.raw
 *.7z
 *.png
+!/Cut Pad Images/
+!/Cut Pad Images/**/*.png
 *.tmp
 *.tmp.*
 *.log

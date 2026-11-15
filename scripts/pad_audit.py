@@ -18,12 +18,13 @@ from __future__ import annotations
 import argparse
 import csv
 import re
-import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))         # sibling modules (vspipe_util)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # ldcommon
 from ldcommon import Ld, PipelineError, load_episode  # noqa: E402
+from vspipe_util import run_source_ffmpeg  # noqa: E402
 
 W, H = 48, 36
 F24 = 24000.0 / 1001.0
@@ -101,10 +102,12 @@ def run_blackdetect(ld: Ld, video: Path, logfile: Path, rescan: bool,
     else:
         cmd = [ld.ffmpeg(), "-hide_banner", "-nostats"]
         if video.suffix.lower() == ".avs":
-            cmd += ["-f", "avisynth"]
-        cmd += ["-i", str(video),
-               "-vf", "blackdetect=d=0:pix_th=0.10:pic_th=0.98", "-an", "-f", "null", "-"]
-        p = subprocess.run(cmd, capture_output=True, text=True)
+            cmd += ["-f", "avisynth", "-i", str(video)]
+        else:
+            # macOS: no AviSynth demuxer - vspipe feeds y4m on stdin instead.
+            cmd += ["-f", "yuv4mpegpipe", "-i", "-"]
+        cmd += ["-vf", "blackdetect=d=0:pix_th=0.10:pic_th=0.98", "-an", "-f", "null", "-"]
+        p = run_source_ffmpeg(ld, cmd, video, text=True)
         if p.returncode and not re.search(r"black_start:", p.stderr or ""):
             raise PipelineError(f"blackdetect failed ({p.returncode}) on {video}: "
                                 f"{(p.stderr or '')[-800:]}")
@@ -132,10 +135,12 @@ def descriptors(ld: Ld, video: Path, cache: Path, rescan: bool) -> np.ndarray:
         return np.load(cache, mmap_mode="r")
     cmd = [ld.ffmpeg(), "-hide_banner", "-v", "error"]
     if video.suffix.lower() == ".avs":
-        cmd += ["-f", "avisynth"]
-    cmd += ["-i", str(video),
-           "-vf", f"scale={W}:{H}:flags=area,format=gray", "-f", "rawvideo", "-pix_fmt", "gray", "-"]
-    p = subprocess.run(cmd, capture_output=True)
+        cmd += ["-f", "avisynth", "-i", str(video)]
+    else:
+        cmd += ["-f", "yuv4mpegpipe", "-i", "-"]
+    cmd += ["-vf", f"scale={W}:{H}:flags=area,format=gray", "-f", "rawvideo",
+            "-pix_fmt", "gray", "-"]
+    p = run_source_ffmpeg(ld, cmd, video, text=False)
     if p.returncode:
         raise PipelineError(f"descriptor extraction failed: {p.stderr.decode('utf-8', 'replace')[-600:]}")
     n = len(p.stdout) // (W * H)
@@ -160,8 +165,12 @@ def main() -> int:
     for p in (video, project):
         if not p.exists():
             raise PipelineError(f"missing source AVS or stack project: {p}")
-    if video.suffix.lower() != ".avs":
-        raise PipelineError(f"PAD discovery must read the source-derived post-IVTC .avs, not encoded video: {video}")
+    if video.suffix.lower() not in (".avs", ".vpy"):
+        raise PipelineError(
+            f"PAD discovery must read the source-derived post-IVTC script "
+            f"(.avs/.vpy), not encoded video: {video}")
+    if video.name.endswith(("-encode-full.mkv", "-23.976.mkv", "-padfixed.mkv")):
+        raise PipelineError(f"refusing an encoded file as the PAD source: {video}")
 
     captures = ep.capture_set
     if ep.reference not in captures:

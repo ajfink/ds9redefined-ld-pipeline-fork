@@ -30,10 +30,11 @@ LD cadence, timing, audio, or picture-map value.
 machine setup contract. This document remains the detailed procedure; the Qwen
 variants are alternate presentation styles, not separate workflows.
 
-The user supplies three job inputs: the verified Archive item URL, the destination
-folder for source files, and the matching DVD MKV path. Derive the episode code and
-title from the Archive/DVD evidence and ask if they disagree. The final output folder
-defaults to `roots.out` in `machine.json`; use a user override only after recording it.
+The user supplies the verified Archive item URL, the destination folder for source
+files, and a matching DVD episode/version if available. Verify episode/title from the
+Archive/capture evidence and DVD when present; ask if they disagree. If no DVD is
+available, ask whether the user explicitly wants the LD-only timing path. The final
+output folder defaults to `roots.out` in `machine.json`; record any override.
 
 ### Tool choice and preservation gate
 
@@ -80,7 +81,7 @@ $ep = '<derive and verify from Archive/DVD>'
 $title = '<verified title>'
 $url = '<user-provided Archive item URL>'
 $source = '<the user-provided download destination; if omitted, derive it in section 2>'
-$dvd = '<the user-provided, verified DVD MKV path>'
+$dvd = '<verified DVD MKV path, or NONE after explicit no-DVD approval>'
 $work = $profile.roots.work
 $orc = $profile.tools.orc
 $ff = $profile.tools.ffmpeg
@@ -104,7 +105,9 @@ specific components, Update all, or Continue anyway; apply only the user's choic
 upgrade mid-episode.
 LaserDisc Archive URL: <https://archive.org/details/...>
 Save source files to: <absolute folder path>
-Matching DVD file: <absolute path to the correct DVD MKV>
+Matching DVD episode/version (optional; path or NONE): <path or NONE>
+If NONE: ask whether to proceed using the LD-only duration/PAD audio path.
+If NONE and Cut Pad Images/<episode> contains PNGs: ask whether to use them for confirmed cut PADs.
 Final output folder (optional): <path, or use machine.json roots.out>
 Derive and verify episode/title from the Archive and DVD. Run the complete workflow,
 measure every episode-specific value, update episodes/<code>.json, and use the bundled
@@ -290,23 +293,15 @@ never substitute `video.head_trim` or `video.delta_s`. E07 verified the mapping 
 three historical episodes and selected L1 at Orc input 2 with offset/padding 0; those are
 examples, not defaults.
 
-### V5 timing decision order — duration/PAD estimate first, DVD corroboration before encode
+### V6 audio decision — matching DVD or explicit LD-only mode
 
-1. Preserve every native EFMSink WAV/report; compare all available captures as above. Record the selected capture's Orc input-order `audio.pad_frames`. This is a **leading alignment offset**, not the total count of frame-map `PAD_1` inserts.
-2. Run `python scripts\audio_timing_diagnostic.py --episode <code>`. This read-only analysis opens the selected native PCM WAV and the stack project only—not the DVD or alignment path. It reports exact WAV sample count/duration, full-stack duration, full-map PAD_1 count, the count surviving measured head trim, and the duration-derived effective-rate candidate. It can write an experimental WAV/FLAC with `--candidate-out`, but **never updates the manifest or approves that candidate**.
-3. Reconcile frame counts before accepting the duration model. The full frame-map PAD count, pre-head-trim PADs, surviving PADs, `stack.frames - audio_frames`, EFMSink structural trim, and WAV0 are distinct evidence. Record all of them; if they do not reconcile within measurement uncertainty, STOP rather than choosing whichever count yields the expected rate.
-4. Build the DVD↔LD picture map **before final encoding**. After the WAV origin and geometric skip are verified, run `python scripts\measure_audio_rate.py --episode <code>`. Review every window's correlation, runner-up, and edge flag. Its OLS and robust Theil–Sen/leave-one-window-out results are corroboration, not automatic correction. The picture map is the common timeline; do not correlate across an unmodeled act-step staircase.
-5. Compare the duration/PAD candidate with the picture-map fit and the **pad-corrected** fade-midpoint fit. Do not use the raw fade slope on a padded master as a disc-rate estimate. A global fit across act steps, music-through blacks, fades, or poorly matched windows is not a rate measurement. If estimates disagree beyond their uncertainty or predict failure of the 30 ppm delivered A/V slope gate, stop and investigate before final x265.
-6. Keep rate and fixed offset separate. Once the selected effective rate is justified, measure WAV0 and compute the AudioSkip from the master frame of output zero and the master-time location of WAV0. Cross-check with `delta_s - audio.pad_frames/FPS`; do not substitute head trim or infer WAV0 from one fade. E06's first delivery showed why: its −12.9 ms error was a constant skip offset, not rate drift, and was corrected without touching video packets.
-7. Record the accepted method, units/sign convention, uncertainty, PAD accounting, WAV0 evidence, and exact sample positions. Create a **new** full-side `ld_corrected` with `audio_timing_diagnostic.py --rate-hz <selected-effective-Hz> --candidate-out <new-path.flac> --report-out <new-report.json>`. Review its source hash/rate recipe before recording the path in the manifest; never overwrite native or accepted audio.
-8. Build `ld_synced` with `scripts\build_ld_synced.py --episode <code> --dry-run`, then run it. It uses sample-index `atrim`, pads/trims to the exact video-frame sample count, refuses overwrite, and writes an audio recipe/hash report. Validate duration/sample rate before final encode.
+1. Preserve every native EFMSink WAV/report; compare all available captures. Record the selected capture's Orc input-order `audio.pad_frames`, a **leading capture-alignment offset**, not the total number of frame-map PAD inserts.
+2. Once output frame count, trims, and `video.delta_s` are measured, run `python scripts\audio_timing_diagnostic.py --episode <code>`. It reads native PCM, the stack project, and frame map only—not the DVD or DVD picture-alignment path. Record exact EFM samples/rate/duration, stack duration, full/projected PAD counts, structural trim, and fractional endpoint residual.
+3. **If a matching DVD is available**, use the DVD-reference path: build the DVD↔LD descriptor map before final encode, run raw-provisional/robust diagnostics, compare duration/PAD with picture-map and pad-corrected fade evidence, then approve a measured `ld_corrected` and `ld_synced`. Preserve the existing gates and do not use a DVD rate fit as a default.
+4. **If the user explicitly chose no-DVD mode**, run `python scripts\audio_timing_diagnostic.py --episode <code> --promote-dvd-free --report-out <new-unique.json>` after all required LD measurements exist. Use a new report path because the tool never overwrites prior evidence. It runs a stage-specific audio-volume space gate based on the native WAV size, applies the accepted duration/PAD candidate rate and capture-pad geometry, writes a full corrected FLAC plus exact-sample-count `ld_synced`, records hashes/recipe/endpoints, and updates the manifest with a backup. It refuses missing measurements, overwrites, DVD-track selections, and projected endpoint residuals beyond ±1 frame. The E07 A/B result passed at all seven windows (maximum difference 1 µs); that is the regression basis, not a claim that every future no-DVD episode has been externally cross-correlated.
+5. No-DVD QC runs `ld_only_sync_check.py`: it verifies the approved report/source hashes, measured capture-pad skip, exact audio sample budget, and delivered packet identity. It must separately report that absolute lip-sync offset was **not** cross-correlated against an external reference. If PAD/endpoint reconciliation or capture-origin evidence is ambiguous, STOP rather than force a rate or offset.
 
-#### DVD-free mode and limits
-
-The duration/PAD estimator is the DVD-free candidate method. If the picture map and audio/video endpoints are trustworthy, it can estimate the effective stretch needed for the padded video timeline. It is **not yet a universal automatic approval**: the estimator must first reconcile map PADs, head-trimmed PADs, EFM structural trim, and WAV0. For a direct A/B test, `audio_timing_diagnostic.py --synced-candidate-out <new.flac>` creates a disposable corrected+geometrically-skipped FLAC using no DVD input and no manifest write. Compare it with the preserved DVD-backed `ld_synced` via `av_check_output.py --video <same-picture-reference> --audio <candidate.flac> --out <unique-report.tsv>`. Do not promote the candidate until the origin/PAD accounting and independent sync evidence are reviewed. Without a DVD or another shared timebase, absolute fixed lip-sync offset cannot be proven by duration alone. Keep that offset provisional and require an independent LD-only timecode/landmark or manual sync check.
-
-For a DVD-backed measurement, `measure_audio_rate.py` defines its fit as
-`master-equivalent-time = intercept + slope * raw-WAV-time`, so its diagnostic rate label is `44100/slope`. The fade-midpoint fit uses a different offset/slope convention. Convert estimates to a named effective-rate/duration ratio before comparing them; never combine their raw ppm signs. The old E07 flow-log decision tree has an add/subtract typo in its pad-skew algebra and is historical evidence, not an equation to copy.
+For DVD-backed measurements, `measure_audio_rate.py` labels its fit `44100/slope`; the fade-midpoint fit has a different offset/slope convention. Keep rate and fixed offset separate. Do not correlate across an unmodeled act-step staircase, use raw fade slope on a padded master, or rerun x265 for audio-only corrections.
 
 **Never assume 44.056 kHz because the disc is NTSC.** E06 measured essentially no intrinsic rate change and applied a separate pad stretch; E07's 44056 was an effective padded-timeline correction. Keep native EFM and all candidates. A constant residual after encode is corrected by rebuilding LD audio and stream-copy remuxing; do **not** rerun x265 for an audio-only correction.
 
@@ -314,17 +309,14 @@ Other discarded estimates (292/1875/2500 ppm) came from a reflected FFT lag conv
 
 ## 6. Primary video encode
 
-The final encode is the only full-program x265 encode. Once the base source-derived
-`avs_encode` chain is ready, run `encode_episode.ps1 -Pass validate` to probe its frame
-count/duration and decode a three-frame null-mux sample; it does not encode or create a
-video file. Record `video.frames` and `video.duration_s`. Build the DVD↔LD picture map in
-§7 before classifying cut PADs; then build and validate the source-derived PAD-repair wrapper
-in subsection 6.4. Run `-Pass validate` again after that wrapper is built; it checks the
-versioned `avs_padfix` and still performs no encode. After recording `audio.skip_s`, run
-`-Pass final` exactly once. It encodes `avs_padfix` to a **video-only** `padfixed_video`
-using x265 CRF 14 / slow / tune grain / Main 10. `remux_padfixed.ps1` stream-copies the
-prebuilt `ld_synced` and optional tracks into the output. If audio changes, rebuild the
-audio asset and remux; do not run x265 again.
+The final encode is the only full-program x265 encode. Windows uses the source-derived
+AviSynth scripts; macOS uses the included VapourSynth chain. Validate metadata plus a
+short null decode (no x265), record `video.frames`/`video.duration_s`, finish and validate
+source-derived PAD repair, then run exactly one video-only CRF 14 / slow / grain / Main 10
+encode (`encode_episode.ps1 -Pass final` on Windows or `encode_episode_mac.py --pass final`
+on macOS). The platform remux helper stream-copies the already prepared `ld_synced` and
+available tracks, then checks packet identity. If audio changes, rebuild it and remux; do
+not run x265 again.
 
 Quality target: grain-preserving HEVC Main 10, 23.976p, no bitrate ceiling. Emissary averaged ~10.35–10.82 Mbps and ~3.2–3.5 GB per part, around 9–10 fps on this machine; results vary. Do not force 15 Mbps CBR, use veryslow, or use NVENC as the final. NVENC p7 15 Mbps is optional preview/reference only. Do not denoise or discard genuine grain.
 
@@ -343,20 +335,21 @@ complete.
 
 #### Diagnosis and classification
 
-1. Scan the source-derived `avs_encode` output (post-`TDecimate`, before any HEVC encode) with `blackdetect=d=0:pix_th=0.10:pic_th=0.98`, retaining hits shorter than 0.2 s. Parse every `PAD_1` position from the current episode's `frame_map`; convert it to the post-`TDecimate` output frame and match within the audit's ±2-frame tolerance. Do not infer pad positions from a ~30 s cadence alone. Only map-matched frames in `pad-repair-frames.txt` may be replaced; isolated black content with no PAD-map match is not a repair candidate.
+1. Scan the source-derived `avs_encode` (Windows) or `.vpy` encode chain (macOS) after `TDecimate` and before any HEVC encode with `blackdetect=d=0:pix_th=0.10:pic_th=0.98`, retaining hits shorter than 0.2 s. Parse every `PAD_1` from the current episode's frame map; convert to post-`TDecimate` output frame and match within ±2 frames. Only map-matched frames in `pad-repair-frames.txt` may be replaced; isolated black content with no PAD-map match is not a repair candidate.
 2. Confirm each map-matched candidate on the **full source raster** (max/mean RGB or luma), not only a 48x36 descriptor. A true pad is near-zero across almost the whole frame. Exclude dark real content: local E01's 1954.035 s hit (max 45/255) and E04's 33935/65240 hits (max 57/64) are not pads. Check `.tbc.json` decode faults/sequence gaps and compare the aligned DVD at genuine-content blacks.
 3. **Cut test uses the two real flanks, not either step to/from black.** For the candidate at output frame `i`, compare `i-1` to `i+1` and calibrate the metric against unambiguous cuts and normal-motion frames for this episode. Black-to-frame differences are large by definition and make a pad look like a cut. In the E03 regression, the across-flank metric separated 382 cuts (min 29.9, p10 32.3) from pads (max 18.1); those numeric thresholds are E03-specific and are not portable to another metric/episode. E04 separately confirmed one cut PAD, frame 26160; do not classify every dark one-frame event as a pad.
 
 #### Fill policy
 
 - **Non-cut PAD:** use the upstream `rife-ncnn-vulkan` engine's RIFE midpoint between the two adjacent real **output-domain** frames. A tested best-quality command (768x484 PNG pair, model already installed) was `rife-ncnn-vulkan -0 prev.png -1 next.png -o pad.png -s 0.5 -g -1 -x -z -m <model-dir>` (`-x` spatial TTA, `-z` temporal TTA; CPU/fp32, UHD and de-duplication off). In the E03 identical-encode A/B at pad 22221, maintained-frame steps were 0.00 then 18.79; RIFE steps were 11.36 then 10.60. RIFE reduced high-frequency energy ~22% on that one frame, so constrain it to proven PADs. A tested CPU+TTA run was numerically tied with GPU fp32+TTA; GPU without TTA differed substantially, and NCNN Vulkan fp16 is the precision risk. Verify the installed engine, model, backend, and PNG color path on the current machine; none is implied by another host's setup. The tested RGB24 PNG path can be converted to YUV420 10-bit for output, but conversion cannot recreate source 10-bit precision.
-- **PAD on a cut:** never RIFE across two different shots. First map the target time through the episode's independently verified DVD↔LD picture map, IVTC/resample DVD to 23.976, and accept a DVD frame only if its scene and timing match uniquely. Crop/scale to the LD raster and color-match gently to the last good LD frame. If no precise DVD frame exists, hold the immediately previous native 10-bit LD frame (`src.Trim(i-1,i-1)`) for one output frame; this preserves the cut and is preferable to a cross-shot morph.
+- **PAD on a cut with a DVD:** never RIFE across two shots. Map through the independently verified DVD↔LD picture map, sequentially decode/IVTC the DVD to 23.976, and accept only a uniquely matching frame. Crop/scale to the LD raster and color-match gently to the prior good LD frame.
+- **PAD on a cut without a DVD:** if the user selected shared cut-pad stills, use only the reviewed `Cut Pad Images/<episode>/DVD-HH-MM-SS.mmm-fNNNNNNNN.png` still whose scene/timestamp maps uniquely to this measured cut PAD; pass it as `--cut-pad-image <output-frame>=<PNG>`. The timestamp is a candidate locator, not proof of alignment. If no unique image match exists or the user declined stills, use `--hold-cut <output-frame>` to copy the immediately previous native 10-bit LD frame. Never cross-shot RIFE or guess a DVD-time mapping.
 
 #### Injection, encode, and validation
 
-1. Repair **after `TDecimate`**, never in the stack or before cadence selection; do not re-render the weighted master. `build_padfix_avs.py` imports the source-derived `avs_encode`, constructs a replacement clip with exactly the source's `N` output frames, and applies `ReplaceFramesSimple` only at confirmed repair-list indices. For AviSynth+, explicitly use `ImageSource(..., start=0, end=0, fps=24000/1001)`, convert to the source's 10-bit chroma format, and `AssumeFPS(img, src)`. A default one-image `ImageSource` can unexpectedly return 1001 frames; a prior bad layout produced 39 black and 43 wrong-content pads. Do not use `Overlay(start=...,end=...)` unless the exact local AviSynth+ build has been tested.
-2. **Assert both `src.FrameCount()==N` and `replacement.FrameCount()==N` inside AVS before encoding.** Load the machine's `RemapFrames` plugin. Test several pads spread across the episode: output NCC against its **own** replacement should be ~1, and be lower against other replacement images; verify both neighboring frames. A prior one-pad preview passed while 43 other pads silently used the wrong image. A regression check on 11 pads gave own-image NCC 0.99940–0.99996, best unrelated-image NCC <=0.738 (`pad-identity-samples.tsv`). Do not rely on “not black” alone.
-3. Complete PAD repairs **before** the final encode. `encode_episode.ps1 -Pass final` reads `avs_padfix` (source-derived, not an HEVC decode) and writes `padfixed_video` exactly once with the normal x265 CRF 14 / slow / tune grain / Main 10 settings. `remux_padfixed.ps1` then stream-copies the video and existing audio/subtitle tracks. The old second-pass `encode_padfixed.ps1` is retired and fails closed.
+1. Repair **after `TDecimate`**, never in the stack or before cadence selection; do not re-render the weighted master. Windows uses `build_padfix_avs.py`/`ReplaceFramesSimple`; macOS uses `build_padfix_vpy.py`/`std.FrameEval`. Both consume the source-derived script and confirmed repair report, assert source/replacement/output frame counts equal measured `N`, and never read an encoded MKV as the repair source.
+2. Test several replacement identities across the episode. Output NCC against its **own** PNG should be ~1 and lower against other replacement images; verify both neighbors. The M5 color path reproduces AviSynth BT.601 limited-range 10-bit scaling at the source's own 4:2:0/4:2:2/4:4:4 subsampling. Do not rely on “not black” alone.
+3. Complete PAD repairs **before** the final encode. Windows uses `encode_episode.ps1 -Pass final`; macOS uses `encode_episode_mac.py --episode <code> --pass final`. Each writes the single video-only `padfixed_video` with the V5 x265 CRF 14 / slow / tune grain / Main 10 settings. The platform remux helper stream-copies available tracks and checks packet identity. The second-pass encoder is retired.
 4. Full-decode/black-scan the delivered MKV. Require zero PAD-aligned single-frame black hits, unchanged frame count/duration, expected streams/defaults, bit-exact copied audio/subtitle packet hashes, and the per-pad identity checks above. Genuine dark content/credits and cuts are not PADs and must remain untouched.
 
 #### Cross-machine/tooling notes
@@ -403,6 +396,7 @@ An audio-envelope map can locate content but can absorb the LD's own A/V offset 
 - Keep original DVD AC-3 as an intermediate/reference. Split at the measured source boundaries; apply segment-specific `atempo`; insert 5.1 silence at measured LD-only black intervals. Use 24-bit FLAC for the retimed track to avoid another lossy encode after AC-3 decoding.
 - Retimed SRT should preserve all cue text, sorted times, and episode duration; cues spanning a boundary must remain visually sensible. VobSub is a backup unless its packet timestamps receive the same piecewise retiming. Do not mux it with a global offset.
 - After every cut/offset has been independently adjudicated and recorded, run `python scripts\retime_dvd_assets.py --episode <code> --dry-run`; require nonnegative gaps inside the measured black, plausible tempo (0.99..1.01), and all source SRT cues retained. Then rerun without `--dry-run` to create the graph, retimed 5.1 FLAC, retimed SRT, and segment map.
+- After both retimed assets pass validation, set `mux_tracks` and `deliverable_tracks` together to `['ld','51','srt']`; keep `ld_audio_source='ld_synced'`. V6's Windows/Mac remux maps `ld_synced`, `retimed_51`, and `retimed_srt` directly into the declared deliverable; a preassembled `pre_upscale` track container is not required. Without a DVD, leave retime fields unset and both track lists `['ld']`.
 - E01 template outputs: `Z:\work\audio\dvd-51-retimed.flac`, `Z:\work\subs\dvd-eng-retimed.srt`. Its filter graph is at `Z:\work\audio\dvd-51-retimed.filter`.
 - The bundled retime generator retains the graph as a review artifact and passes it with current FFmpeg `-filter_complex` (FFmpeg 9 does not accept the legacy `-filter_complex_script` option). It uses `asplit` when one DVD audio input feeds multiple trims; never seek the reference DVD with `-ss`.
 

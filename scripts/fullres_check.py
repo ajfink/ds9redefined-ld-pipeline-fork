@@ -12,12 +12,13 @@ from __future__ import annotations
 
 import argparse
 import csv
-import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))         # sibling modules (vspipe_util)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # ldcommon
 from ldcommon import Ld, PipelineError, load_episode  # noqa: E402
+from vspipe_util import run_source_ffmpeg  # noqa: E402
 
 W, H = 768, 484
 CHUNK = 27          # keep select='eq(...)' well below the 32-term expression limit
@@ -30,13 +31,18 @@ def load_frames(ld: Ld, video: Path, frames: list[int]) -> dict[int, tuple[int, 
     out: dict[int, tuple[int, float]] = {}
     for start in range(0, len(frames), CHUNK):
         part = frames[start:start + CHUNK]
+        # n is counted from the first frame FFmpeg sees. On macOS that is the
+        # first frame vspipe delivers, and vspipe is asked for the whole chain,
+        # so n still equals the script's absolute frame index - no offset.
         expr = "+".join(f"eq(n,{f})" for f in part)
         cmd = [ld.ffmpeg(), "-hide_banner", "-v", "error"]
         if video.suffix.lower() == ".avs":
-            cmd += ["-f", "avisynth"]
-        cmd += ["-i", str(video), "-vf", f"select='{expr}',format=rgb24",
-               "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
-        p = subprocess.run(cmd, capture_output=True)
+            cmd += ["-f", "avisynth", "-i", str(video)]
+        else:
+            cmd += ["-f", "yuv4mpegpipe", "-i", "-"]
+        cmd += ["-vf", f"select='{expr}',format=rgb24",
+                "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+        p = run_source_ffmpeg(ld, cmd, video, text=False)
         if p.returncode:
             raise PipelineError(f"RGB extraction failed: {p.stderr.decode('utf-8', 'replace')[-800:]}")
         stride = W * H * 3
@@ -67,8 +73,10 @@ def main() -> int:
         raise PipelineError(f"frame list missing: {list_path} - run pad_audit.py first")
     if not video.exists():
         raise PipelineError(f"source-derived video missing: {video}")
-    if video.suffix.lower() != ".avs":
-        raise PipelineError(f"full-raster PAD check must read the source-derived .avs, not encoded video: {video}")
+    if video.suffix.lower() not in (".avs", ".vpy"):
+        raise PipelineError(
+            f"full-raster PAD check must read the source-derived script "
+            f"(.avs/.vpy), not encoded video: {video}")
 
     frames = [int(x) for x in list_path.read_text(encoding="utf-8").split() if x.strip()]
     if not frames:

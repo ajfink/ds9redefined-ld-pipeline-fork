@@ -17,8 +17,9 @@ param(
     [int]$Frames    = 0         # 0 = whole clip
 )
 $ErrorActionPreference = 'Stop'
-$ff = 'C:\Users\finke\AppData\Local\Microsoft\WinGet\Links\ffmpeg.exe'
-if (-not (Test-Path -LiteralPath $ff)) { throw "ffmpeg not found at $ff" }
+. (Join-Path $PSScriptRoot 'pipeline.ps1')
+$prof = Get-LdProfile
+$ff = Get-LdTool $prof 'ffmpeg'
 
 $dir  = Split-Path -Parent $Out
 if (-not $dir) { $dir = '.' }

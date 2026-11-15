@@ -122,28 +122,28 @@ Read these now so they do not surprise you later.
 ### ACTION - read the canonical entry point first
 
 Read `README.md` in this folder. It defines the current machine/profile setup, the
-three user inputs, the bundled helpers, and the final QC contract. This Qwen variant
+Archive/download inputs and optional matching DVD choice, the bundled helpers, and the final QC contract. This Qwen variant
 provides the ACTION / VERIFY / STOP presentation of the detailed procedure; it does
 not override the README or manifest.
 
 ### ACTION - use the profile, never fixed drive letters
 
-Run `preflight.ps1` and continue only after it reports `PREFLIGHT OK`. Resolve tools
-and roots from `machine.json` (`roots.work`, `roots.downloads_root`, `roots.dvd_root`,
-`roots.out`, etc.). On a copied bundle, create a fresh local profile with
-`preflight.ps1 -Write`, fill any custom roots, and rerun preflight. Do not paste the
-current machine's X:/Z: paths into commands.
+On Windows, run `preflight.ps1`; on macOS, copy `machine-macos.example.json` to local
+`machine.json`, replace all example paths, and run `python scripts/preflight_mac.py`.
+Resolve tools and roots only from that profile. Mac V6 still needs a fresh-host
+end-to-end delivery/QC before it can be claimed fully validated. Do not paste another
+machine's drive or home-directory paths into commands.
 
 Run commands from this bundle folder. Initialize the job variables from the profile
 and the three inputs supplied by the user:
 
 ```powershell
 $profile = Get-Content .\machine.json -Raw | ConvertFrom-Json
-$ep = '<derive and verify from Archive/DVD>'
+$ep = '<derive and verify from Archive/capture names and DVD if present>'
 $title = '<verified title>'
 $url = '<user-provided Archive item URL>'
 $source = '<user-provided destination; if omitted, derive it from the profile template>'
-$dvd = '<user-provided, verified DVD MKV path>'
+$dvd = '<verified matching DVD MKV path, or NONE after explicit no-DVD approval>'
 $work = $profile.roots.work
 $orc = $profile.tools.orc
 $ff = $profile.tools.ffmpeg
@@ -152,16 +152,19 @@ $fp = $profile.tools.ffprobe
 
 ### ACTION - confirm the DVD and Archive item
 
-The user's job prompt supplies an Archive item URL, a download destination, and the
-DVD MKV path. Confirm the Archive item identifier and DVD identity with metadata/FFprobe.
-An Archive metadata title that repeats the item slug is not, by itself, a human episode
-title. Derive the title from verified DVD/Archive evidence; if they disagree or the
-URL/DVD is ambiguous, STOP and ask. Emissary's DVD is never a substitute.
+The user's job prompt supplies an Archive item URL, a download destination, and a matching
+DVD version if available. Verify the URL/DVD identity with metadata/FFprobe. If no DVD is
+available, ask whether the user explicitly wants LD-only timing; if shared cut-pad images
+exist, ask whether they want to use them. An Archive item title that repeats its slug is
+not, by itself, a human episode title. Derive the title from verified capture/Archive
+evidence and DVD evidence when present; if identity is ambiguous, STOP and ask.
 
 ### VERIFY
 
 - Archive URL resolves to the intended episode.
-- DVD exists and its title/streams match the episode.
+- If a DVD is supplied, its title/streams match the episode; if absent, the user's
+  explicit LD-only choice is recorded. No-DVD mode cannot provide DVD 5.1/SRT or an
+  external absolute A/V cross-correlation.
 - Destination and profile work/output roots have sufficient free space.
 - The episode manifest will be created by `init_episode.py` after all source files verify;
   do not create a placeholder manifest to get ahead of the download. Unknown measurements
@@ -198,7 +201,9 @@ URL/DVD is ambiguous, STOP and ask. Emissary's DVD is never a substitute.
 Read README.md, then DS9 LaserDisc OpenCode Runbook - Qwen4B.md.
 LaserDisc Archive URL: <https://archive.org/details/...>
 Save source files to: <absolute folder path>
-Matching DVD file: <absolute path to the correct DVD MKV>
+Matching DVD episode/version (optional; path or NONE): <path or NONE>
+If NONE: ask whether to proceed with LD-only duration/PAD audio timing.
+If NONE and Cut Pad Images/<episode> has PNGs: ask whether to use shared stills for confirmed cut PADs.
 Final output folder (optional): <path, or machine.json roots.out>
 Derive and verify episode/title. While the verified download runs, do the independent
 DVD/machine prep in section 2. Measure every timing only when its required artifacts
@@ -271,10 +276,10 @@ Use the bundled `scripts\download_archive.ps1`; first run with `-ListOnly`, then
 
 Once the transfer is confirmed healthy, do useful prep that does not require LD captures:
 
-1. Verify the exact matching DVD path and episode/title against the Archive item. If the
-   supplied DVD is missing, only consider an exact, unambiguous match under configured
-   `roots.dvd_root`; if identity is uncertain or conflicts, STOP and ask. Never substitute
-   another episode's disc.
+1. If a DVD is supplied, verify its exact path/version and episode/title against the
+   Archive; if it is absent, continue only after the user's explicit no-DVD choice. Never
+   substitute another episode's disc. No-DVD mode cannot provide DVD 5.1/SRT or an
+   external absolute A/V cross-correlation.
 2. Probe and record DVD video, audio, and subtitle streams: codecs, dimensions, frame
    count/rate evidence, durations, audio channel layouts, subtitle format/language, and
    source size/hash. For English SRT, check cue count, monotonicity, and range. Do not
@@ -297,9 +302,10 @@ uncertain facts marked unknown. Do not populate the episode manifest yet.
 prep cannot measure the DVD↔LD picture map, LD audio rate/offset, cadence, trims, or
 retiming schedule. Never copy another episode's values or fabricate a temporary manifest.
 
-After all files verify, run `python scripts\\init_episode.py --url <Archive-URL>
---downloads <folder> --dvd <DVD.mkv>`. Confirm the derived episode/title/capture
-inventory and capture-independent AVS/DVD-audio file keys, then run
+After all files verify, initialize with `python scripts\\init_episode.py --url <Archive-URL>
+--downloads <folder> --dvd <DVD.mkv>` or, only after explicit user approval,
+`--no-dvd [--cut-pad-images use|skip]`. Confirm the derived episode/title/capture
+inventory and platform script file keys (`.avs` Windows / `.vpy` Mac), then run
 `python scripts\\validate_episode.py --episode <ep> --stage inputs`. Add `ld_native` and
 `ld_corrected` file keys only after the audio capture and correction rate are measured;
 do not guess those filenames during initialization.
@@ -544,7 +550,7 @@ offset in `alignment_map`, using the selector report's final Orc input order (no
 manifest `captures` order); cross-check Orc's `Padding prepended` value. Do not substitute
 `video.head_trim` or `video.delta_s`.
 
-### ACTION 5.2 — the four audio gates (all must pass)
+### ACTION 5.2 — audio evidence gates (select the DVD or no-DVD route)
 
 **Gate 1 — decoder/capture consistency**
 Decode a second raw EFM when available. Cross-correlate long non-silent portions.
@@ -558,7 +564,7 @@ Run `python scripts\audio_timing_diagnostic.py --episode <ep> --report-out <uniq
 
 **TRAP** — `audio.pad_frames` is the selected capture's leading alignment, not the total video `PAD_1` count. Do not substitute one for the other or infer the PAD count by subtracting rounded durations.
 
-**Gate 3 — map first, then DVD corroboration (when available)**
+**Gate 3 — DVD picture map and rate corroboration (DVD route only)**
 
 Build the DVD↔LD picture map from the stack master **before final x265**. Once `video.delta_s` and `audio.pad_frames` are measured, run `python scripts\measure_audio_rate.py --episode <ep> --raw-provisional --out <unique.tsv> --summary-out <unique.json>`. It uses geometric skip only to center windows; the intercept absorbs constant origin error. Review every correlation, runner-up and edge peak. Use its OLS and robust Theil–Sen / leave-one-window-out fit as corroboration; it is diagnostic, never an automatic correction.
 
@@ -567,22 +573,22 @@ Build the DVD↔LD picture map from the stack master **before final x265**. Once
 - Never globally fit across an unmodeled edit staircase.
 - A fixed offset, rate drift and edit steps are three different quantities; correct them separately.
 
-**Gate 4 — fade-midpoint fit (corroboration only)**
+**Gate 4 — fade-midpoint fit (DVD/corroboration route only)**
 
 At clean act breaks, use the fade MIDPOINT of video-black versus audio-silence. Fit only after accounting for the video PAD clock contribution and excluding flickering/marginal silences. Report the precise slope convention, sign and uncertainty. Gate 4 cannot validate its own fitted residual.
 
-**RATE STOP** — do not commit a rate if the duration/PAD model, DVD-picture fit and pad-corrected fade fit disagree beyond combined uncertainty, if PAD counts/origin do not reconcile, or if a fit is driven by weak/edge windows. Keep the DVD-backed value as the official choice until resolved.
+**DVD RATE STOP** — do not commit a DVD-backed rate if duration/PAD, DVD-picture, and pad-corrected fade fits disagree beyond combined uncertainty, if PAD/origin evidence does not reconcile, or if fits use weak/edge windows. Keep the DVD-backed baseline until resolved. If no DVD is supplied, skip DVD-specific gates and use only the explicitly approved V6 duration/PAD route below; do not describe that route as externally cross-correlated.
 
 ### ACTION 5.3 — resolve origin/skip, build audio-only outputs
 
 1. Verify WAV0 against the exact matching timeline endpoints; preserve the raw sample count and structural-trim evidence.
 2. Compute AudioSkip from the measured master frame of output zero and WAV0; cross-check `delta_s - audio.pad_frames/FPS`. Never use head trim as the audio origin.
 3. Record the selected effective rate, method, uncertainty, PAD counts (full map / trimmed / delivered), WAV0, skip sample and report paths. Do not merge incompatible slope signs: `measure_audio_rate` fits master-equivalent time versus raw-WAV time and labels its candidate `44100/slope`; the fade-offset fit has a different convention.
-4. After the rate is selected, create a new corrected full-side candidate with `audio_timing_diagnostic.py --rate-hz <selected-effective-Hz> --candidate-out <new-corrected.flac> --report-out <new-report.json>`. Verify its source hash/rate recipe, then record it as `files.ld_corrected`. Run `python scripts\build_ld_synced.py --episode <ep> --dry-run` and then for real; it trims by sample index, pads/trims to the exact video-frame sample count, and writes `ld_synced` plus a recipe/hash report without overwriting audio.
+4. **DVD route:** after rate/origin review, create a new corrected full-side candidate and sample-synced FLAC with the established DVD-backed procedure. **Explicit no-DVD route:** after output frames, DELTA, selected capture-pad geometry, projected PAD counts, endpoint residual, and the audio space gate are measured, run `audio_timing_diagnostic.py --episode <ep> --promote-dvd-free --report-out <new-unique.json>`. Use a unique report path; the helper never overwrites evidence. It writes new corrected/synced audio and records method/hashes with a manifest backup; it stops outside the ±1-frame endpoint limit.
 
-**VERIFY** — corrected duration/origin agrees with the measured target within the declared tolerance; synced FLAC is 44.1 kHz/16-bit stereo, starts at the measured sample, has the exact target sample count, and passes the audio-duration gate.
+**VERIFY** — corrected duration/origin agrees with the measured target within the declared tolerance; synced FLAC is 44.1 kHz/16-bit stereo and has the exact target sample count. In no-DVD mode, QC must state that an external absolute A/V cross-correlation was unavailable; DVD 5.1/SRT are not included.
 
-**DVD-free limit:** for the E07 A/B test, generate the disposable synced candidate with `audio_timing_diagnostic.py --synced-candidate-out <new.flac>` (add `--wav0-master-frame <measured>` only when independent EFM/video evidence supports it). Compare it to the preserved DVD-backed track with the same picture reference: `av_check_output.py --episode <ep> --video <same-reference.mkv> --audio <candidate.flac> --out <unique.tsv>`. Do not promote the candidate or alter `audio.skip_s`. Duration/PAD can estimate rate without a DVD, but absolute fixed sync still needs a trustworthy WAV0/video timebase or an independent content/manual sync check; without that, mark offset provisional and STOP before claiming full sync.
+**DVD-free production (V6):** E07's candidate and final-format test passed against the DVD only as a holdout. For an explicitly approved no-DVD job, after all LD video/PAD timing is measured, run `audio_timing_diagnostic.py --episode <ep> --promote-dvd-free --report-out <new-unique.json>`. It commits only the duration/PAD rate plus capture-pad geometry if PAD/endpoints reconcile within ±1 frame; inspect its report and hashes. QC verifies the LD-only timebase and exact sample budget, but must state that there was no external absolute A/V cross-correlation. If no DVD is supplied and shared `Cut Pad Images/<ep>` stills exist, use them only for individually confirmed cut PADs after matching the filename DVD timestamp/scene to the measured output frame; otherwise hold the previous LD frame. Never RIFE across the cut. DVD 5.1/SRT and DVD-map retiming are unavailable in this mode.
 
 ### TRAP — rejected estimates
 
@@ -594,7 +600,7 @@ Discarded estimates (292/1875/2500 ppm) came from a **reflected FFT lag conventi
 - Silence, repeated music, fade stings, and different mixes can produce false peaks.
 - Use several long windows and a line fit.
 
-**The rule:** never resample on NTSC theory alone. Reconcile the duration/PAD candidate and raw-provisional DVD-picture fit; use the pad-corrected fade fit only as corroboration. Apply no candidate automatically.
+**The rule:** never resample on NTSC theory alone. Use the DVD corroboration route when a matching DVD exists; otherwise use the optional explicit V6 no-DVD path and its limits. Do not auto-approve an experimental candidate.
 
 ---
 
@@ -602,7 +608,7 @@ Discarded estimates (292/1875/2500 ppm) came from a **reflected FFT lag conventi
 
 ### ACTION 6.1 — encode arguments
 
-`scripts\encode_episode.ps1` is the bundled one-part encoder. `validate` only probes source-AVS frame metadata and decodes three frames to a null muxer; it performs **no video encode**. `final` is run once, only after the DVD map and PAD-repair AVS are ready:
+Windows uses `scripts\encode_episode.ps1`; macOS uses `scripts/encode_episode_mac.py`. Validation probes source-script metadata and decodes three frames to a null muxer; it performs **no video encode**. `final` is run once after the platform source-derived PAD-repair script is ready:
 
 ```text
 -c:v libx265 -profile:v main10 -pix_fmt yuv420p10le
@@ -620,6 +626,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\encode_episode.ps1 -
 python scripts\build_ld_synced.py --episode <ep> --dry-run
 python scripts\build_ld_synced.py --episode <ep>
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\encode_episode.ps1 -Episode <ep> -Pass final
+# macOS equivalent: python scripts/encode_episode_mac.py --episode <ep> --pass final
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\remux_padfixed.ps1 -Episode <ep>
 ```
 

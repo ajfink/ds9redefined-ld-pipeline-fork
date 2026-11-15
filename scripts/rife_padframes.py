@@ -17,18 +17,24 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))         # sibling modules (vspipe_util)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # ldcommon
 from ldcommon import Ld, PipelineError, load_episode  # noqa: E402
+from vspipe_util import run_source_ffmpeg  # noqa: E402
 
 FPS = 24000.0 / 1001.0
 REPORT_HEADER = ("episode", "frame", "time", "method", "motion_score",
-                 "fullres_rgb_max", "fullres_rgb_mean", "seconds", "png")
+                 "fullres_rgb_max", "fullres_rgb_mean", "seconds", "png",
+                 "source_dvd_timestamp", "source_dvd_frame", "source_png")
 MAX_RGB, MAX_MEAN = 2, 0.0005
+DVD_IMAGE_RE = re.compile(r"^DVD-(\d{2})-(\d{2})-(\d{2})\.(\d{3})-f(\d{8})\.png$", re.IGNORECASE)
 
 
 def read_candidates(audit: Path, repair_file: Path, fullres: Path,
@@ -65,19 +71,51 @@ def read_candidates(audit: Path, repair_file: Path, fullres: Path,
     return sorted(out, key=lambda r: r["frame"])
 
 
+def parse_shared_cut_image(spec: str, episode: str, bundle: Path) -> tuple[int, Path, str, int]:
+    """Validate FRAME=PNG against the curated episode folder and return its DVD timestamp."""
+    if "=" not in spec:
+        raise PipelineError(f"--cut-pad-image must be FRAME=PNG, got {spec!r}")
+    frame_s, path_s = spec.split("=", 1)
+    try:
+        frame = int(frame_s)
+    except ValueError as exc:
+        raise PipelineError(f"cut-pad output frame must be an integer: {frame_s!r}") from exc
+    source_png = Path(path_s).expanduser().resolve()
+    image_root = (bundle / "Cut Pad Images" / episode).resolve()
+    if not source_png.is_relative_to(image_root):
+        raise PipelineError(f"shared cut PAD image must come from {image_root}: {source_png}")
+    match = DVD_IMAGE_RE.fullmatch(source_png.name)
+    if not match:
+        raise PipelineError(f"shared image filename must contain the DVD timestamp and decoded frame: {source_png.name}")
+    timestamp = f"{match.group(1)}:{match.group(2)}:{match.group(3)}.{match.group(4)}"
+    return frame, source_png, timestamp, int(match.group(5))
+
+
 def extract_neighbors(ld: Ld, video: Path, frame: int, inp: Path) -> tuple[Path, Path]:
-    """Seek to frame-1 and keep frames 0 and 2 (skipping the black pad itself)."""
+    """Take frames ``frame-1`` and ``frame+1``, skipping the black pad itself.
+
+    Windows seeks by time (``-ss``) and keeps ``select`` n=0 and n=2. A y4m
+    pipe cannot be seeked, so on macOS vspipe selects the exact frame range
+    with ``-s``/``-e`` instead - frame indices are exact where a time-based
+    seek is only as accurate as the PTS - and the *same* select expression
+    then picks the two neighbours out of the three delivered.
+    """
+    if frame < 1:
+        raise PipelineError(f"cannot take a previous neighbour for frame {frame}")
     prev = inp / f"prev_{frame:06d}.png"
     nxt = inp / f"next_{frame:06d}.png"
-    seek = (frame - 1) / FPS
     vf = "select='eq(n,0)+eq(n,2)',format=rgb24"
     cmd = [ld.ffmpeg(), "-y", "-hide_banner", "-v", "error"]
+    vs_args = None
     if video.suffix.lower() == ".avs":
-        cmd += ["-f", "avisynth"]
-    cmd += ["-ss", f"{seek:.9f}", "-i", str(video), "-vf", vf,
-            "-fps_mode", "passthrough", "-frames:v", "2",
+        cmd += ["-f", "avisynth", "-ss", f"{(frame - 1) / FPS:.9f}",
+                "-i", str(video)]
+    else:
+        cmd += ["-f", "yuv4mpegpipe", "-i", "-"]
+        vs_args = ["-s", str(frame - 1), "-e", str(frame + 1)]
+    cmd += ["-vf", vf, "-fps_mode", "passthrough", "-frames:v", "2",
             "-start_number", "1", str(inp / f"extract_{frame}_%02d.png")]
-    p = subprocess.run(cmd, capture_output=True)
+    p = run_source_ffmpeg(ld, cmd, video, text=False, vs_args=vs_args)
     if p.returncode:
         raise PipelineError(f"neighbor extraction failed at frame {frame}: "
                             + p.stderr.decode("utf-8", "replace")[-1500:])
@@ -95,6 +133,8 @@ def main() -> int:
     ap.add_argument("--encode", help="override source-derived video path (defaults to avs_encode)")
     ap.add_argument("--hold-cut", type=int, action="append", default=[],
                     help="frame to hold instead of interpolating (pad sits on a shot cut); repeatable")
+    ap.add_argument("--cut-pad-image", action="append", default=[], metavar="FRAME=PNG",
+                    help="use one reviewed Cut Pad Images/<episode>/ DVD still for a confirmed cut PAD; repeatable")
     ap.add_argument("--accept-residual", type=int, action="append", default=[],
                     help="frame explicitly classified as a PAD despite full-raster residue above the "
                          "near-black threshold (record the section 6 step 2 evidence first; the "
@@ -107,8 +147,10 @@ def main() -> int:
     video = Path(args.encode) if args.encode else ep.path("avs_encode")
     if not video.exists():
         raise PipelineError(f"source-derived video missing: {video}")
-    if video.suffix.lower() != ".avs":
-        raise PipelineError(f"replacement neighbors must come from the source-derived .avs, not encoded video: {video}")
+    if video.suffix.lower() not in (".avs", ".vpy"):
+        raise PipelineError(
+            f"replacement neighbors must come from the source-derived script "
+            f"(.avs/.vpy), not encoded video: {video}")
     repair_file = probe / f"{ep.code}-pad-repair-frames.txt"
     cands = read_candidates(probe / f"{ep.code}-pad-audit.tsv", repair_file,
                             probe / f"{ep.code}-pad-fullres.tsv",
@@ -116,9 +158,41 @@ def main() -> int:
     # shared report/legacy dirs are keyed by pad_report_label so historical rows match
     label = ep.data.get("pad_report_label") or ep.code
     hold = set(args.hold_cut)
+    shared_images: dict[int, tuple[Path, str, int]] = {}
+    for spec in args.cut_pad_image:
+        frame, source_png, timestamp, dvd_frame = parse_shared_cut_image(
+            spec, ep.code, Path(__file__).resolve().parent.parent)
+        if frame in shared_images:
+            raise PipelineError(f"multiple shared DVD stills were assigned to cut PAD frame {frame}")
+        shared_images[frame] = (source_png, timestamp, dvd_frame)
     unknown = hold - {c["frame"] for c in cands}
     if unknown:
         raise PipelineError(f"--hold-cut frames are not confirmed pads: {sorted(unknown)}")
+    unknown_images = set(shared_images) - {c["frame"] for c in cands}
+    if unknown_images:
+        raise PipelineError(f"shared-image frames are not confirmed PADs: {sorted(unknown_images)}")
+    if shared_images and ep.data.get("dvd_reference_available") is not False:
+        raise PipelineError("shared cut-pad still substitution is reserved for the explicit no-DVD workflow")
+    if hold & set(shared_images):
+        raise PipelineError(f"a cut PAD cannot be both held and image-filled: {sorted(hold & set(shared_images))}")
+
+    no_dvd = ep.data.get("dvd_reference_available") is False
+    if no_dvd:
+        if ep.data.get("no_dvd_proceed_approved") is not True:
+            raise PipelineError("no-DVD PAD handling requires the user's explicit no-DVD choice")
+        cuts = set(int(x) for x in (ep.data.get("pads") or {}).get("cut_pad_frames", []))
+        if len(cuts) != int((ep.data.get("pads") or {}).get("cut_pads") or 0):
+            raise PipelineError("record the exact measured pads.cut_pad_frames list before no-DVD cut-PAD repair")
+        if not cuts.issubset({c["frame"] for c in cands}):
+            raise PipelineError(f"manifest cut-pad frames are not all confirmed candidates: {sorted(cuts)}")
+        image_choice = ep.data.get("cut_pad_images_choice")
+        if shared_images and image_choice != "use":
+            raise PipelineError("shared DVD stills were supplied but the manifest does not record user choice 'use'")
+        if image_choice == "skip" and shared_images:
+            raise PipelineError("user declined shared cut-pad images; remove --cut-pad-image entries")
+        unresolved = cuts - set(shared_images) - hold
+        if unresolved:
+            raise PipelineError(f"no-DVD cut PADs need a reviewed shared image or --hold-cut: {sorted(unresolved)}")
     unknown_acc = set(args.accept_residual) - {c["frame"] for c in cands}
     if unknown_acc:
         raise PipelineError(f"--accept-residual frames are not candidates: {sorted(unknown_acc)}")
@@ -127,11 +201,8 @@ def main() -> int:
     inp, outd = work / "neighbors", work / "interpolated"
     for d in (inp, outd):
         d.mkdir(parents=True, exist_ok=True)
-    print(f"{label}: candidates={len(cands)} cut-hold={len(hold)} "
-          f"CPU-RIFE={len(cands)-len(hold)}  engine={engine}", flush=True)
-    if not cands:
-        print("No confirmed isolated PADs; build_padfix_avs.py will create an identity AVS wrapper.")
-        return 0
+    # Resolve engine/model BEFORE the header print: the original order printed
+    # `engine=` first and crashed with UnboundLocalError (S01E06 V5 rerun, 15:1x).
     if any(c["frame"] not in hold for c in cands):
         try:
             engine = str(ld.tool("rife_engine"))
@@ -140,6 +211,11 @@ def main() -> int:
             raise PipelineError(f"{e}\nRIFE is required to fill non-cut PADs.")
     else:
         engine, model = "not-used", "not-used"
+    print(f"{label}: candidates={len(cands)} cut-hold={len(hold)} "
+          f"CPU-RIFE={len(cands)-len(hold)}  engine={engine}", flush=True)
+    if not cands:
+        print("No confirmed isolated PADs; build_padfix_avs.py will create an identity AVS wrapper.")
+        return 0
     model_name = Path(model).name
     version = model_name.removeprefix("rife-v")
     method_name = f"RIFE-{version}-CPU-TTA"
@@ -154,7 +230,22 @@ def main() -> int:
             dst = outd / f"pad_{frame:06d}.png"
             prev, nxt = extract_neighbors(ld, video, frame, inp)
             t0 = time.time()
-            if frame in hold:
+            source_dvd_timestamp = ""
+            source_dvd_frame = ""
+            source_png = ""
+            if frame in shared_images:
+                shared_png, source_dvd_timestamp, source_dvd_frame = shared_images[frame]
+                from PIL import Image
+                with Image.open(shared_png) as im:
+                    shared_size = im.size
+                with Image.open(prev) as source_im:
+                    source_size = source_im.size
+                if shared_size != source_size:
+                    raise PipelineError(f"shared cut PAD image size {shared_size} does not match source-neighbor PNG {source_size}")
+                shutil.copy2(shared_png, dst)
+                method, elapsed, err = f"DVD-shared-cut-image:{source_dvd_timestamp}", 0.0, ""
+                source_png = str(shared_png.relative_to(Path(__file__).resolve().parent.parent))
+            elif frame in hold:
                 dst.write_bytes(prev.read_bytes())
                 method, elapsed, err = "hold-prev-scene-cut", 0.0, ""
             else:
@@ -172,9 +263,12 @@ def main() -> int:
                          "method": method, "motion_score": f"{c['motion']:.6f}",
                          "fullres_rgb_max": c["rgb_max"],
                          "fullres_rgb_mean": f"{c['rgb_mean']:.9f}",
-                         "seconds": f"{elapsed:.3f}",
-                         # Keep shared TSVs portable when the probe tree is copied.
-                         "png": str(dst.relative_to(probe))})
+                          "seconds": f"{elapsed:.3f}",
+                          # Keep shared TSVs portable when the probe tree is copied.
+                          "png": str(dst.relative_to(probe)),
+                          "source_dvd_timestamp": source_dvd_timestamp,
+                          "source_dvd_frame": source_dvd_frame,
+                          "source_png": source_png})
             log.write(f"{j}/{len(cands)} frame={frame} time={frame/FPS:.6f} method={method} "
                       f"motion={c['motion']:.6f} max={c['rgb_max']} "
                       f"mean={c['rgb_mean']:.9f} elapsed={elapsed:.3f}s file={dst}\n")
@@ -186,7 +280,8 @@ def main() -> int:
     kept = ld.merge_tsv(report, rows, key_fields=("episode", "frame"), header=REPORT_HEADER)
     print(f"  log: {logpath}")
     print(f"  report: {report} (kept {kept} other-episode rows, wrote {len(rows)})")
-    print("next: python scripts\\build_padfix_avs.py --episode", ep.code)
+    print(f"next: python scripts/build_padfix_vpy.py --episode {ep.code} "
+          f"(macOS; Windows uses build_padfix_avs.py)")
     return 0
 
 
