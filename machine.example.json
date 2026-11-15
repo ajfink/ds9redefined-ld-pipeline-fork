@@ -1,5 +1,5 @@
 {
-  "_readme": "Template for a device-local profile. Never put machine.json in a shared release tree. Copy locally and fill in, or let preflight.ps1 discover it with -Write. In shared mode set shared.enabled=true and shared.release_root to the bundle; initialize a unique workspace under its pre-provisioned devices/ folder before an episode.",
+  "_readme": "Template for a device-local profile. Never put machine.json in the README/release folder. In device-workspace mode set shared.enabled=true and shared.release_root to the parent folder of the README being followed; this applies to W:, other shares, and local copies. Use shared_workspace.py ensure to create/reuse devices/<device-instance>/episodes/<code>. This is required setup but not a gate: the runner auto-resolves it and falls back to isolated local roots if README-folder devices/ is unavailable.",
   "machine": "UNNAMED",
   "os": "windows",
   "shared": {

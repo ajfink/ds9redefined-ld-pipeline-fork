@@ -59,45 +59,71 @@ output folder defaults to `roots.out` in `machine.json`; record any override.
   delivery QC. Verify the delivered media and current `qc_report.py` output on disk,
   not from prior conversation memory or manifest presence.
 
-Before downloading or rendering, complete the cross-platform key-tool update gate in
-`README.md` / `PORTING.md`, then run the bundle's `preflight.ps1` on Windows. On Mac,
-use the platform-specific capability checks in `PORTING.md`; this does not imply the
-full Mac pipeline is validated. If `machine.json`
-belongs to another computer, `preflight.ps1 -Write` initializes a new profile from the
-template. Set any roots not discoverable on that machine and rerun until the full output
-ends in `PREFLIGHT OK.` **and exit code is 0**. Do not truncate the log and infer a pass
-from partial output, or treat exit code 1 as expected. Do not replace profile-resolved
-paths with `Z:` or `X:` constants.
+The source download may start after its downloader-specific profile/curl, Archive
+metadata/integrity and space checks; do not wait for the full tool update gate. Complete
+the cross-platform key-tool inventory during the transfer, but apply no updates until it
+finishes. Before processing/rendering, apply the user's update choice and run the full
+capability/doctor gates. In device-workspace mode, keep the profile outside the README
+folder and run Windows preflight with `-Profile <device-profile>`; on Mac use the
+platform-specific checks in `PORTING.md`. Set undiscoverable roots and rerun Windows
+preflight until it ends in `PREFLIGHT OK.` **and exit code 0**. Do not truncate the log,
+infer a pass from partial output, or treat exit code 1 as expected. Do not replace
+profile-resolved paths with drive-letter constants.
 Record `WORKFLOW_VERSION` in the device/job log before starting. Confirm it has not changed
 before every stage; if core files or the version change mid-job, pause before the next
 stage, re-read its current instructions, and reconcile rather than mixing procedures.
 
-### Shared release mode (V7)
+### Per-device workspace and logs (every README location, V7)
 
-If the bundle is on a shared drive, treat its source tree, templates, runbooks, curated
-`Cut Pad Images/`, and `episodes/_template.json` as **read-only**. Keep each machine's
-profile outside the bundle and set `shared.enabled=true` plus `shared.release_root` in that
-local profile. Before creating the episode manifest, run
-`python scripts/shared_workspace.py init --profile <local-profile> --episode <code>`.
-Each invocation allocates a fresh random device/instance folder under
-`<release-root>/devices/<device-id>/episodes/<code>/` with separate `manifest`, `logs`,
-`references`, and `cut-pad-images` directories. It does not edit the profile or release
-tree. Keep the returned `LDP_INSTANCE_ROOT` for this OpenCode instance; pass it and the
-local profile to `run_stage.py`, or set `LDP_PROFILE`, `LDP_INSTANCE_ROOT`,
-`LDP_MANIFEST_DIR`, and `LDP_CUT_PAD_IMAGES` for direct helper invocations. Never reuse an
-instance root concurrently. The `manifest` and log roots are redirected to that workspace;
-work/render/download/cache/output roots remain on the configured local volumes.
-Run the episode-ready doctor check after workspace creation; without an active instance it
-is a machine diagnostic only and correctly returns not-ready for episode work.
+The workspace belongs beside the README that started this episode, not to a hard-coded W:
+share. In the device-local profile set `shared.enabled=true` and `shared.release_root` to
+that README/code-bundle folder.
+Treat every other file there as read-only: templates, scripts, runbooks, curated `Cut Pad
+Images/`, `episodes/_template.json`, and other devices' workspaces are not episode output
+locations. The permitted data subtree is:
 
-Use `shared_workspace.py publish-reference` for reviewed small text/report artifacts and
-`publish-cut-pad` only for a uniquely named timestamped still with the source-DVD hash and
-exact output-PAD mapping. The image stays in this instance's cut-PAD folder; only an
-authorized release maintainer can promote it to the curated release `Cut Pad Images/` on
-a later version sync. `doctor.py` checks shared-root configuration and reports whether
-the current process appears able to write the release root. It never tests ACLs by writing;
-the share administrator must enforce read-only access to the release tree and write access
-only to `devices/`.
+```text
+<folder containing the selected README.md>/
+  devices/<device>-<instance-id>/episodes/<code>/
+    manifest/  logs/  references/  cut-pad-images/
+```
+
+Creating/reusing this device-instance workspace is a **required setup instruction, but
+not a processing gate**. Prefer
+`python scripts/shared_workspace.py ensure --profile <local-profile> --episode <code>`.
+`run_stage.py` also tries to reuse/create it automatically. If the README-folder `devices/`
+path is missing or inaccessible, the tools warn and continue in an isolated device-local
+fallback beneath the profile's `roots.logs` (or `roots.work`); they never fall back to
+writing elsewhere in the README/release tree. Fallback artifacts remain local, not visible
+to other devices. Pass the returned `instance_root` to `run_stage.py` to resume the same
+workspace; do not run two instances against one root concurrently.
+
+In shared mode, keep `machine.json` outside the README folder and set
+`shared.enabled=true`, `shared.release_root=<folder containing this README>`, and a device
+name in that local profile. The workspace owns the episode manifest/backups and its logs,
+references, and cut-PAD inbox. Work/render/download/cache/final outputs stay on the
+profile's local volumes. For direct helpers, use the `LDP_PROFILE`, `LDP_INSTANCE_ROOT`,
+`LDP_MANIFEST_DIR`, `LDP_INSTANCE_LOGS`, `LDP_CUT_PAD_IMAGES`, and `LDP_INSTANCE_MODE`
+exports returned by `ensure`.
+
+Use `shared_workspace.py publish-reference` for reviewed small reports. Publish a cut-PAD
+still only with a verified timestamped filename, source-DVD hash, exact output-PAD mapping,
+and `--confirm-mapping`. It stays inside this workspace; only an authorized maintainer may
+later promote it into curated `Cut Pad Images/`.
+
+**ACL policy for any shared README folder:** the release root and all source files are
+read/execute only. `devices/` is the only writable subtree; each device may create its own
+instance folder and modify only that folder and descendants, never sibling device folders.
+An administrator must enforce this in the OS/share ACL. The workflow does not change ACLs;
+the doctor still blocks processing if the release root itself appears writable. Workspace
+setup/fallback is separate from that ACL readiness gate.
+
+**Keep debugging evidence useful:** preserve each unique stage `.log` and `.json` report,
+exact command/arguments, workflow version, gate outcomes, full tool output, exit codes, Orc
+JSON and stderr, FFmpeg command/version sidecars, hashes, and tool-version/preflight reports.
+Keep complete output, not just filtered error lines; never overwrite or clean old runs.
+Do not put credentials/tokens in commands. Each workspace `logs/README.md` repeats this
+logging contract; path redaction is not a general secret scrubber.
 
 Run commands from this folder and initialize the measured job variables from the
 profile and the three user inputs (do not copy another episode's values):

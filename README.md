@@ -81,8 +81,9 @@ shot cut—not a substitute for a DVD reference or a source for other tracks.
 
 Derive and verify the episode code/title. Preserve inputs. Measure every episode-
 specific value; never copy timings from a reference episode. Follow each runbook
-VERIFY/STOP gate. Use the bundled helpers and keep machine paths in machine.json
-and measured values in episodes/<code>.json. Never delete/clean files unless I name
+VERIFY/STOP gate. Use the bundled helpers and keep machine paths in the device-local
+profile and measured values in the active episode manifest (`episodes/<code>.json`
+locally, or the device workspace's `manifest/<code>.json`). Never delete/clean files unless I name
 the exact path and action; reference DVDs, masters, outputs, and reference-runs are
 out of scope for download cleanup. If a required stage is missing from
 the bundle, build a reusable parameterized helper in scripts/ and test it against
@@ -119,12 +120,19 @@ fallback route is unavailable, ask the user rather than silently changing models
 
 ## One-time setup on each machine
 
-1. Copy this whole folder to the machine. On a different Windows computer using a **local
-   writable checkout**, the shipped `machine.json` belongs to its authoring PC; run the
-   profile-discovery step:
+1. Keep a device profile outside the folder containing this README. For Windows, copy
+   `machine.example.json` to a device-local temporary profile (or use the existing local
+   profile), create a new workspace profile with `shared_workspace.py configure-profile`,
+   then run discovery against that external output profile:
 
    ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File preflight.ps1 -Write
+   New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\ld-pipeline\profiles" | Out-Null
+   $seed = "$env:LOCALAPPDATA\ld-pipeline\profiles\machine-seed.json"
+   $profilePath = "$env:LOCALAPPDATA\ld-pipeline\profiles\machine-$env:COMPUTERNAME.json"
+   if (Test-Path $seed) { throw "Seed already exists; choose another local seed path: $seed" }
+   Copy-Item .\machine.example.json $seed
+   python scripts/shared_workspace.py configure-profile --source $seed --output $profilePath --device-name $env:COMPUTERNAME
+   powershell -NoProfile -ExecutionPolicy Bypass -File preflight.ps1 -Profile $profilePath -Write
    ```
 
    This initializes/discovers paths; it is not the final readiness pass. It saves an
@@ -138,10 +146,10 @@ fallback route is unavailable, ask the user rather than silently changing models
    On Linux x86_64, a local copy may start from `machine-linux-x86_64.example.json` for
    dependency/capability checks only; the Linux production workflow is not validated and
    `doctor.py` will not mark it episode-ready.
-   **Shared bundle exception:** never run `preflight.ps1 -Write` with its default profile
-   path from the shared release. Keep `machine.json` outside the bundle; seed a local
-   profile from the platform example and use `shared_workspace.py configure-profile` to
-   set the shared root, then pass `--profile` to doctor/stage-runner commands.
+   On Mac/Linux, seed a profile from the matching example outside the README folder, set
+   machine-local paths, then use `configure-profile` to create a separate profile pointing
+   at this README folder. Always pass that external profile to `doctor.py` and
+   `run_stage.py`; never use the authoring bundle's `machine.json` as a device profile.
 2. With the local profile paths known, the download may start after its own profile/curl,
    Archive metadata, file-integrity metadata, and destination-space checks; do not wait
    for full tool inventory. Run the Tool-update gate below during the transfer. If components are
@@ -164,9 +172,11 @@ fallback route is unavailable, ask the user rather than silently changing models
    `ready_for_episode: true`; macOS end-to-end completion is demonstrated on the M5
    configuration, while fresh-device setup remains a separate validation. Linux
    deliberately returns not-ready/untested. Continue anyway does not waive required
-   capability/QC gates. In shared mode, create a unique per-episode workspace first; the
-   machine-level doctor without one reports setup diagnostics but is intentionally not
-   episode-ready.
+    capability/QC gates. In device-workspace mode, `shared_workspace.py ensure` is the
+    recommended setup; `run_stage.py` also creates/reuses the workspace or warns and uses
+    local roots if the README-folder `devices/` path is unavailable. A standalone doctor
+    without an active instance reports machine diagnostics, not an episode-ready result;
+    this is not a workspace-creation gate for the stage runner.
 5. For a job-specific output location, update `roots.out` or pass it as the manifest's
    file root. Do not modify scripts to insert drive letters.
 
@@ -495,7 +505,7 @@ permission.
 | `scripts/doctor.py` | Unified read-only profile/dependency/platform report; Linux x86_64 remains explicitly not episode-ready |
 | `scripts/bootstrap_deps.py` / `dependencies/` | Direct Python version locks for Windows x64, Mac arm64, and candidate Linux x86_64; check-only by default, `--install` is explicit |
 | `scripts/run_stage.py` | Allowlisted stage dispatcher; dry-run plan by default, explicit `--execute`, downloader-specific checks for the early download stage, full doctor/manifest gates before other write stages, and unique logs/reports |
-| `scripts/shared_workspace.py` | Allocate a collision-resistant per-device/instance/episode folder under shared `devices/`; publish no-overwrite references and provenance-checked cut-PAD stills there |
+| `scripts/shared_workspace.py` | Ensure a collision-resistant per-device/instance/episode folder beside the selected README, with local fallback; publish no-overwrite references and provenance-checked cut-PAD stills |
 | `scripts/generate_runbooks.py` / `templates/runbooks/` | Regenerate model variants from the canonical runbook plus model-policy templates; `--check` detects drift |
 | `WORKFLOW_VERSION` / `WORKFLOW_VERSIONING.md` | Authoritative workflow version and core-change/device-log rules |
 | `V7-RELEASE.md` | V7 tooling overview and platform validation boundaries |
@@ -547,25 +557,46 @@ the full doctor so the transfer can start early. Every other write-capable stage
 text, performs cleanup, or replaces helper-level refusal/QC checks. Linux x86_64 can check its candidate dependency lock but
 production stage execution is blocked until the complete Linux workflow is validated.
 
-### Shared release-folder mode
+### Per-device episode workspaces (every README location)
 
-When multiple instances use the same `ld-pipeline` folder, treat the bundle as a
-read-only release. Keep each device's `machine.json` outside that folder. Configure
-`shared.enabled=true`, `shared.release_root=<this bundle path>`, and a device name in
-that local profile. `shared_workspace.py configure-profile --source <local-profile>
---output <new-local-profile>` creates a new, no-overwrite local profile for this bundle.
-A release administrator must provision `devices/` and grant writes there only; the V7
-tools do not change ACLs. `doctor.py` marks shared mode not-ready if the current process
-appears able to write the release root.
+The workspace is relative to the **parent folder of the README.md that starts the job**;
+it is not tied to W: or to one shared-drive copy. The expected layout is:
 
-Before initializing an episode, create a new unique instance workspace:
+```text
+<README folder>/                       # release/source tree: read-only
+  README.md
+  devices/                             # the only writable area beneath the README folder
+    <device>-<instance-id>/             # this device-instance's subtree only
+      episodes/<code>/
+        manifest/
+        logs/
+        references/
+        cut-pad-images/
+```
+
+Keep machine profiles and heavy work/render/download roots outside the README folder. Use
+this read-only release/device-workspace mode for any `ld-pipeline` location, not just W: or
+network shares: set `shared.enabled=true` and `shared.release_root` to the parent folder of
+the README being followed. `shared_workspace.py configure-profile --source <local-profile>
+--output <new-local-profile>` creates a new external profile for that README folder.
+
+**Required setup, not a workflow gate:** at the start of each episode, create/reuse the
+device-instance workspace with `python scripts/shared_workspace.py ensure --profile
+<local-profile> --episode <code>`. `run_stage.py` also attempts this automatically. If
+`devices/<device-instance>` cannot be created or accessed, it warns and continues using an
+isolated fallback under the device profile's local `roots.logs` (or `roots.work`). It never
+falls back to writing elsewhere in the README/release tree. The fallback data is local and
+won't be visible to other devices until deliberately published/copied. Keep the returned
+`instance_root` for this episode to resume in the same workspace; do not start a second
+concurrent run against it.
 
 ```powershell
-$profilePath = '<local machine.json outside W:\ld-pipeline>'
+$profilePath = '<device-local profile outside the README folder>'
 $url = '<verified Archive item URL>'
 $source = '<local source-download destination>'
-$workspace = python scripts/shared_workspace.py init --profile $profilePath --episode S01E07 | ConvertFrom-Json
-$instance = $workspace.instance_root
+$workspace = python scripts/shared_workspace.py ensure --profile $profilePath --episode S01E07 | ConvertFrom-Json
+$instance = $workspace.workspace.instance_root
+if ($workspace.warning) { Write-Warning $workspace.warning }
 python scripts/run_stage.py --profile $profilePath --instance-root $instance `
   --episode S01E07 --stage download --execute `
   --script-arg=-Url --script-arg=$url --script-arg=-Destination --script-arg=$source
@@ -576,38 +607,30 @@ python scripts/run_stage.py --profile $profilePath --instance-root $instance `
 ```
 
 For a DVD-backed episode, pass `--script-arg=--dvd --script-arg=<DVD path>` instead of
-`--no-dvd`. If timestamped curated/per-instance cut-PAD stills are available, first ask
-whether to use them; append `--script-arg=--cut-pad-images` and `--script-arg=use` or
-`--script-arg=skip` to record the choice. The
-download and init stages only create files in their configured local download folder and
-the per-instance manifest folder, respectively.
+`--no-dvd`. If cut-PAD stills are available, ask whether to use them before adding
+`--script-arg=--cut-pad-images --script-arg=use` or `skip`. The download goes to the
+configured local source folder; manifests, logs, references, and cut-PAD images go to this
+episode's workspace when available, otherwise to its local fallback.
 
-Use the returned `instance_root` with each runner invocation:
+The device should alter only its own `devices/<device-instance>/` subtree. Do not edit
+release files or another device's folder. For shared-drive ACLs, the administrator should
+grant read/execute on the README/release tree and make `devices/` its sole writable child
+(pre-provision it or allow creation of that exact directory). Grant each device Modify
+only to its own instance subtree. V7 does not change ACLs. Application
+guards reject release-root and peer-instance writes; the doctor still blocks processing if
+the release root itself appears writable.
 
-```powershell
-$profilePath = '<local machine.json outside W:\ld-pipeline>'
-$instance = '<instance_root returned by shared_workspace.py>'
-python scripts/run_stage.py --profile $profilePath --instance-root $instance `
-  --episode S01E07 --stage validate-inputs --execute
-```
+Logs are intended as bugfix evidence, not just summaries: keep the unique stage `.log` and
+JSON report, exact commands, workflow version, gate outcomes, complete tool stdout/stderr,
+exit codes, Orc JSON refresh output, FFmpeg command/version sidecars, hashes, preflight and
+tool-version reports. Keep full artifacts rather than filtered error lines, never overwrite
+or clean prior runs, and do not put credentials/tokens in command lines. The workspace's
+`logs/README.md` records this policy. Shared-mode logs redact configured machine paths; they
+do not scrub arbitrary secrets.
 
-The workspace contains that episode's manifest, stage logs, reference inbox, and cut-PAD
-images. Other workflow outputs remain under the local profile's `roots.*` directories.
-For direct helper calls, set `LDP_PROFILE`, `LDP_INSTANCE_ROOT`, `LDP_MANIFEST_DIR`, and
-`LDP_CUT_PAD_IMAGES` in that command's shell environment. Publish a reviewed text/report
-reference with `shared_workspace.py publish-reference`; publish a cut-PAD PNG only with
-a verified timestamped filename, matching output PAD frame, and source-DVD SHA-256. The
-command also requires `--confirm-mapping` to record that the scene/timestamp-to-PAD
-relationship was independently reviewed.
-Curated `Cut Pad Images/` at the release root remains read-only.
-
-**ACL status for the current W share:** no ACL changes were made, per the operator's
-choice. The current root ACL still grants the connected LenovoFlex account Full Control.
-The tools route normal shared-mode writes under `devices/` and refuse shared-root output
-paths, but this is not an OS security boundary until a share administrator restricts the
-release root and grants write access only to `devices/`. In shared mode the doctor therefore
-reports not-ready and the stage runner blocks writes while the process still has release-root
-write access.
+**ACL status for W:** no ACL changes were made. The current inherited root ACL still grants
+the connected LenovoFlex account Full Control, so the W release root is not OS-enforced
+read-only and processing remains doctor-blocked until an administrator restricts it.
 
 The example manifests (`S01E01`, `S01E04`, `S01E05`) and `reference-runs/` are
 **measured historical regression data only**. They help interpret expected file

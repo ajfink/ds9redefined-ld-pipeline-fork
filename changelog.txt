@@ -77,5 +77,8 @@ FROM Version 6 -> Version 7
   verified Archive metadata/MD5 inventory, paired TBC sidecars, and the destination-space gate.
   Complete tool/version, dependency, preflight, and doctor checks during the transfer; do not
   install/update tools until it completes, and do not process before those gates pass.
+- Clarified README-relative device workspace placement for any `ld-pipeline` copy, added a
+  non-gating `ensure`/automatic resolution path with an isolated local fallback, and added a
+  per-workspace logging guide for commands, full output, gates, versions, and provenance.
 - Validation: see the V7 entry in the authoring-device log and `V7-RELEASE.md`; installation is
   opt-in and no native tools/plugins are silently installed or upgraded.

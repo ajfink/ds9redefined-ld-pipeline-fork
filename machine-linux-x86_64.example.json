@@ -1,5 +1,5 @@
 {
-  "_readme": "Candidate Linux x86_64 profile for dependency and capability checks only. The full Linux workflow is not validated/supported. Copy locally to machine.json, replace every path, and retain the warning. Never store machine.json in the shared release tree.",
+  "_readme": "Candidate Linux x86_64 profile for dependency and capability checks only. The full Linux workflow is not validated/supported. Copy locally to a device profile, replace every path, and retain the warning. Never store machine.json in the README/release folder. Device-workspace mode uses the parent folder of the selected README and creates devices/<device-instance>/episodes/<code>; if that location is unavailable, tools use isolated device-local roots without making folder creation a workflow gate.",
   "machine": "LINUX-X86_64",
   "os": "linux",
   "shared": {

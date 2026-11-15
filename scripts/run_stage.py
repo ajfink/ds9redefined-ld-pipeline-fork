@@ -24,7 +24,9 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ROOT))
 from dependency_lock import (LockError, profile_platform, redact_shared_text,
                              resolve_interpreter, shared_redactions)  # noqa: E402
-from ldcommon import shared_instance_root  # noqa: E402
+from ldcommon import (device_workspace_enabled, shared_instance_root,
+                      workspace_release_root)  # noqa: E402
+from shared_workspace import resolve_instance_workspace  # noqa: E402
 
 STAGES = {
     "download": {"kind": "download", "write": True},
@@ -69,11 +71,13 @@ def load_profile(path: str | None) -> tuple[Path, dict]:
     if devices.is_dir():
         try:
             p.relative_to(ROOT.resolve())
-            raise LockError("shared mode requires a device-local profile outside the release tree")
+            raise LockError("device-workspace profiles must be outside the README/release folder")
         except ValueError:
             pass
-        if (profile.get("shared") or {}).get("enabled") is not True:
-            raise LockError("shared-release profile must set shared.enabled=true")
+    if device_workspace_enabled(profile) and workspace_release_root(profile) != ROOT.resolve():
+        raise LockError(f"workspace/shared release root must match this README/code folder: {ROOT}")
+    if devices.is_dir() and not device_workspace_enabled(profile):
+        raise LockError("this README folder has devices/ data; use an external profile with shared.enabled=true")
     return p, profile
 
 
@@ -256,17 +260,20 @@ def main() -> int:
         spec = STAGES[args.stage]
         env = os.environ.copy()
         env["LDP_PROFILE"] = str(profile_path)
-        shared = (profile.get("shared") or {}).get("enabled") is True
+        shared = device_workspace_enabled(profile)
         instance = None
+        instance_mode = None
+        workspace_warning = None
         redactions = shared_redactions(profile_path, profile) if shared else []
         if shared:
-            if not args.instance_root:
-                raise LockError("shared mode requires --instance-root from scripts/shared_workspace.py init")
-            env["LDP_INSTANCE_ROOT"] = str(Path(args.instance_root).expanduser().resolve())
-            instance = shared_instance_root(profile)
-            env["LDP_MANIFEST_DIR"] = str(instance / "manifest")
-            env["LDP_INSTANCE_LOGS"] = str(instance / "logs")
-            env["LDP_CUT_PAD_IMAGES"] = str(instance / "cut-pad-images")
+            workspace, workspace_warning = resolve_instance_workspace(
+                profile_path, profile, args.episode, args.instance_root,
+                create=args.execute)
+            if workspace:
+                instance = Path(workspace["instance_root"]).resolve()
+                instance_mode = workspace["storage_mode"]
+                env.update(workspace["shell_exports"])
+                env["LDP_EPISODE"] = args.episode
             if args.publish_reference and not spec.get("write"):
                 raise LockError("--publish-reference requires an executing write-capable stage")
         elif args.instance_root or args.publish_reference:
@@ -293,11 +300,21 @@ def main() -> int:
         if not args.execute:
             print(f"PLAN V{(ROOT / 'WORKFLOW_VERSION').read_text(encoding='ascii').strip()} stage={args.stage} episode={args.episode}")
             print("read-only profile: " + str(profile_path))
+            if shared:
+                if instance:
+                    print(f"workspace: {instance} ({instance_mode})")
+                else:
+                    print("workspace: will reuse/create under README-folder devices/; if unavailable, continue in isolated device-local roots")
+                if workspace_warning:
+                    print("workspace warning: " + workspace_warning)
             if args.stage == "download":
                 print("readiness: full doctor deferred; downloader-specific profile/curl, Archive integrity, and space gates still run")
             if requires_doctor(args.stage):
                 assert doctor is not None
-                print("doctor gate: " + display(doctor))
+                if shared and not instance:
+                    print("doctor gate: runs with the workspace auto-resolved at execution time")
+                else:
+                    print("doctor gate: " + display(doctor))
             for gate in gates:
                 print("manifest gate: " + display(gate))
             print("action: " + display(action))
@@ -319,7 +336,16 @@ def main() -> int:
             log.write(f"episode={args.episode} stage={args.stage} profile={profile_label}\n\n")
             if args.stage == "download":
                 log.write("NOTE: full doctor deferred; downloader enforces profile/curl, Archive integrity, and destination-space gates.\n\n")
-        gate_results = []
+            if shared and instance:
+                safe_instance = redact_shared_text(str(instance), redactions)
+                log.write(f"workspace_mode={instance_mode} workspace={safe_instance}\n")
+                if workspace_warning:
+                    log.write(f"workspace_warning={redact_shared_text(workspace_warning, redactions)}\n")
+        gate_results = ([{"kind": "workspace", "mode": instance_mode,
+                         "instance_root": str(instance), "warning": workspace_warning}]
+                        if shared and instance else [])
+        if workspace_warning:
+            print("WARN: " + workspace_warning, file=sys.stderr)
         if requires_doctor(args.stage):
             assert doctor is not None
             check = run_captured(doctor, env, log_path, redactions)

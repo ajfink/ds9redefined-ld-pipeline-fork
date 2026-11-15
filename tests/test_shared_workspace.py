@@ -15,11 +15,67 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ROOT))
 
 import shared_workspace  # noqa: E402
-from ldcommon import PipelineError, assert_writable_path, episode_manifest_path  # noqa: E402
-from shared_workspace import LockError, configure_shared_profile  # noqa: E402
+from ldcommon import (PipelineError, assert_writable_path, episode_manifest_path,
+                      shared_instance_root)  # noqa: E402
+from shared_workspace import (LockError, configure_shared_profile,
+                              resolve_instance_workspace)  # noqa: E402
 
 
 class SharedWorkspaceTests(unittest.TestCase):
+    def test_ensure_creates_readme_relative_workspace_and_reuses_it(self):
+        with tempfile.TemporaryDirectory() as temp:
+            bundle = Path(temp) / "ld-pipeline"
+            (bundle / "devices").mkdir(parents=True)
+            (bundle / "WORKFLOW_VERSION").write_text("7\n", encoding="ascii")
+            profile_path = Path(temp) / "local-profile.json"
+            profile_path.write_text("{}\n", encoding="utf-8")
+            profile = {"machine": "DEVICE-A", "shared": {
+                "enabled": True, "release_root": str(bundle), "device_name": "DEVICE-A"}}
+            with patch.object(shared_workspace, "ROOT", bundle):
+                first, warning1 = resolve_instance_workspace(profile_path, profile, "S01E09")
+                second, warning2 = resolve_instance_workspace(profile_path, profile, "S01E09")
+            self.assertIsNone(warning1)
+            self.assertIsNone(warning2)
+            self.assertEqual(first["instance_root"], second["instance_root"])
+            self.assertTrue(Path(first["instance_root"]).is_relative_to(bundle / "devices"))
+            self.assertTrue((Path(first["instance_root"]) / "logs" / "README.md").is_file())
+
+    def test_workspace_creation_failure_falls_back_to_local_roots_without_gating(self):
+        with tempfile.TemporaryDirectory() as temp:
+            bundle = Path(temp) / "ld-pipeline"
+            bundle.mkdir()
+            (bundle / "WORKFLOW_VERSION").write_text("7\n", encoding="ascii")
+            profile_path = Path(temp) / "local-profile.json"
+            profile_path.write_text("{}\n", encoding="utf-8")
+            local_logs = Path(temp) / "local" / "logs"
+            profile = {"machine": "DEVICE-B", "roots": {"logs": str(local_logs)},
+                       "shared": {"enabled": True, "release_root": str(bundle),
+                                  "device_name": "DEVICE-B"}}
+            original_mkdir = Path.mkdir
+
+            def deny_devices_creation(path, *args, **kwargs):
+                if path == bundle / "devices":
+                    raise PermissionError("simulated README-folder ACL denial")
+                return original_mkdir(path, *args, **kwargs)
+
+            with patch.object(shared_workspace, "ROOT", bundle), \
+                    patch.object(Path, "mkdir", deny_devices_creation):
+                result, warning = resolve_instance_workspace(profile_path, profile, "S01E09")
+                validated = shared_workspace.validate_instance(
+                    result["instance_root"], profile_path, profile)
+            self.assertEqual(result["storage_mode"], "local-fallback")
+            self.assertIsNotNone(warning)
+            self.assertEqual(validated, Path(result["instance_root"]))
+            for folder in ("manifest", "logs", "references", "cut-pad-images"):
+                self.assertTrue((validated / folder).is_dir())
+            self.assertTrue((validated / "logs" / "README.md").is_file())
+            with patch.object(__import__("ldcommon"), "BUNDLE", bundle), \
+                    patch.dict("os.environ", result["shell_exports"], clear=False):
+                self.assertEqual(shared_instance_root(profile), validated)
+                self.assertEqual(episode_manifest_path("S01E09", SimpleNamespace(
+                    profile=profile, profile_path=profile_path)),
+                    validated / "manifest" / "S01E09.json")
+
     def test_shared_profile_configuration_is_external_and_no_overwrite(self):
         with tempfile.TemporaryDirectory() as temp:
             bundle = Path(temp) / "ld-pipeline"
@@ -85,7 +141,7 @@ class SharedWorkspaceTests(unittest.TestCase):
             profile = {"machine": "DEVICE", "shared": {"enabled": True,
                                                            "release_root": str(bundle),
                                                            "device_name": "DEVICE"}}
-            fake_ld = SimpleNamespace(profile=profile)
+            fake_ld = SimpleNamespace(profile=profile, profile_path=Path(temp) / "local-profile.json")
             env = {"LDP_INSTANCE_ROOT": str(instance)}
             with patch.object(__import__("ldcommon"), "BUNDLE", bundle), \
                     patch.dict("os.environ", env, clear=False):

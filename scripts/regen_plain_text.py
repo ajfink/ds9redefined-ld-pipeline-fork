@@ -23,7 +23,9 @@ def main() -> int:
     ap.add_argument("--source", default=str(BUNDLE / "DS9 LaserDisc OpenCode Runbook.md"))
     ap.add_argument("--output", default=str(BUNDLE / "DS9 LaserDisc Plain Text Instructions.txt"))
     args = ap.parse_args()
-    if (BUNDLE / "devices").is_dir():
+    # Authoring checkouts may have device workspaces; published release copies
+    # without Git metadata stay application/source read-only.
+    if (BUNDLE / "devices").is_dir() and not (BUNDLE / ".git").exists():
         print("shared release root is read-only; regenerate in the authoring checkout and republish the release",
               file=sys.stderr)
         return 2

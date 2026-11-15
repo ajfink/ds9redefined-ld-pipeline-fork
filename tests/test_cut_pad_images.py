@@ -3,9 +3,11 @@ from __future__ import annotations
 import sys
 import hashlib
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -68,6 +70,28 @@ class SharedCutPadImageTests(unittest.TestCase):
             sidecar.unlink()
             with self.assertRaisesRegex(PipelineError, "provenance sidecar"):
                 parse_shared_cut_image(f"18222={png}", "S01E07", bundle)
+
+    def test_local_fallback_cut_pad_images_are_accepted_with_provenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "ld-pipeline"
+            local = Path(tmp) / "work" / "logs" / "ld-pipeline-local" / "LEGION" / "episodes" / "S01E07"
+            folder = local / "cut-pad-images"
+            folder.mkdir(parents=True)
+            png = folder / "DVD-00-12-42.762-f00018288.png"
+            payload = b"fallback-cut-pad-png"
+            png.write_bytes(payload)
+            png.with_suffix(".provenance.json").write_text(json.dumps({
+                "episode": "S01E07",
+                "output_pad_frame": 18222,
+                "dvd_timestamp": "00:12:42.762",
+                "source_dvd_sha256": "a" * 64,
+                "png_sha256": hashlib.sha256(payload).hexdigest(),
+                "reviewed_episode_scene_and_pad_mapping": True,
+            }), encoding="utf-8")
+            with patch.dict(os.environ, {"LDP_CUT_PAD_IMAGES": str(folder)}):
+                result = parse_shared_cut_image(f"18222={png}", "S01E07", bundle)
+            self.assertEqual((result[0], result[2], result[3]),
+                             (18222, "00:12:42.762", 18288))
 
 
 if __name__ == "__main__":

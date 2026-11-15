@@ -23,6 +23,7 @@ function Get-LdProfile {
     }
     try { $profile = Get-Content -LiteralPath $p -Raw | ConvertFrom-Json }
     catch { throw "profile is not valid JSON: $p ($($_.Exception.Message))" }
+    $script:LdProfilePath = [System.IO.Path]::GetFullPath($p)
     if (Test-Path -LiteralPath $sharedDevices -PathType Container) {
         $bundleFull = [System.IO.Path]::GetFullPath($script:LdBundle).TrimEnd('\') + '\'
         $profileFull = [System.IO.Path]::GetFullPath($p)
@@ -50,6 +51,13 @@ function Get-LdRoot {
     if ($Name -eq 'logs' -and $Profile.shared -and $Profile.shared.enabled) {
         if (-not $env:LDP_INSTANCE_ROOT) { throw "shared mode requires LDP_INSTANCE_ROOT; run scripts/shared_workspace.py init" }
         $instance = [System.IO.Path]::GetFullPath($env:LDP_INSTANCE_ROOT)
+        if ($env:LDP_INSTANCE_MODE -eq 'local-fallback') {
+            $bundle = [System.IO.Path]::GetFullPath($script:LdBundle).TrimEnd('\') + '\'
+            if ($instance.StartsWith($bundle, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "device-local fallback must be outside the README-folder release: $instance"
+            }
+            return Join-Path $instance 'logs'
+        }
         $devices = [System.IO.Path]::GetFullPath((Join-Path $script:LdBundle 'devices')).TrimEnd('\') + '\'
         if (-not $instance.StartsWith($devices, [StringComparison]::OrdinalIgnoreCase)) {
             throw "LDP_INSTANCE_ROOT must be beneath $devices"
@@ -64,10 +72,10 @@ function Get-LdRoot {
 function Assert-LdWritablePath {
     param([Parameter(Mandatory)]$Profile, [Parameter(Mandatory)][string]$Path)
     if (-not ($Profile.shared -and $Profile.shared.enabled)) { return }
-    if (-not $env:LDP_INSTANCE_ROOT) { throw "shared mode requires LDP_INSTANCE_ROOT; run scripts/shared_workspace.py init" }
     $bundle = [System.IO.Path]::GetFullPath($script:LdBundle).TrimEnd('\') + '\'
     $target = [System.IO.Path]::GetFullPath($Path)
     if (-not $target.StartsWith($bundle, [StringComparison]::OrdinalIgnoreCase)) { return }
+    if (-not $env:LDP_INSTANCE_ROOT) { throw "shared-release writes inside the README folder require a device workspace" }
     $instance = [System.IO.Path]::GetFullPath($env:LDP_INSTANCE_ROOT).TrimEnd('\') + '\'
     $allowed = @('manifest','logs','references','cut-pad-images') | ForEach-Object {
         [System.IO.Path]::GetFullPath((Join-Path $instance $_)).TrimEnd('\') + '\'
@@ -76,6 +84,34 @@ function Assert-LdWritablePath {
         if ($target.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { return }
     }
     throw "shared mode forbids writing to the release tree: $target; use the active instance's manifest/logs/references/cut-pad-images folder or a local output root"
+}
+
+function Set-LdEpisodeWorkspace {
+    param([Parameter(Mandatory)]$Profile, [Parameter(Mandatory)][string]$Code)
+    $pythonValue = [string]$Profile.python.interpreter
+    if (-not $pythonValue) { $pythonValue = [string]$Profile.tools.python }
+    if (-not $pythonValue) { $pythonValue = 'python' }
+    $python = $null
+    if (Test-Path -LiteralPath $pythonValue -PathType Leaf) {
+        $python = [System.IO.Path]::GetFullPath($pythonValue)
+    } else {
+        $command = Get-Command -Name $pythonValue -ErrorAction SilentlyContinue
+        if ($command) { $python = $command.Source }
+    }
+    if (-not $python) { throw "cannot prepare the non-gating episode workspace: Python executable not found: $pythonValue" }
+    $helper = Join-Path $script:LdBundle 'scripts\shared_workspace.py'
+    $arguments = @($helper, 'ensure', '--profile', $script:LdProfilePath, '--episode', $Code)
+    if ($env:LDP_INSTANCE_ROOT) { $arguments += @('--instance-root', $env:LDP_INSTANCE_ROOT) }
+    $output = @(& $python @arguments 2>&1)
+    $rc = $LASTEXITCODE
+    if ($rc -ne 0) { throw "workspace setup helper failed (exit $rc): $($output -join ' ')" }
+    try { $result = ($output -join "`n") | ConvertFrom-Json }
+    catch { throw "workspace setup helper returned invalid JSON: $($_.Exception.Message)" }
+    if (-not $result.workspace.shell_exports) { throw 'workspace setup helper returned no shell exports' }
+    foreach ($property in $result.workspace.shell_exports.PSObject.Properties) {
+        [Environment]::SetEnvironmentVariable($property.Name, [string]$property.Value, 'Process')
+    }
+    if ($result.warning) { Write-Warning ([string]$result.warning) }
 }
 
 function Protect-LdSharedText {
@@ -104,11 +140,15 @@ function Get-LdEpisode {
     $profile = Get-LdProfile
     if ($profile.shared -and $profile.shared.enabled) {
         if (-not $env:LDP_INSTANCE_ROOT -or -not $env:LDP_MANIFEST_DIR) {
-            throw "shared mode requires LDP_INSTANCE_ROOT/LDP_MANIFEST_DIR; run scripts/shared_workspace.py init"
+            Set-LdEpisodeWorkspace -Profile $profile -Code $Code
         }
         $expectedManifestDir = [System.IO.Path]::GetFullPath((Join-Path $env:LDP_INSTANCE_ROOT 'manifest'))
         if ([System.IO.Path]::GetFullPath($env:LDP_MANIFEST_DIR) -ne $expectedManifestDir) {
-            throw "LDP_MANIFEST_DIR must be the current instance's manifest folder: $expectedManifestDir"
+            Set-LdEpisodeWorkspace -Profile $profile -Code $Code
+            $expectedManifestDir = [System.IO.Path]::GetFullPath((Join-Path $env:LDP_INSTANCE_ROOT 'manifest'))
+            if ([System.IO.Path]::GetFullPath($env:LDP_MANIFEST_DIR) -ne $expectedManifestDir) {
+                throw "workspace helper did not set LDP_MANIFEST_DIR to the active manifest folder: $expectedManifestDir"
+            }
         }
         $p = Join-Path $env:LDP_MANIFEST_DIR "$Code.json"
     } else { $p = Join-Path $script:LdBundle "episodes\$Code.json" }

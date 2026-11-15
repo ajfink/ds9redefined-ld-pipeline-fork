@@ -1,5 +1,5 @@
 {
-  "_readme": "macOS Apple-silicon example only. Replace every /Users/YOUR_ACCOUNT path before copying to a device-local machine.json. Never store machine.json in the shared release tree. For shared mode set shared.enabled=true and shared.release_root to the bundle, then create a per-instance workspace under its devices/ folder.",
+  "_readme": "macOS Apple-silicon example only. Replace every /Users/YOUR_ACCOUNT path before copying to a device-local machine.json. Never store machine.json in the README/release folder. For device-workspace mode set shared.enabled=true and shared.release_root to the parent folder of the README being followed, then use shared_workspace.py ensure for devices/<device-instance>/episodes/<code>. Workspace creation is required setup but not a gate; the runner uses isolated device-local roots if README-folder devices/ is unavailable.",
   "machine": "MAC-OPENCODE",
   "os": "darwin",
   "shared": {

@@ -21,14 +21,16 @@ lower V6 audio, video, safety, space, or QC gates.
   the doctor and their declared
   manifest validators, then save unique command logs and JSON results. Linux production
   stage execution is blocked.
-- Added shared-release mode for multiple read-only consumers: each device/OpenCode
-  instance initializes a unique `devices/<device>-<random>/episodes/<code>/` workspace
-  containing its manifest, logs, references, and cut-PAD inbox. Shared-mode scripts require
-  an external local profile and route manifest writes/logs into that instance; curated
-  release files remain read-only. No ACLs are changed automatically; administrators must
-  provision `devices/` and grant write access only there. The W share's current ACL was not
-  changed per operator direction, so it still requires administrator enforcement for an
-  OS-level read-only guarantee.
+- Added README-relative per-device workspaces for shared releases: each device/OpenCode
+  instance uses `devices/<device>-<random>/episodes/<code>/` under the folder containing the
+  README that started the job, regardless of drive/location. It contains the manifest,
+  logs, references, and cut-PAD inbox; per-instance logs include a debugging-evidence guide.
+  Workspace setup is required procedure but not a gate: the runner creates/reuses it
+  automatically, and falls back to device-local profile roots with a warning if the
+  README-folder `devices/` path is unavailable. No ACLs are changed automatically;
+  administrators should make the README tree read-only, make `devices/` its sole writable
+  child, and grant each device write access only to its own instance subtree. The W ACL remains
+  unchanged and is still not OS-enforced read-only.
 - Added mandatory indexed-seek audio QC for every audio track in each final master: four
   quarter-timeline sample points, comparing fast input seek with output-seek control. Both
   platform remuxers set Matroska `-max_interleave_delta 0`, the M5-verified fix for
@@ -60,12 +62,14 @@ lower V6 audio, video, safety, space, or QC gates.
   plugins, PowerShell integration, and full episode delivery are unvalidated. Do not
   process a production episode or call Linux supported based on lock/bootstrap success.
 - Linux ARM64 and Windows ARM64 remain untested.
-- The shared-drive application paths avoid writing to the release root, but V7 does not
+- Application paths avoid writing outside the active device workspace beneath `devices/`
+  (or its isolated local fallback), but V7 does not
   provision/modify filesystem ACLs. If the share grants write access at the root, an
   administrator must correct that ACL before calling it OS-enforced read-only.
 - The follow-up tests shared-workspace initialization/provenance, per-instance
-  manifest/write-path guards, JSON-safe Windows-path redaction, and early-download gating.
-  Full suite: 57 passed, 7 Mac/VapourSynth-only skipped; Windows doctor passes in local mode.
+  manifest/write-path guards, local fallback, JSON-safe Windows-path redaction, and
+  early-download gating. Full suite: 60 passed, 7 Mac/VapourSynth-only skipped; Python
+  compilation, PowerShell parsing, generated-runbook checks, and download-stage planning pass.
   The active W account still has root write
   access, so W shared-mode doctor correctly blocks stage execution pending an ACL change.
 

@@ -19,6 +19,7 @@ import argparse
 import csv
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -84,7 +85,11 @@ def parse_shared_cut_image(spec: str, episode: str, bundle: Path) -> tuple[int, 
         raise PipelineError(f"cut-pad output frame must be an integer: {frame_s!r}") from exc
     source_png = Path(path_s).expanduser().resolve()
     image_root = (bundle / "Cut Pad Images" / episode).resolve()
+    active_cut_root = os.environ.get("LDP_CUT_PAD_IMAGES")
+    active_cut_root = Path(active_cut_root).expanduser().resolve() if active_cut_root else None
     allowed = source_png.is_relative_to(image_root)
+    if not allowed and active_cut_root:
+        allowed = source_png.is_relative_to(active_cut_root)
     if not allowed:
         device_root = (bundle / "devices").resolve()
         try:
@@ -101,11 +106,16 @@ def parse_shared_cut_image(spec: str, episode: str, bundle: Path) -> tuple[int, 
     match = DVD_IMAGE_RE.fullmatch(source_png.name)
     if not match:
         raise PipelineError(f"shared image filename must contain the DVD timestamp and decoded frame: {source_png.name}")
-    try:
-        source_png.relative_to((bundle / "devices").resolve())
-        instance_image = True
-    except ValueError:
-        instance_image = False
+    instance_image = False
+    for instance_root in ((bundle / "devices").resolve(), active_cut_root):
+        if instance_root is None:
+            continue
+        try:
+            source_png.relative_to(instance_root)
+            instance_image = True
+            break
+        except ValueError:
+            continue
     if instance_image:
         sidecar = source_png.with_suffix(".provenance.json")
         if not sidecar.is_file():

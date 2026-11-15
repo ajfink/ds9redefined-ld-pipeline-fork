@@ -206,8 +206,6 @@ def main() -> int:
                              "devices_root": str(devices)}
             if release != ROOT.resolve():
                 raise LockError(f"shared.release_root must equal the code bundle path: {ROOT}")
-            if not devices.is_dir():
-                raise LockError(f"shared devices/ folder must be pre-provisioned: {devices}")
             instance_value = env.get("LDP_INSTANCE_ROOT")
             instance = None
             if instance_value:
@@ -248,17 +246,21 @@ def main() -> int:
                 "instance_ready": instance is not None,
                 "instance_root": str(instance) if instance else None,
                 "manifest_dir": str(manifest_dir) if manifest_dir else None,
-                "device_write_scope": str(devices),
+                "instance_storage_mode": env.get("LDP_INSTANCE_MODE") if instance else None,
+                "device_write_scope": (str(devices / "<device-instance>") if devices.is_dir()
+                                       else "unavailable; device-local fallback is used"),
                 "release_root_acl_warning": (
                     "the current process appears able to write the release root; configure the "
-                    "share ACL read-only for the release tree and writable only under devices/"
+                    "share ACL read-only for the release tree and writable only under this device's devices/<device-instance>/ folder"
                     if os.access(release, os.W_OK) else
                     "release-root write access is not reported for this process"),
                 "release_root_writable_for_process": os.access(release, os.W_OK),
                 "application_write_scope": "episode manifest, stage logs, references, and cut-PAD images are redirected into this unique instance folder",
             })
             if instance is None:
-                shared_report["setup_note"] = "machine-level checks only; initialize a unique episode workspace before a stage can be episode-ready"
+                shared_report["setup_note"] = "machine-level diagnostic only; run_stage will create the README-folder workspace or fall back to device-local roots without blocking the episode"
+            elif env.get("LDP_INSTANCE_MODE") == "local-fallback":
+                shared_report["setup_note"] = "README-folder devices/ workspace unavailable; this episode is using isolated device-local manifest/log/reference/cut-PAD folders"
         elif (ROOT / "devices").is_dir():
             raise LockError("this bundle has a shared devices/ area; set shared.enabled=true in a local profile")
         lock_report = compare_lock(target, interpreter)

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Create and populate isolated per-instance data folders under a shared release.
 
-The release root is never an output target. The only mutation performed here is
-under its pre-provisioned ``devices/`` subtree: unique instance folders,
-logs/references, and reviewed cut-PAD stills. The OS ACL remains an administrator
-responsibility; this helper does not edit permissions.
+The README/code-bundle folder is never an output target. The preferred mutation is
+under its pre-provisioned ``devices/`` subtree: per-device instance folders with
+manifests, logs/references, and reviewed cut-PAD stills. If that workspace is
+unavailable, the helper creates an isolated fallback under the machine profile's
+local roots. It never edits ACLs.
 """
 from __future__ import annotations
 
@@ -25,6 +26,24 @@ EPISODE_RE = re.compile(r"^S\d{2}E\d{2}$", re.IGNORECASE)
 IMAGE_RE = re.compile(r"^DVD-(\d{2})-(\d{2})-(\d{2})\.(\d{3})-f(\d{8})\.png$", re.IGNORECASE)
 SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9._-]+$")
 REFERENCE_EXTENSIONS = {".md", ".txt", ".json", ".csv", ".tsv", ".log"}
+LOGGING_GUIDE = """# Episode workspace logs
+
+Keep diagnostic evidence here for this device-instance and episode. This folder is
+under the `devices/` subtree beside the README that started the run. If that shared
+location cannot be created, the workflow warns and uses the machine profile's local
+roots/logs fallback instead; it never writes other release files.
+
+Retain the unique stage `.log` and `.json` report for each run. Include the workflow
+version, episode/stage, exact command and arguments, start/finish times, gate results,
+complete tool output, and exit status. Preserve Orc refresh JSON and stderr, FFmpeg
+command/version sidecars, preflight/tool-version reports, hashes, and structured
+artifacts in their original form. Do not keep only filtered error lines or overwrite
+prior runs; correlate evidence by its timestamped filename.
+
+Never put passwords, auth headers, or access tokens in command lines or logs. Shared-mode
+redaction handles configured machine-local paths, not arbitrary secrets. Preserve failed
+run logs for diagnosis; do not clean them as part of a rerun.
+"""
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dependency_lock import LockError, redact_shared_text, shared_redactions  # noqa: E402
@@ -46,22 +65,19 @@ def load_profile(path: str | None) -> tuple[Path, dict]:
         raise LockError(f"cannot read local profile {profile_path}: {exc}") from exc
     shared = profile.get("shared") or {}
     if shared.get("enabled") is not True:
-        raise LockError("set shared.enabled=true in the local profile after the shared root/ACL is configured")
+        raise LockError("set shared.enabled=true in the device-local profile for this README-folder workspace")
     release_value = shared.get("release_root")
     if not release_value:
-        raise LockError("shared.release_root must be set to the shared ld-pipeline directory")
+        raise LockError("shared.release_root must be set to the folder containing this README")
     release = Path(os.path.expandvars(os.path.expanduser(str(release_value)))).resolve()
     if release != ROOT.resolve():
         raise LockError(f"shared.release_root ({release}) must match this code bundle ({ROOT})")
-    devices = release / "devices"
-    if not devices.is_dir():
-        raise LockError(f"shared devices/ directory must be provisioned by the release administrator: {devices}")
     return profile_path, profile
 
 
 def configure_shared_profile(source_value: str, output_value: str,
                              device_name: str | None) -> Path:
-    """Create a new device-local profile that points at this read-only release."""
+    """Create an external local profile for this README-relative workspace."""
     source = Path(os.path.expandvars(os.path.expanduser(source_value))).resolve()
     output = Path(os.path.expandvars(os.path.expanduser(output_value))).resolve()
     if not source.is_file():
@@ -74,8 +90,9 @@ def configure_shared_profile(source_value: str, output_value: str,
         profile = json.loads(source.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise LockError(f"cannot read source profile {source}: {exc}") from exc
+    name = device_name or profile.get("machine") or "device"
     profile["shared"] = {"enabled": True, "release_root": str(ROOT.resolve()),
-                         "device_name": device_name or profile.get("machine") or "device"}
+                         "device_name": name}
     roots = profile.setdefault("roots", {})
     roots["runbook_dir"] = str(ROOT.resolve())
     tools = profile.setdefault("tools", {})
@@ -93,8 +110,10 @@ def configure_shared_profile(source_value: str, output_value: str,
                 continue
             raise LockError(f"roots.{name} points into the shared release; set it to device-local storage first")
     profile.setdefault("notes", []).append(
-        "Shared-release profile: source files are read-only. Initialize a unique per-episode "
-        "workspace under shared devices/ and pass --instance-root to run_stage.py.")
+        "README-relative shared-release profile: source files are read-only. Episode "
+        "manifests/logs/references/cut-PAD images belong under "
+        "devices/<device-instance>/episodes/<code>; run_stage creates/reuses that workspace "
+        "and uses a local fallback without gating if it is unavailable.")
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("x", encoding="utf-8", newline="\n") as f:
         json.dump(profile, f, indent=2, ensure_ascii=False)
@@ -109,11 +128,124 @@ def safe_component(value: str) -> str:
     return cleaned[:64]
 
 
+def workspace_release_root(profile: dict) -> Path:
+    shared = profile.get("shared") or {}
+    return Path(os.path.expandvars(os.path.expanduser(str(shared.get("release_root") or ROOT)))).resolve()
+
+
+def ensure_logging_guide(logs_dir: Path) -> None:
+    guide = logs_dir / "README.md"
+    if guide.exists():
+        return
+    try:
+        with guide.open("x", encoding="utf-8", newline="\n") as f:
+            f.write(LOGGING_GUIDE)
+    except FileExistsError:
+        pass
+
+
+def ensure_workspace_dirs(root: Path) -> None:
+    for name in ("manifest", "logs", "references", "cut-pad-images"):
+        (root / name).mkdir(parents=True, exist_ok=True)
+    ensure_logging_guide(root / "logs")
+
+
+def _shell_exports(profile_path: Path, root: Path, mode: str) -> dict[str, str]:
+    return {
+        "LDP_PROFILE": str(profile_path),
+        "LDP_INSTANCE_ROOT": str(root.resolve()),
+        "LDP_MANIFEST_DIR": str((root / "manifest").resolve()),
+        "LDP_INSTANCE_LOGS": str((root / "logs").resolve()),
+        "LDP_CUT_PAD_IMAGES": str((root / "cut-pad-images").resolve()),
+        "LDP_INSTANCE_MODE": mode,
+    }
+
+
+def _local_fallback_candidates(profile: dict, episode: str) -> list[tuple[str, Path]]:
+    roots = profile.get("roots") or {}
+    shared = profile.get("shared") or {}
+    release = workspace_release_root(profile)
+    device = safe_component(str(shared.get("device_name") or profile.get("machine") or "device"))
+    candidates = []
+    for key in ("logs", "work", "probe"):
+        raw = roots.get(key)
+        if not raw:
+            continue
+        base = Path(os.path.expandvars(os.path.expanduser(str(raw)))).resolve()
+        try:
+            base.relative_to(release)
+        except ValueError:
+            candidates.append((key, base / "ld-pipeline-local" / device / "episodes" / episode.upper()))
+    return candidates
+
+
+def create_local_fallback(profile_path: Path, profile: dict, episode: str) -> dict:
+    """Create/use a device-local workspace when README-folder devices/ is unavailable."""
+    if not EPISODE_RE.fullmatch(episode):
+        raise LockError(f"episode must be SxxExx, got {episode!r}")
+    failures = []
+    for base_key, root in _local_fallback_candidates(profile, episode):
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            metadata_path = root / "workspace.json"
+            if metadata_path.exists():
+                saved = json.loads(metadata_path.read_text(encoding="utf-8"))
+                if (saved.get("storage_mode") != "local-fallback" or
+                        saved.get("machine") != profile.get("machine") or
+                        str(saved.get("episode", "")).casefold() != episode.casefold()):
+                    failures.append(f"refusing to reuse unrelated local folder {root}")
+                    continue
+            else:
+                metadata = {
+                    "schema": "ld-pipeline-shared-instance-v1",
+                    "storage_mode": "local-fallback",
+                    "workflow_version": (ROOT / "WORKFLOW_VERSION").read_text(encoding="ascii").strip(),
+                    "created_utc": datetime.now(timezone.utc).isoformat(),
+                    "episode": episode.upper(),
+                    "machine": profile.get("machine"),
+                    "instance_id": "LOCAL-" + secrets.token_hex(4).upper(),
+                    "release_root": ".",
+                    "local_root_key": base_key,
+                    "write_scope": "this device-local episode workspace; shared publication is unavailable",
+                    "environment": {
+                        "LDP_INSTANCE_ROOT": ".",
+                        "LDP_MANIFEST_DIR": "manifest",
+                        "LDP_INSTANCE_LOGS": "logs",
+                        "LDP_CUT_PAD_IMAGES": "cut-pad-images",
+                        "LDP_INSTANCE_MODE": "local-fallback",
+                    },
+                }
+                with metadata_path.open("x", encoding="utf-8") as f:
+                    json.dump(metadata, f, indent=2)
+                    f.write("\n")
+            dirs = {"manifest": root / "manifest", "logs": root / "logs",
+                    "references": root / "references", "cut-pad-images": root / "cut-pad-images"}
+            for folder in dirs.values():
+                folder.mkdir(parents=True, exist_ok=True)
+            ensure_logging_guide(dirs["logs"])
+            result = json.loads(metadata_path.read_text(encoding="utf-8"))
+            result["instance_root"] = str(root.resolve())
+            result["storage_mode"] = "local-fallback"
+            result["shell_exports"] = _shell_exports(profile_path, root, "local-fallback")
+            return result
+        except (OSError, json.JSONDecodeError) as exc:
+            failures.append(f"{root}: {exc}")
+    detail = "; ".join(failures) if failures else "profile has no external local roots.logs/roots.work/roots.probe"
+    raise LockError("could not create a device-local fallback workspace: " + detail)
+
+
 def create_workspace(profile_path: Path, profile: dict, episode: str) -> dict:
     if not EPISODE_RE.fullmatch(episode):
         raise LockError(f"episode must be SxxExx, got {episode!r}")
-    shared = profile["shared"]
-    devices = Path(shared["release_root"]).resolve() / "devices"
+    shared = profile.get("shared") or {}
+    devices = workspace_release_root(profile) / "devices"
+    if not devices.is_dir():
+        try:
+            # The only permitted source-tree child is devices/. If the ACL does
+            # not allow creating this one directory, use the local fallback.
+            devices.mkdir()
+        except OSError as exc:
+            raise LockError(f"could not create README-folder devices directory {devices}: {exc}") from exc
     device = safe_component(str(shared.get("device_name") or profile.get("machine") or "device"))
     instance_id = secrets.token_hex(4).upper()
     instance_name = f"{device}-{instance_id}"
@@ -135,8 +267,10 @@ def create_workspace(profile_path: Path, profile: dict, episode: str) -> dict:
     }
     for path in dirs.values():
         path.mkdir()
+    ensure_logging_guide(dirs["logs"])
     metadata = {
         "schema": "ld-pipeline-shared-instance-v1",
+        "storage_mode": "shared-release" if shared.get("enabled") is True else "readme-workspace",
         "workflow_version": (ROOT / "WORKFLOW_VERSION").read_text(encoding="ascii").strip(),
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "episode": episode.upper(),
@@ -151,6 +285,7 @@ def create_workspace(profile_path: Path, profile: dict, episode: str) -> dict:
             "LDP_MANIFEST_DIR": "manifest",
             "LDP_INSTANCE_LOGS": "logs",
             "LDP_CUT_PAD_IMAGES": "cut-pad-images",
+            "LDP_INSTANCE_MODE": "shared-release" if shared.get("enabled") is True else "readme-workspace",
         },
     }
     with (episode_root / "workspace.json").open("x", encoding="utf-8") as f:
@@ -159,40 +294,122 @@ def create_workspace(profile_path: Path, profile: dict, episode: str) -> dict:
     # Show the caller's device-local profile only in this command's output; do
     # not put that private path into the shared workspace metadata.
     metadata["instance_root"] = str(episode_root.resolve())
-    metadata["shell_exports"] = {
-        "LDP_PROFILE": str(profile_path),
-        "LDP_INSTANCE_ROOT": str(episode_root.resolve()),
-        "LDP_MANIFEST_DIR": str(dirs["manifest_dir"].resolve()),
-        "LDP_INSTANCE_LOGS": str(dirs["logs"].resolve()),
-        "LDP_CUT_PAD_IMAGES": str(dirs["cut_pad_images"].resolve()),
-    }
+    metadata["shell_exports"] = _shell_exports(
+        profile_path, episode_root,
+        "shared-release" if shared.get("enabled") is True else "readme-workspace")
     return metadata
+
+
+def resolve_instance_workspace(profile_path: Path, profile: dict, episode: str,
+                               requested_root: str | None = None,
+                               *, create: bool = True) -> tuple[dict | None, str | None]:
+    """Reuse or create the README-folder workspace; fall back locally without gating.
+
+    The second return value is a warning for callers to surface in console and logs.
+    A supplied but invalid/ambiguous shared path is never silently reused.
+    """
+    notes: list[str] = []
+    if requested_root:
+        try:
+            root = validate_instance(requested_root, profile_path, profile)
+            ensure_workspace_dirs(root)
+            meta = json.loads((root / "workspace.json").read_text(encoding="utf-8"))
+            meta["instance_root"] = str(root)
+            meta["shell_exports"] = _shell_exports(profile_path, root,
+                                                   meta.get("storage_mode", "shared-release"))
+            return meta, None
+        except (LockError, OSError, json.JSONDecodeError) as exc:
+            notes.append(f"requested README-folder workspace unavailable ({exc})")
+
+    shared = profile.get("shared") or {}
+    devices = Path(os.path.expandvars(os.path.expanduser(
+        str(shared.get("release_root") or ROOT)))).resolve() / "devices"
+    device = safe_component(str(shared.get("device_name") or profile.get("machine") or "device"))
+    candidates = []
+    if devices.is_dir():
+        for root in devices.glob(f"{device}-*/episodes/{episode.upper()}"):
+            try:
+                candidates.append(validate_instance(str(root), profile_path, profile))
+            except (LockError, OSError, json.JSONDecodeError):
+                continue
+    if len(candidates) == 1 and not requested_root:
+        root = candidates[0]
+        try:
+            ensure_workspace_dirs(root)
+        except OSError as exc:
+            notes.append(f"existing README-folder workspace is not writable ({exc})")
+            candidates = []
+        else:
+            meta = json.loads((root / "workspace.json").read_text(encoding="utf-8"))
+            meta["instance_root"] = str(root)
+            meta["shell_exports"] = _shell_exports(profile_path, root,
+                                                   meta.get("storage_mode", "shared-release"))
+            return meta, None
+    if len(candidates) > 1:
+        notes.append(f"found {len(candidates)} README-folder workspaces for this device/episode; not choosing one")
+    if not requested_root:
+        for _, local_root in _local_fallback_candidates(profile, episode):
+            if not (local_root / "workspace.json").is_file():
+                continue
+            try:
+                root = validate_instance(str(local_root), profile_path, profile)
+                ensure_workspace_dirs(root)
+                meta = json.loads((root / "workspace.json").read_text(encoding="utf-8"))
+                meta["instance_root"] = str(root)
+                meta["shell_exports"] = _shell_exports(profile_path, root, "local-fallback")
+                return meta, "; ".join(notes) if notes else "reusing existing device-local fallback workspace"
+            except (LockError, OSError, json.JSONDecodeError):
+                continue
+    if not requested_root and not candidates and create:
+        try:
+            return create_workspace(profile_path, profile, episode), None
+        except (LockError, OSError, json.JSONDecodeError) as exc:
+            notes.append(f"could not create workspace under README-folder devices/: {exc}")
+    if not create:
+        return None, "; ".join(notes) if notes else "no existing README-folder workspace"
+    local = create_local_fallback(profile_path, profile, episode)
+    prefix = "; ".join(notes) if notes else "README-folder workspace was not initialized"
+    return local, (prefix + f"; continuing with device-local fallback {local['instance_root']}")
 
 
 def validate_instance(root_value: str, profile_path: Path, profile: dict) -> Path:
     root = Path(os.path.expandvars(os.path.expanduser(root_value))).resolve()
-    devices = Path(profile["shared"]["release_root"]).resolve() / "devices"
-    try:
-        relative = root.relative_to(devices.resolve())
-    except ValueError as exc:
-        raise LockError(f"instance root must be under {devices}: {root}") from exc
-    if len(relative.parts) != 3 or relative.parts[1] != "episodes":
-        raise LockError("instance root must have form devices/<device-instance>/episodes/<episode>")
-    device = safe_component(str(profile.get("shared", {}).get("device_name") or
-                                profile.get("machine") or "device"))
-    if not relative.parts[0].startswith(device + "-"):
-        raise LockError("instance root belongs to a different device label")
     try:
         metadata = json.loads((root / "workspace.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise LockError(f"invalid/missing workspace.json at {root}: {exc}") from exc
-    expected_relative = root.relative_to(ROOT.resolve()).as_posix()
-    if (metadata.get("release_root") != "." or
-            metadata.get("instance_relative_path") != expected_relative or
-            metadata.get("machine") != profile.get("machine") or
-            str(metadata.get("episode", "")).casefold() != root.name.casefold() or
-            relative.parts[0].rsplit("-", 1)[-1] != metadata.get("instance_id")):
-        raise LockError("workspace metadata does not match this release bundle")
+    device = safe_component(str(profile.get("shared", {}).get("device_name") or
+                                profile.get("machine") or "device"))
+    mode = metadata.get("storage_mode", "shared-release")
+    if mode == "local-fallback":
+        key = metadata.get("local_root_key")
+        if key not in ("logs", "work", "probe"):
+            raise LockError("local fallback workspace has an invalid local_root_key")
+        raw = (profile.get("roots") or {}).get(key)
+        if not raw:
+            raise LockError(f"local fallback profile roots.{key} is no longer configured")
+        base = Path(os.path.expandvars(os.path.expanduser(str(raw)))).resolve()
+        expected = base / "ld-pipeline-local" / device / "episodes" / root.name
+        if (root != expected.resolve() or metadata.get("machine") != profile.get("machine") or
+                str(metadata.get("episode", "")).casefold() != root.name.casefold()):
+            raise LockError("device-local fallback workspace does not match the selected profile/episode")
+    else:
+        devices = Path(profile["shared"]["release_root"]).resolve() / "devices"
+        try:
+            relative = root.relative_to(devices.resolve())
+        except ValueError as exc:
+            raise LockError(f"instance root must be under README-folder devices/: {root}") from exc
+        if len(relative.parts) != 3 or relative.parts[1] != "episodes":
+            raise LockError("instance root must have form devices/<device-instance>/episodes/<episode>")
+        if (not relative.parts[0].startswith(device + "-") or
+                metadata.get("release_root") != "." or
+                metadata.get("instance_relative_path") != root.relative_to(ROOT.resolve()).as_posix() or
+                relative.parts[0].rsplit("-", 1)[-1] != metadata.get("instance_id")):
+            raise LockError("workspace metadata does not match this README-folder release/device")
+        if metadata.get("machine") != profile.get("machine"):
+            raise LockError("shared workspace belongs to a different machine profile")
+        if str(metadata.get("episode", "")).casefold() != root.name.casefold():
+            raise LockError("shared workspace metadata episode does not match its folder")
     if not root.is_dir():
         raise LockError(f"instance directory is missing: {root}")
     return root
@@ -312,6 +529,10 @@ def main() -> int:
     cut.add_argument("--source-dvd-sha256", required=True)
     cut.add_argument("--confirm-mapping", action="store_true", required=True,
                      help="assert that the timestamp/scene and output PAD frame were independently verified")
+    ensure = sub.add_parser("ensure", help="reuse/create the README-folder workspace or use a local fallback")
+    ensure.add_argument("--profile", required=True)
+    ensure.add_argument("--episode", required=True)
+    ensure.add_argument("--instance-root", help="reuse this existing workspace when valid")
     cfg = sub.add_parser("configure-profile", help="create a new local profile for this shared release")
     cfg.add_argument("--source", required=True, help="existing device-local profile to copy")
     cfg.add_argument("--output", required=True, help="new profile path outside the shared release; no overwrite")
@@ -324,6 +545,13 @@ def main() -> int:
             print(f"shared.release_root={ROOT.resolve()}")
             return 0
         profile_path, profile = load_profile(args.profile)
+        if args.command == "ensure":
+            result, warning = resolve_instance_workspace(
+                profile_path, profile, args.episode, args.instance_root, create=True)
+            if not result:
+                raise LockError(warning or "could not prepare episode workspace")
+            print(json.dumps({"workspace": result, "warning": warning}, indent=2))
+            return 0
         if args.command == "init":
             result = create_workspace(profile_path, profile, args.episode)
             print(json.dumps(result, indent=2))

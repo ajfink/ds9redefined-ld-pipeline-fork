@@ -94,13 +94,13 @@ class Ld:
                                     f"run preflight.ps1 -Write")
         self.profile = _load_json(self.profile_path)
         shared = self.profile.get("shared") or {}
-        if shared_devices.is_dir():
+        if shared.get("enabled") is True:
             release_value = shared.get("release_root")
             release = Path(os.path.expandvars(os.path.expanduser(str(release_value)))) if release_value else None
-            if shared.get("enabled") is not True or release is None or release.resolve() != BUNDLE.resolve():
-                raise PipelineError(
-                    "shared-release mode requires a local profile outside the bundle with "
-                    "shared.enabled=true and shared.release_root set to this bundle")
+            if release is None or release.resolve() != BUNDLE.resolve():
+                raise PipelineError("shared.release_root must identify the bundle used by these scripts")
+        elif shared_devices.is_dir():
+            raise PipelineError("this README folder has per-device workspace data; use an external profile with shared.enabled=true")
 
     # ---- tools ----
     def tool(self, name: str) -> Path:
@@ -122,8 +122,9 @@ class Ld:
 
     # ---- roots ----
     def root(self, name: str) -> Path:
-        if name == "logs" and (self.profile.get("shared") or {}).get("enabled") is True:
-            return shared_instance_root(self.profile) / "logs"
+        if name == "logs" and device_workspace_enabled(self.profile):
+            return shared_instance_root(self.profile, self.profile_path,
+                                        os.environ.get("LDP_EPISODE")) / "logs"
         v = (self.profile.get("roots") or {}).get(name)
         if not v:
             raise PipelineError(f"root '{name}' is not set in {self.profile_path}")
@@ -275,22 +276,74 @@ def load_episode(code: str, ld: Ld | None = None) -> Episode:
     return Episode(code, _load_json(p), ld)
 
 
-def shared_instance_root(profile: dict | None = None) -> Path:
-    """Resolve and validate the active per-instance directory beneath shared devices/."""
+def device_workspace_enabled(profile: dict | None) -> bool:
+    if profile is None:
+        return False
+    return (profile.get("shared") or {}).get("enabled") is True
+
+
+def workspace_release_root(profile: dict) -> Path:
+    shared = profile.get("shared") or {}
+    raw = shared.get("release_root") or BUNDLE
+    return Path(os.path.expandvars(os.path.expanduser(str(raw)))).resolve()
+
+
+def shared_instance_root(profile: dict | None = None, profile_path: Path | None = None,
+                         episode: str | None = None) -> Path:
+    """Resolve and validate a README-relative device workspace or local fallback."""
     profile = profile or Ld().profile
     shared = profile.get("shared") or {}
-    if shared.get("enabled") is not True:
-        raise PipelineError("shared workspace is not enabled in the selected local profile")
+    if not device_workspace_enabled(profile):
+        raise PipelineError("device workspace is not enabled in the selected local profile")
     instance = os.environ.get("LDP_INSTANCE_ROOT")
     if not instance:
-        raise PipelineError("shared mode requires LDP_INSTANCE_ROOT; run scripts/shared_workspace.py init")
+        episode = episode or os.environ.get("LDP_EPISODE")
+        profile_path = profile_path or (Path(os.path.expandvars(os.path.expanduser(
+            os.environ["LDP_PROFILE"]))).resolve() if os.environ.get("LDP_PROFILE") else None)
+        if not episode or not profile_path:
+            raise PipelineError("shared mode has no active workspace; episode helpers create one when an episode code is known")
+        scripts_dir = BUNDLE / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+        try:
+            from shared_workspace import resolve_instance_workspace
+            result, warning = resolve_instance_workspace(profile_path, profile, episode, create=True)
+        except Exception as exc:
+            raise PipelineError(f"could not prepare shared or local-fallback episode workspace: {exc}") from exc
+        if not result:
+            raise PipelineError(warning or "could not prepare an episode workspace")
+        for key, value in result["shell_exports"].items():
+            os.environ[key] = value
+        if warning:
+            print("WARN: " + warning, file=sys.stderr)
+        instance = result["shell_exports"]["LDP_INSTANCE_ROOT"]
     root = Path(os.path.expandvars(os.path.expanduser(instance))).resolve()
-    release = Path(os.path.expandvars(os.path.expanduser(str(shared.get("release_root") or BUNDLE)))).resolve()
+    release = workspace_release_root(profile)
     if release != BUNDLE.resolve():
         raise PipelineError(f"shared.release_root must identify the bundle used by these scripts: {BUNDLE}")
+    metadata_path = root / "workspace.json"
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PipelineError(f"instance metadata is missing/invalid at {metadata_path}: {exc}") from exc
+    if metadata.get("storage_mode") == "local-fallback" or os.environ.get("LDP_INSTANCE_MODE") == "local-fallback":
+        key = metadata.get("local_root_key")
+        if key not in ("logs", "work", "probe"):
+            raise PipelineError("local fallback workspace has an invalid local_root_key")
+        raw = (profile.get("roots") or {}).get(key)
+        if not raw:
+            raise PipelineError(f"local fallback profile roots.{key} is missing")
+        base = Path(os.path.expandvars(os.path.expanduser(str(raw)))).resolve()
+        device_name = str(shared.get("device_name") or profile.get("machine") or "device")
+        safe_device = re.sub(r"[^A-Za-z0-9._-]+", "-", device_name).strip(".-_")[:64]
+        expected = base / "ld-pipeline-local" / safe_device / "episodes" / root.name
+        if (root != expected.resolve() or metadata.get("machine") != profile.get("machine") or
+                str(metadata.get("episode", "")).casefold() != root.name.casefold()):
+            raise PipelineError("device-local fallback workspace does not match the selected profile/episode")
+        return root
     devices = release / "devices"
     if not devices.is_dir():
-        raise PipelineError(f"shared devices directory is not provisioned: {devices}; create it and set per-device ACLs")
+        raise PipelineError(f"README-folder devices directory is unavailable: {devices}")
     try:
         root.relative_to(devices.resolve())
     except ValueError as exc:
@@ -307,11 +360,6 @@ def shared_instance_root(profile: dict | None = None) -> Path:
     safe_device = re.sub(r"[^A-Za-z0-9._-]+", "-", device_name).strip(".-_")[:64]
     if not relative.parts[0].startswith(safe_device + "-"):
         raise PipelineError("LDP_INSTANCE_ROOT belongs to a different device label; create this device's workspace")
-    metadata_path = root / "workspace.json"
-    try:
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise PipelineError(f"shared instance metadata is missing/invalid at {metadata_path}: {exc}") from exc
     expected_relative = root.relative_to(release).as_posix()
     if (metadata.get("release_root") != "." or
             metadata.get("instance_relative_path") != expected_relative or
@@ -331,9 +379,28 @@ def shared_enabled(profile: dict | None = None) -> bool:
 def episode_manifest_path(code: str, ld: Ld | None = None) -> Path:
     """Return the current manifest location without ever writing to a shared release tree."""
     ld = ld or Ld()
-    shared = ld.profile.get("shared") or {}
-    if shared.get("enabled") is True:
-        instance = shared_instance_root(ld.profile)
+    if device_workspace_enabled(ld.profile):
+        os.environ["LDP_EPISODE"] = code
+        try:
+            instance = shared_instance_root(ld.profile, ld.profile_path, code)
+        except PipelineError:
+            scripts_dir = BUNDLE / "scripts"
+            if str(scripts_dir) not in sys.path:
+                sys.path.insert(0, str(scripts_dir))
+            try:
+                from shared_workspace import resolve_instance_workspace
+                result, warning = resolve_instance_workspace(
+                    ld.profile_path, ld.profile, code,
+                    os.environ.get("LDP_INSTANCE_ROOT"), create=True)
+                if not result:
+                    raise PipelineError(warning or "no usable workspace")
+                for key, value in result["shell_exports"].items():
+                    os.environ[key] = value
+                instance = Path(result["instance_root"]).resolve()
+                if warning:
+                    print("WARN: " + warning, file=sys.stderr)
+            except Exception as exc:
+                raise PipelineError(f"could not prepare shared or local-fallback episode workspace: {exc}") from exc
         if instance.name.casefold() != code.casefold():
             raise PipelineError(f"active shared workspace is for {instance.name}, not requested episode {code}")
         manifest_dir = instance / "manifest"
@@ -351,14 +418,15 @@ def assert_writable_path(path: str | os.PathLike, ld: Ld | None = None) -> Path:
     """In shared mode, allow writes under the active instance only, never the release tree."""
     ld = ld or Ld()
     target = Path(path).expanduser().resolve()
-    if (ld.profile.get("shared") or {}).get("enabled") is not True:
+    if not device_workspace_enabled(ld.profile):
         return target
     bundle = BUNDLE.resolve()
     try:
         target.relative_to(bundle)
     except ValueError:
         return target
-    instance = shared_instance_root(ld.profile)
+    instance = shared_instance_root(ld.profile, ld.profile_path,
+                                    os.environ.get("LDP_EPISODE"))
     allowed_roots = (instance / "manifest", instance / "logs", instance / "references",
                      instance / "cut-pad-images")
     if target == instance / "workspace.json" or any(
@@ -371,12 +439,12 @@ def assert_writable_path(path: str | os.PathLike, ld: Ld | None = None) -> Path:
 
 def redact_shared_text(text: str, ld: Ld) -> str:
     """Redact local machine paths before persisting output in a shared instance folder."""
-    if (ld.profile.get("shared") or {}).get("enabled") is not True:
+    if not device_workspace_enabled(ld.profile):
         return text
     pairs: list[tuple[str, str]] = [(str(ld.profile_path.resolve()), "<device-local-profile>")]
     if str(Path.home()) not in ("", "."):
         pairs.append((str(Path.home().resolve()), "<user-home>"))
-    shared_root = Path(str((ld.profile.get("shared") or {}).get("release_root") or BUNDLE)).resolve()
+    shared_root = workspace_release_root(ld.profile)
     for section in ("tools", "roots", "python"):
         for name, value in ((ld.profile.get(section) or {}).items()):
             if not value or not isinstance(value, (str, os.PathLike)):
