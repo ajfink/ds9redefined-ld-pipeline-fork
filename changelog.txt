@@ -72,5 +72,10 @@ FROM Version 6 -> Version 7
 - Fixed shared-mode redaction of JSON-serialized Windows paths in both the stage/doctor
   and ldcommon report paths. JSON-escaped paths are replaced before plain-text paths, with
   a drive-root guard; regression tests cover `D:\` roots and plain-text log redaction.
+- Let the allowlisted download stage start after downloader-specific checks without waiting
+  for the full toolchain doctor. The downloader still requires a valid profile, curl >=7.71.0,
+  verified Archive metadata/MD5 inventory, paired TBC sidecars, and the destination-space gate.
+  Complete tool/version, dependency, preflight, and doctor checks during the transfer; do not
+  install/update tools until it completes, and do not process before those gates pass.
 - Validation: see the V7 entry in the authoring-device log and `V7-RELEASE.md`; installation is
   opt-in and no native tools/plugins are silently installed or upgraded.

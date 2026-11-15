@@ -33,10 +33,13 @@ support claim; Linux ARM64 and Windows ARM64 remain untested.
 
 ## V7 unified setup, dependency lock, and stage runner
 
-The setup sequence is now: profile discovery/copy, the PORTING user-approved native-tool
-update gate, `python scripts/bootstrap_deps.py --print --json`, then `doctor.py`. In shared
-mode, initialize a per-episode workspace first and pass `--instance-root`; a machine-only
-doctor report is diagnostic but not episode-ready. The bootstrap command is read-only unless the operator
+The setup sequence is now: profile discovery/copy, downloader-specific profile/curl
+(curl >=7.71.0), Archive metadata and space checks, then start the transfer. Do not wait for the full PORTING
+tool inventory, `python scripts/bootstrap_deps.py --print --json`, or doctor before the
+download; complete those while it runs. Do not install/update tools during the transfer.
+All selected tool changes, dependency locks and preflight/doctor gates must pass before
+processing. In shared mode, initialize a per-episode workspace first and pass
+`--instance-root`; a machine-only doctor report is diagnostic but not episode-ready. The bootstrap command is read-only unless the operator
 explicitly adds `--install`; it never changes Python, machine profiles, native tools,
 plugins, or models. The locks pin the Python version and direct distributions. They are not
 hash locks of every transitive wheel/build; the conda environment YAMLs pin direct packages
@@ -64,7 +67,8 @@ instance's `logs/` folder, never the release root.
 
 `run_stage.py` is a bounded dispatcher, not an automatic end-to-end scheduler. It lists
 allowlisted stages, prints a dry-run command plan by default, and requires `--execute` for
-execution. Write stages run the doctor and their declared manifest validators first; logs
+execution. The download stage runs its own profile/curl, Archive integrity, and space
+checks without waiting for the full doctor; other write stages run doctor and their declared manifest validators first. Logs
 and a JSON result are written under `roots.logs`. It does not download sources, render Orc
 projects, choose measurements, bypass user decisions, run arbitrary shell text, or clean
 files. Linux production stage dispatch is blocked.
@@ -408,8 +412,11 @@ to the proven `-max_interleave_delta 0` remux fix if needed.
 
 ## Tool-update gate — Windows, macOS, and Linux candidate
 
-Run this gate during machine setup and **before starting every new episode**, before
-downloading or rendering. Use the paths in that machine's `machine.json`; a version
+Run this gate during machine setup and for each new episode. For a new episode, it may run
+after the source download has started, but **must pass before processing/rendering**. The
+download itself uses the narrower downloader checks (Archive identity, curl/profile,
+file-integrity metadata and destination space); do not wait for the full tool inventory.
+Use the paths in that machine's `machine.json`; a version
 found elsewhere on `PATH` is not proof that the pipeline uses it.
 
 1. Record the machine/OS, resolved executable path, installed version, latest upstream
@@ -592,13 +599,16 @@ below reserve, stop and ask rather than treating the earlier preflight as a stag
 
 ## 6. Starting a new episode (the process contract)
 
-1. Follow the Tool-update gate: check latest versions, present the missing/outdated
-   component list, and ask the user to choose specific components, **Update all**, or
-   **Continue anyway**. Apply only their choice and record it; then run platform
-   preflight/capability checks (`preflight.ps1` on Windows) → `PREFLIGHT OK`.
-2. Preview the Archive selection and free-space gate, then start one resumable verified
-   download (TBC + JSON + raw EFM only; never `.pcm`/`.log`). Record sizes/MD5s in the
-   final download manifest. While it runs, independently verify/probe the matching DVD,
+1. Confirm the Archive URL/identifier and intended download folder. Verify the local
+   profile and PowerShell/curl executable (curl >=7.71.0), then run downloader `-ListOnly` to check Archive
+   identity, required file metadata/sidecars, and projected destination free space. Start
+   one resumable verified download immediately after this narrow gate (TBC + JSON + raw EFM
+   only; never `.pcm`/`.log`). Record sizes/MD5s in the final download manifest.
+2. While the transfer runs, perform the full Tool-update gate: check latest versions,
+   present the missing/outdated component list, and ask the user to choose specific
+   components, **Update all**, or **Continue anyway**. Apply only their choice after the
+   transfer, never mid-transfer; then run platform preflight, dependency-lock and doctor
+   checks before processing. During the download, independently verify/probe the matching DVD,
    check its stream/timeline/subtitle facts, and save preliminary evidence under
    `roots.probe` / `roots.logs`. Keep that evidence separate from the not-yet-created
    episode manifest. Defer resource-heavy prep if it would compete with the transfer.

@@ -155,6 +155,15 @@ def validate_command(episode: str, profile: dict, manifest_stage: str) -> list[s
             "--stage", manifest_stage]
 
 
+def requires_doctor(stage: str) -> bool:
+    """Downloads have their own URL, tool-path, metadata, integrity and space gates.
+
+    Keep them startable while the full toolchain inventory/readiness check runs in
+    parallel; all other write stages retain the complete doctor gate.
+    """
+    return bool(STAGES[stage]["write"] and stage != "download")
+
+
 def display(command: list[str]) -> str:
     return subprocess.list2cmdline(command) if os.name == "nt" else shlex.join(command)
 
@@ -230,7 +239,9 @@ def main() -> int:
     args = ap.parse_args()
     if args.list:
         for name, spec in STAGES.items():
-            print(f"{name:24} write={str(spec['write']).lower()} gate={spec.get('gate', 'none')}")
+            doctor_label = "required" if requires_doctor(name) else (
+                "deferred" if spec["write"] else "not-needed")
+            print(f"{name:24} write={str(spec['write']).lower()} gate={spec.get('gate', 'none')} doctor={doctor_label}")
         return 0
     if not args.stage or not args.episode:
         ap.error("--stage and --episode are required unless --list is used")
@@ -260,11 +271,13 @@ def main() -> int:
                 raise LockError("--publish-reference requires an executing write-capable stage")
         elif args.instance_root or args.publish_reference:
             raise LockError("--instance-root/--publish-reference require shared.enabled=true in the selected profile")
-        doctor = [py(profile), str(SCRIPTS / "doctor.py"), "--profile", str(profile_path), "--json"]
-        if args.stage not in ("init-episode", "download"):
-            doctor += ["--episode", args.episode]
-        if instance:
-            doctor += ["--instance-root", str(instance)]
+        doctor = None
+        if requires_doctor(args.stage):
+            doctor = [py(profile), str(SCRIPTS / "doctor.py"), "--profile", str(profile_path), "--json"]
+            if args.stage != "init-episode":
+                doctor += ["--episode", args.episode]
+            if instance:
+                doctor += ["--instance-root", str(instance)]
         gates = ([validate_command(args.episode, profile, spec["gate"])] if spec.get("gate") else [])
         if args.stage == "remux":
             gates.append(validate_command(args.episode, profile, "encode"))
@@ -280,7 +293,10 @@ def main() -> int:
         if not args.execute:
             print(f"PLAN V{(ROOT / 'WORKFLOW_VERSION').read_text(encoding='ascii').strip()} stage={args.stage} episode={args.episode}")
             print("read-only profile: " + str(profile_path))
-            if spec["write"]:
+            if args.stage == "download":
+                print("readiness: full doctor deferred; downloader-specific profile/curl, Archive integrity, and space gates still run")
+            if requires_doctor(args.stage):
+                assert doctor is not None
                 print("doctor gate: " + display(doctor))
             for gate in gates:
                 print("manifest gate: " + display(gate))
@@ -301,8 +317,11 @@ def main() -> int:
             log.write(f"workflow_version={(ROOT / 'WORKFLOW_VERSION').read_text(encoding='ascii').strip()}\n")
             profile_label = "<device-local-profile>" if shared else str(profile_path)
             log.write(f"episode={args.episode} stage={args.stage} profile={profile_label}\n\n")
+            if args.stage == "download":
+                log.write("NOTE: full doctor deferred; downloader enforces profile/curl, Archive integrity, and destination-space gates.\n\n")
         gate_results = []
-        if spec["write"]:
+        if requires_doctor(args.stage):
+            assert doctor is not None
             check = run_captured(doctor, env, log_path, redactions)
             doctor_row = {"kind": "doctor", "command": doctor, "exit_code": check.returncode}
             gate_results.append(doctor_row)

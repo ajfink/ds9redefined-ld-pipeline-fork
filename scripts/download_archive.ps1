@@ -29,6 +29,15 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'pipeline.ps1')
 $profile = Get-LdProfile
 $curl = Get-LdTool $profile 'curl'
+$curlVersionOutput = @(& $curl --version 2>&1)
+if ($LASTEXITCODE -ne 0) { throw "Profile curl failed its version check: $curl ($($curlVersionOutput -join ' '))" }
+$curlVersionMatch = [regex]::Match(($curlVersionOutput | Select-Object -First 1), '(?i)\bcurl(?:/|\s+)(\d+\.\d+\.\d+)')
+if (-not $curlVersionMatch.Success) { throw "Could not parse the profile curl version from: $($curlVersionOutput -join ' ')" }
+$curlVersion = [version]$curlVersionMatch.Groups[1].Value
+if ($curlVersion -lt [version]'7.71.0') {
+    throw "Download requires curl 7.71.0 or newer for --retry-all-errors; found $curlVersion at $curl"
+}
+Write-Host "Downloader curl : $curlVersion (minimum 7.71.0)"
 
 function Get-ArchiveIdentifier([string]$Value) {
     try { $u = [Uri]$Value } catch { throw "Invalid URL: $Value" }

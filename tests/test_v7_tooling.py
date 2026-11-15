@@ -12,7 +12,7 @@ sys.path.insert(0, str(SCRIPTS))
 from dependency_lock import LockError, read_lock, target_for  # noqa: E402
 from doctor import parse_windows_preflight  # noqa: E402
 from generate_runbooks import OUTPUTS, generated_text  # noqa: E402
-from run_stage import STAGES, make_action, validate_command  # noqa: E402
+from run_stage import STAGES, make_action, requires_doctor, validate_command  # noqa: E402
 
 
 class DependencyLockTests(unittest.TestCase):
@@ -41,6 +41,12 @@ class DependencyLockTests(unittest.TestCase):
 
 
 class StageRunnerTests(unittest.TestCase):
+    def test_download_skips_full_doctor_but_processing_writes_do_not(self):
+        self.assertFalse(requires_doctor("download"))
+        self.assertTrue(requires_doctor("init-episode"))
+        self.assertTrue(requires_doctor("stack-reference"))
+        self.assertTrue(requires_doctor("encode-final"))
+
     def test_default_stage_plan_is_allowlisted_and_argument_vector_based(self):
         with tempfile.TemporaryDirectory(prefix="Power Shell ") as tmp:
             ps = Path(tmp) / "pwsh.exe"

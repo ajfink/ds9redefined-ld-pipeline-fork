@@ -127,10 +127,12 @@ $fp = $profile.tools.ffprobe
 
 ```text
 Read README.md and DS9 LaserDisc OpenCode Runbook.md in this folder.
-Check key-tool versions in PORTING.md before downloading. If required components are
-missing or outdated, show the state/latest-version list and ask whether to install/update
-specific components, Update all, or Continue anyway; apply only the user's choice. Do not
-upgrade mid-episode.
+Before full tool checks, verify the Archive item/title, local destination/profile, PowerShell
+and profile-resolved curl, and the downloader's ListOnly metadata/space gate. Start the
+verified download without waiting for unrelated tool inventory or doctor checks. While it
+runs, complete the PORTING.md tool inventory and ask whether to install/update specific
+components, Update all, or Continue anyway. Apply only the user's choice after the transfer;
+do not upgrade mid-transfer. All full tool/preflight/doctor gates must pass before processing.
 LaserDisc Archive URL: <https://archive.org/details/...>
 Save source files to: <absolute folder path>
 Matching DVD episode/version (optional; path or NONE): <path or NONE>

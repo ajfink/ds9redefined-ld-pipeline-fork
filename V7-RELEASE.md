@@ -16,7 +16,9 @@ lower V6 audio, video, safety, space, or QC gates.
   individually version-gated. The conda recipes pin direct versions; their complete
   transitive build locks are not yet captured.
 - `scripts/run_stage.py`: allowlisted stage dispatcher. It prints a plan by default;
-  `--execute` is required for execution. Write stages run the doctor and their declared
+  `--execute` is required for execution. The download stage uses its own profile/curl,
+  Archive integrity, and space gates without waiting for doctor; other write stages run
+  the doctor and their declared
   manifest validators, then save unique command logs and JSON results. Linux production
   stage execution is blocked.
 - Added shared-release mode for multiple read-only consumers: each device/OpenCode
@@ -35,6 +37,9 @@ lower V6 audio, video, safety, space, or QC gates.
 - Fixed shared-mode path redaction in JSON reports: escaped Windows paths are redacted
   safely before plain-text substitutions, including drive-root paths. Added regression
   tests for both doctor/stage and `ldcommon` report paths.
+- The `download` stage no longer waits for the full doctor/toolchain lock. Its downloader
+  enforces profile/curl, Archive metadata/integrity, sidecar, and free-space checks; full
+  tool/preflight/doctor gates still block all later processing stages.
 - `scripts/generate_runbooks.py`: generates the Qwen4B and Qwen4B/Luna runbooks from
   `DS9 LaserDisc OpenCode Runbook.md` plus short model-policy templates. `--check`
   detects stale generated copies.
@@ -58,9 +63,10 @@ lower V6 audio, video, safety, space, or QC gates.
 - The shared-drive application paths avoid writing to the release root, but V7 does not
   provision/modify filesystem ACLs. If the share grants write access at the root, an
   administrator must correct that ACL before calling it OS-enforced read-only.
-- The follow-up tests shared-workspace initialization/provenance and
-  per-instance manifest/write-path guards and JSON-safe Windows-path redaction. Full suite: 56 passed, 7 Mac/VapourSynth-only
-  skipped; Windows doctor passes in local mode. The active W account still has root write
+- The follow-up tests shared-workspace initialization/provenance, per-instance
+  manifest/write-path guards, JSON-safe Windows-path redaction, and early-download gating.
+  Full suite: 57 passed, 7 Mac/VapourSynth-only skipped; Windows doctor passes in local mode.
+  The active W account still has root write
   access, so W shared-mode doctor correctly blocks stage execution pending an ACL change.
 
 See `WORKFLOW_VERSIONING.md` and the V7 entry in `W:\ld-pipeline-execution-log.md` for

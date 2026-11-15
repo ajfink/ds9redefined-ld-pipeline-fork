@@ -52,7 +52,12 @@ path or DVD-derived tracks.
 ```text
 Read README.md and DS9 LaserDisc OpenCode Runbook.md in this folder. Run the
 workflow; do not stop after downloading.
-Before setup/download, follow the Windows or macOS key-tool update check in PORTING.md.
+To start the transfer, first verify the Archive item/title, destination, local profile,
+PowerShell/curl availability, and the downloader's ListOnly metadata/integrity/space gate.
+Start the verified download without waiting for the full tool inventory or doctor.
+While it runs, complete the Windows or macOS key-tool update check in PORTING.md and
+ask before making any changes; do not install/upgrade tools during the transfer.
+All selected updates, preflight, Python lock, and doctor gates must pass before processing.
 TFM is treated as compatible when both platforms use current supported software; no
 separate parity flag or parity-clip check is required.
 If you are local Qwen3.5 4B, also follow DS9 LaserDisc OpenCode Runbook - Qwen4B.md.
@@ -89,18 +94,20 @@ If a measurement is ambiguous or gates disagree, stop and ask me. Never launch
 Topaz. Deliver only after the full delivery QC exits 0, and report the final path,
 measured timing, track defaults, and QC report.
 
-Before starting the source download, inventory key tools in PORTING.md. For any missing
-or outdated components, show the user the installed/latest versions and ask whether to
-install/update specific components, **Update all**, or **Continue anyway**. Apply only
-the user's choice and record it. **Do not wait idle for a long download:** as soon as the
-transfer is running, work ahead on every useful task independent of the unfinished LD
-files. In particular, verify/probe the matching DVD, record its stream and timeline facts,
-check machine readiness, prepare episode-specific space estimates, and stage the exact
-next-step commands. Keep a short checklist of what is complete and what is blocked on
-verified LD files. Do not install/upgrade software mid-transfer, create the episode
-manifest, or make LD-dependent measurements before `download-manifest.csv` verifies all
-selected files. Save preliminary evidence under `roots.probe` or `roots.logs` and resume
-blocked stages immediately after verification.
+Start the download as soon as the **download-specific** checks pass: confirmed Archive
+identifier/title, intended local destination, selected profile and working curl >=7.71.0,
+Archive metadata/size/MD5 inventory, paired TBC JSON sidecars, and projected-free-space gate. The
+downloader enforces these checks itself; `-ListOnly` previews them without transfer. The
+download stage intentionally does not wait for the full doctor/toolchain lock. While the
+transfer runs, inventory key tools in PORTING.md, show missing/outdated versions, ask
+whether to update specific components, **Update all**, or **Continue anyway**, and record
+the choice. Apply changes only after the transfer completes, never mid-transfer. Also
+verify/probe the matching DVD, check its stream/timeline facts, run full readiness checks,
+prepare stage space estimates, and stage next-step commands. Keep a checklist of done vs
+blocked work. Do not create the episode manifest or make LD-dependent measurements until
+`download-manifest.csv` verifies every selected file; do not start processing until tool,
+preflight, dependency-lock, and doctor gates pass. Save preliminary evidence under
+`roots.probe` or `roots.logs` and resume blocked stages after verification/readiness.
 ```
 
 The prompt starts the job; it does not waive machine setup or quality gates.
@@ -135,7 +142,9 @@ fallback route is unavailable, ask the user rather than silently changing models
    path from the shared release. Keep `machine.json` outside the bundle; seed a local
    profile from the platform example and use `shared_workspace.py configure-profile` to
    set the shared root, then pass `--profile` to doctor/stage-runner commands.
-2. With the local profile paths known, run the Tool-update gate below. If components are
+2. With the local profile paths known, the download may start after its own profile/curl,
+   Archive metadata, file-integrity metadata, and destination-space checks; do not wait
+   for full tool inventory. Run the Tool-update gate below during the transfer. If components are
    missing or out of date, present each installed/latest version and ask whether to
    install/update specific components, **Update all**, or **Continue anyway**. Apply only
    the user's choice and record it. On Windows, check Windows x64, Decode-Orc, AviSynth+,
@@ -149,7 +158,8 @@ fallback route is unavailable, ask the user rather than silently changing models
    `python scripts/bootstrap_deps.py --install`. It modifies only the selected Python
    interpreter's listed direct packages; native tools/plugins are separate. Linux x86_64
    is a dependency candidate, not production-workflow support.
-4. Run `python scripts/doctor.py --json` after profile/tool selection. It delegates to
+4. Run `python scripts/doctor.py --json` after profile/tool selection (this may run while
+   the download is in progress). It delegates to
    Windows or Mac preflight, checks the Python lock, and emits one report. Require
    `ready_for_episode: true`; macOS end-to-end completion is demonstrated on the M5
    configuration, while fresh-device setup remains a separate validation. Linux
@@ -171,12 +181,14 @@ validation. `scripts/doctor.py` is the unified read-only entry point; it install
 
 ### Required tool-update gate (Windows and Mac)
 
-Before one-time setup and before each new episode, follow the cross-platform **Tool-update
-gate** and key-tool matrix in `PORTING.md`. Check the exact versions resolved by that
-machine's profile against current upstream releases. If components are missing or out of
-date, show each with its installed state/latest version and ask which specific components
-to install/update, whether to **Update all**, or **Continue anyway**. Apply only the user's choice and record
-it in the machine's local `roots.logs`, then rerun preflight/capability checks. If the
+Before processing and during one-time setup, follow the cross-platform **Tool-update gate**
+and key-tool matrix in `PORTING.md`. For a new episode, the verified download may start
+first after its narrower gates; do the full version inventory while it runs. Check the
+exact versions resolved by that machine's profile against current upstream releases. If
+components are missing or out of date, show each with its installed state/latest version
+and ask which specific components to install/update, whether to **Update all**, or
+**Continue anyway**. Apply only the user's choice and record it in the machine's local
+`roots.logs` after the transfer finishes, then rerun preflight/capability checks. If the
 copied profile belongs to another computer, initialize the local profile first, then
 repeat the version inventory using its resolved paths. Do not blanket-upgrade packages
 or change versions mid-episode. On Windows,
@@ -482,15 +494,14 @@ permission.
 | `scripts/preflight_mac.py` | Mac profile/tool/root/VapourSynth capability check (`--episode` and `--json` supported); checks workflow version and does not prove full workflow readiness |
 | `scripts/doctor.py` | Unified read-only profile/dependency/platform report; Linux x86_64 remains explicitly not episode-ready |
 | `scripts/bootstrap_deps.py` / `dependencies/` | Direct Python version locks for Windows x64, Mac arm64, and candidate Linux x86_64; check-only by default, `--install` is explicit |
-| `scripts/run_stage.py` | Allowlisted stage dispatcher; dry-run plan by default, explicit `--execute`, doctor/manifest gates, and unique command logs/reports |
-| `scripts/shared_workspace.py` | Create collision-resistant device/instance/episode data folders and publish no-overwrite references/cut-PAD stills with provenance |
+| `scripts/run_stage.py` | Allowlisted stage dispatcher; dry-run plan by default, explicit `--execute`, downloader-specific checks for the early download stage, full doctor/manifest gates before other write stages, and unique logs/reports |
 | `scripts/shared_workspace.py` | Allocate a collision-resistant per-device/instance/episode folder under shared `devices/`; publish no-overwrite references and provenance-checked cut-PAD stills there |
 | `scripts/generate_runbooks.py` / `templates/runbooks/` | Regenerate model variants from the canonical runbook plus model-policy templates; `--check` detects drift |
 | `WORKFLOW_VERSION` / `WORKFLOW_VERSIONING.md` | Authoritative workflow version and core-change/device-log rules |
 | `V7-RELEASE.md` | V7 tooling overview and platform validation boundaries |
 | `changelog.txt` | Short release history; retrospective V1–V5 notes and accepted V6 changes |
 | `Cut Pad Images/<episode>/` | Curated single-frame DVD cut-PAD repair stills, named by verified DVD timestamp/frame; not a DVD reference substitute |
-| `scripts/download_archive.ps1` | Metadata-verified, resumable source download; ListOnly prints capture/file totals, aggregate bytes, and a projected free-space gate |
+| `scripts/download_archive.ps1` | Metadata-verified, resumable source download; checks profile curl (>=7.71.0), and ListOnly prints inventory, integrity metadata, aggregate bytes, and projected free space |
 | `scripts/check_space_budget.py` | Projected per-stage free-space gate that preserves the configured reserve |
 | `scripts/init_episode.py` | Verified Archive/download + optional DVD -> draft manifest; `--no-dvd` records explicit approval, and macOS gets `.vpy` script paths |
 | `scripts/validate_episode.py` | Stage-specific manifest/artifact prerequisites; optional expensive source MD5 recheck |
@@ -529,9 +540,11 @@ python scripts/generate_runbooks.py --check
 ```
 
 The stage runner dispatches one allowlisted action at a time; it is not an unattended
-whole-project pipeline. Write-capable stages require `--execute`, a doctor pass, and their
-declared manifest gates. It never runs arbitrary shell text, performs cleanup, or replaces
-helper-level refusal/QC checks. Linux x86_64 can check its candidate dependency lock but
+whole-project pipeline. `download` requires `--execute` and the downloader's own
+profile/curl, Archive integrity, sidecar, and free-space checks, but intentionally skips
+the full doctor so the transfer can start early. Every other write-capable stage requires
+`--execute`, a doctor pass, and its declared manifest gates. It never runs arbitrary shell
+text, performs cleanup, or replaces helper-level refusal/QC checks. Linux x86_64 can check its candidate dependency lock but
 production stage execution is blocked until the complete Linux workflow is validated.
 
 ### Shared release-folder mode
