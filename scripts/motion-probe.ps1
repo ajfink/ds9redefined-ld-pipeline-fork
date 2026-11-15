@@ -20,11 +20,13 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'pipeline.ps1')
 $prof = Get-LdProfile
 $ff = Get-LdTool $prof 'ffmpeg'
+Assert-LdWritablePath -Profile $prof -Path $Out
 
 $dir  = Split-Path -Parent $Out
 if (-not $dir) { $dir = '.' }
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 $raw  = Join-Path $dir 'motion-raw.txt'
+Assert-LdWritablePath -Profile $prof -Path $raw
 if (Test-Path $raw) { Remove-Item $raw -Force }
 
 $vf = "scale=${ScaleW}:-2:flags=lanczos"

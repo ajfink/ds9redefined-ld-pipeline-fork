@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ldcommon import Ld, PipelineError, load_episode  # noqa: E402
+from ldcommon import Ld, PipelineError, assert_writable_path, load_episode  # noqa: E402
 
 FPS = 30000.0 / 1001.0
 SR = 8000
@@ -209,10 +209,12 @@ def main() -> int:
     ap.add_argument("--summary-out", help="override JSON fit-summary path (defaults beside the TSV)")
     ap.add_argument("--from-report", help="recompute robust fit from a previously saved TSV without decoding media/DVD")
     args = ap.parse_args()
+    ld = Ld()
 
     if args.from_report:
         saved = Path(args.from_report)
         summary_out = Path(args.summary_out) if args.summary_out else saved.with_suffix(".robust-summary.json")
+        assert_writable_path(summary_out, ld)
         if summary_out.exists():
             raise PipelineError(f"refusing to overwrite summary: {summary_out}")
         summary = summarize_saved_report(saved, args.min_corr)
@@ -226,7 +228,6 @@ def main() -> int:
         return 0
 
     import numpy as np
-    ld = Ld()
     ep = load_episode(args.episode, ld)
     if ep.data.get("format") == "two_part":
         raise PipelineError("two-part E01 needs separate per-part audio/time mapping; generic rate diagnostic is one-part only")
@@ -337,6 +338,8 @@ def main() -> int:
     print("Compare with the runbook's fade-midpoint fit and picture-map rate. If they disagree, inspect the mixes/windows or STOP; do not apply this number automatically.")
     out=Path(args.out) if args.out else (ep.path("audio_rate_report") if ep.data.get("files",{}).get("audio_rate_report") else ld.probe()/f"{ep.code}-audio-rate-diagnostic.tsv")
     summary_out = Path(args.summary_out) if args.summary_out else out.with_suffix(".summary.json")
+    assert_writable_path(out, ld)
+    assert_writable_path(summary_out, ld)
     if out.exists() or summary_out.exists():
         raise PipelineError(f"refusing to overwrite audio-rate reports: {out} / {summary_out}")
     out.parent.mkdir(parents=True,exist_ok=True)

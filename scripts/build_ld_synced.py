@@ -21,7 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ldcommon import Ld, PipelineError, load_episode  # noqa: E402
+from ldcommon import (Ld, PipelineError, assert_writable_path, load_episode,
+                      redact_shared_text)  # noqa: E402
 
 SAMPLE_RATE = 44100
 FPS_NUM, FPS_DEN = 24000, 1001
@@ -72,6 +73,7 @@ def main() -> int:
     ep = load_episode(args.episode, ld)
     source = Path(args.input) if args.input else ep.path("ld_corrected")
     output = Path(args.output) if args.output else ep.path("ld_synced")
+    assert_writable_path(output, ld)
     if not source.is_file():
         raise PipelineError(f"corrected LD audio missing: {source}")
     if output.suffix.lower() != ".flac":
@@ -142,8 +144,10 @@ def main() -> int:
         "output_stream": stream, "duration_error_ms": duration_error_s * 1000.0,
     }
     report = ld.root("logs") / f"audio-sync-{ep.code}-{datetime.now().strftime('%Y%m%dT%H%M%S%f')}.json"
+    assert_writable_path(report, ld)
     report.parent.mkdir(parents=True, exist_ok=True)
-    report.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    report_text = json.dumps(record, indent=2) + "\n"
+    report.write_text(redact_shared_text(report_text, ld), encoding="utf-8")
     print(f"created {output}; duration error={duration_error_s*1000:.3f} ms; source packet/audio hash report={report}")
     return 0
 

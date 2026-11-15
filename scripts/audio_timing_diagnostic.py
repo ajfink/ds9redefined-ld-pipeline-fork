@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -25,7 +26,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from ldcommon import BUNDLE, Ld, PipelineError, load_episode  # noqa: E402
+from ldcommon import (BUNDLE, Ld, PipelineError, assert_writable_path,
+                     episode_manifest_path, load_episode,
+                     redact_shared_text)  # noqa: E402
 from pad_audit import reference_map_ranges, source_id_for_capture  # noqa: E402
 
 FPS = 30000.0 / 1001.0
@@ -139,6 +142,7 @@ def rate_filter(rate_2x: int, use_soxr: bool) -> tuple[str, str]:
 
 def make_candidate(ld: Ld, source: Path, destination: Path, rate_2x: int,
                    use_soxr: bool) -> dict:
+    assert_writable_path(destination, ld)
     ext = destination.suffix.lower()
     if ext not in (".wav", ".flac"):
         raise PipelineError(f"candidate output must end in .wav or .flac: {destination}")
@@ -185,6 +189,7 @@ def make_synced_candidate(ld: Ld, ep, source: Path, destination: Path,
                           rate_2x: int, use_soxr: bool,
                           wav0_master_frame: float | None = None) -> dict:
     """Build a disposable DVD-free-rate + measured/geometric-skip FLAC."""
+    assert_writable_path(destination, ep.ld)
     if destination.suffix.lower() != ".flac":
         raise PipelineError(f"synced candidate output must end in .flac: {destination}")
     if destination.exists():
@@ -249,7 +254,8 @@ def promote_no_dvd_manifest(ep, report: dict, corrected: Path, synced: Path,
         raise PipelineError("DVD-free promotion requires the user's recorded --no-dvd choice")
     if set(ep.data.get("deliverable_tracks") or ["ld"]) != {"ld"}:
         raise PipelineError("DVD-free audio mode can deliver LD stereo only; DVD 5.1/SRT tracks are unavailable")
-    manifest_path = BUNDLE / "episodes" / f"{ep.code}.json"
+    manifest_path = episode_manifest_path(ep.code, ep.ld)
+    assert_writable_path(manifest_path, ep.ld)
     original = manifest_path.read_bytes()
     if hashlib.sha256(original).hexdigest() != expected_manifest_sha256:
         raise PipelineError("episode manifest changed during the DVD-free build; preserve outputs and reconcile before retrying")
@@ -287,7 +293,18 @@ def promote_no_dvd_manifest(ep, report: dict, corrected: Path, synced: Path,
     })
     files["ld_corrected"] = {"root": "audio", "name": corrected.name}
     files["ld_synced"] = {"root": "audio", "name": synced.name}
-    files["audio_timing_report"] = {"root": "probe", "name": report_path.name}
+    shared = current.get("shared") or {}
+    instance_value = os.environ.get("LDP_INSTANCE_ROOT")
+    if shared.get("enabled") is True and instance_value:
+        report_resolved = report_path.resolve()
+        instance_root = Path(instance_value).resolve()
+        try:
+            report_resolved.relative_to(instance_root)
+            files["audio_timing_report"] = {"path": str(report_resolved)}
+        except ValueError:
+            files["audio_timing_report"] = {"root": "probe", "name": report_path.name}
+    else:
+        files["audio_timing_report"] = {"root": "probe", "name": report_path.name}
     current["ld_audio_source"] = "ld_synced"
     current["deliverable_tracks"] = ["ld"]
     current["mux_tracks"] = ["ld"]
@@ -339,7 +356,7 @@ def main() -> int:
 
     ld = Ld()
     ep = load_episode(args.episode, ld)
-    manifest_path = BUNDLE / "episodes" / f"{ep.code}.json"
+    manifest_path = episode_manifest_path(ep.code, ld)
     manifest_sha256 = sha256_file(manifest_path) if args.promote_dvd_free else ""
     source = Path(args.audio) if args.audio else ep.path("ld_native")
     project = ep.path("stack_project")
@@ -403,6 +420,7 @@ def main() -> int:
     report["resampler_backend"] = "soxr precision=28" if use_soxr else "FFmpeg default resampler (swr)"
     default_report = ep.optional_path("audio_timing_report") or (ld.probe() / f"{ep.code}-dvd-free-audio-timing.json")
     out = Path(args.report_out) if args.report_out else default_report
+    assert_writable_path(out, ld)
     if out.exists():
         raise PipelineError(f"refusing to overwrite report: {out}")
     report_tmp = out.with_name(out.name + ".tmp")
@@ -461,7 +479,15 @@ def main() -> int:
             ld, ep, source, Path(args.synced_candidate_out), chosen_rate_2x,
             use_soxr, args.wav0_master_frame)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    report_text = json.dumps(report, indent=2) + "\n"
+    instance_root = os.environ.get("LDP_INSTANCE_ROOT")
+    if instance_root and (ep.data.get("shared") or ld.profile.get("shared") or {}).get("enabled") is True:
+        try:
+            Path(out).resolve().relative_to(Path(instance_root).resolve())
+            report_text = redact_shared_text(report_text, ld)
+        except ValueError:
+            pass
+    out.write_text(report_text, encoding="utf-8")
 
     backup = None
     if args.promote_dvd_free:
@@ -469,7 +495,14 @@ def main() -> int:
                                          out, float(report["audio_minus_projected_content_frames"]),
                                          manifest_sha256)
         report["promoted_to_manifest"] = True
-        report_tmp.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        report_text = json.dumps(report, indent=2) + "\n"
+        if instance_root and (ld.profile.get("shared") or {}).get("enabled") is True:
+            try:
+                out.resolve().relative_to(Path(instance_root).resolve())
+                report_text = redact_shared_text(report_text, ld)
+            except ValueError:
+                pass
+        report_tmp.write_text(report_text, encoding="utf-8")
         report_tmp.replace(out)
 
     print(f"DVD-free timing diagnostic for {ep.code} (no DVD/alignment read)")

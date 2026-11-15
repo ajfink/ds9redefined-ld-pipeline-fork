@@ -80,6 +80,7 @@ if ($Pass -eq 'validate') {
     }
 } else {
     $dst = if ($Output) { [IO.Path]::GetFullPath($Output) } else { Resolve-LdFile $prof $ep 'padfixed_video' }
+    Assert-LdWritablePath -Profile $prof -Path $dst
     if ([IO.Path]::GetExtension($dst) -ine '.mkv') { throw "final video output must be .mkv: $dst" }
     $frames = [int]$ep.video.frames
     if ($frames -le 0) { throw 'video.frames is not measured; run the validate pass and record the actual count.' }

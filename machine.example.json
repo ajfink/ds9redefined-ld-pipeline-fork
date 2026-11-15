@@ -1,7 +1,12 @@
 {
-  "_readme": "Template for the per-machine tool profile. Copy to machine.json and fill in, or let preflight.ps1 discover and write it with:  powershell -NoProfile -ExecutionPolicy Bypass -File preflight.ps1 -Write.  Every pipeline script resolves tool paths and roots through this file; nothing should hard-code a drive letter or a user profile.",
+  "_readme": "Template for a device-local profile. Never put machine.json in a shared release tree. Copy locally and fill in, or let preflight.ps1 discover it with -Write. In shared mode set shared.enabled=true and shared.release_root to the bundle; initialize a unique workspace under its pre-provisioned devices/ folder before an episode.",
   "machine": "UNNAMED",
   "os": "windows",
+  "shared": {
+    "enabled": false,
+    "release_root": "",
+    "device_name": ""
+  },
   "tools": {
     "ffmpeg": "",
     "ffprobe": "",

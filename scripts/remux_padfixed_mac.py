@@ -35,7 +35,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))         # sibling modules
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # ldcommon
-from ldcommon import Ld, PipelineError, load_episode  # noqa: E402
+from ldcommon import Ld, PipelineError, assert_writable_path, load_episode  # noqa: E402
 
 
 def packet_md5(ld: Ld, path: Path, selector: str) -> str:
@@ -74,6 +74,7 @@ def main() -> int:
     video = Path(args.video) if args.video else ep.path("padfixed_video")
     deliverable_key = ep.data.get("deliverable") or "padfixed"
     out = Path(args.output) if args.output else ep.path(deliverable_key)
+    assert_writable_path(out, ld)
     dur = ep.data["video"].get("duration_s")
     if dur is None:
         raise PipelineError("manifest has no video.duration_s - measure it first")

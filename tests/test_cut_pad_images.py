@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sys
+import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -41,6 +43,31 @@ class SharedCutPadImageTests(unittest.TestCase):
             untimestamped.write_bytes(b"test stub")
             with self.assertRaises(PipelineError):
                 parse_shared_cut_image(f"18222={untimestamped}", "S01E07", bundle)
+
+    def test_device_scoped_image_requires_matching_provenance_sidecar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp)
+            folder = bundle / "devices" / "LEGION-A1B2C3D4" / "episodes" / "S01E07" / "cut-pad-images"
+            folder.mkdir(parents=True)
+            png = folder / "DVD-00-12-42.762-f00018288.png"
+            payload = b"PNG-test-payload"
+            png.write_bytes(payload)
+            sidecar = png.with_suffix(".provenance.json")
+            provenance = {
+                "episode": "S01E07",
+                "output_pad_frame": 18222,
+                "dvd_timestamp": "00:12:42.762",
+                "source_dvd_sha256": "a" * 64,
+                "png_sha256": hashlib.sha256(payload).hexdigest(),
+                "reviewed_episode_scene_and_pad_mapping": True,
+            }
+            sidecar.write_text(json.dumps(provenance), encoding="utf-8")
+            frame, _, timestamp, dvd_frame = parse_shared_cut_image(
+                f"18222={png}", "S01E07", bundle)
+            self.assertEqual((frame, timestamp, dvd_frame), (18222, "00:12:42.762", 18288))
+            sidecar.unlink()
+            with self.assertRaisesRegex(PipelineError, "provenance sidecar"):
+                parse_shared_cut_image(f"18222={png}", "S01E07", bundle)
 
 
 if __name__ == "__main__":

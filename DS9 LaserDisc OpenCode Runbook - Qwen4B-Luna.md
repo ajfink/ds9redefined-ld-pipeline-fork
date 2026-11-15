@@ -99,6 +99,33 @@ Record `WORKFLOW_VERSION` in the device/job log before starting. Confirm it has 
 before every stage; if core files or the version change mid-job, pause before the next
 stage, re-read its current instructions, and reconcile rather than mixing procedures.
 
+### Shared release mode (V7)
+
+If the bundle is on a shared drive, treat its source tree, templates, runbooks, curated
+`Cut Pad Images/`, and `episodes/_template.json` as **read-only**. Keep each machine's
+profile outside the bundle and set `shared.enabled=true` plus `shared.release_root` in that
+local profile. Before creating the episode manifest, run
+`python scripts/shared_workspace.py init --profile <local-profile> --episode <code>`.
+Each invocation allocates a fresh random device/instance folder under
+`<release-root>/devices/<device-id>/episodes/<code>/` with separate `manifest`, `logs`,
+`references`, and `cut-pad-images` directories. It does not edit the profile or release
+tree. Keep the returned `LDP_INSTANCE_ROOT` for this OpenCode instance; pass it and the
+local profile to `run_stage.py`, or set `LDP_PROFILE`, `LDP_INSTANCE_ROOT`,
+`LDP_MANIFEST_DIR`, and `LDP_CUT_PAD_IMAGES` for direct helper invocations. Never reuse an
+instance root concurrently. The `manifest` and log roots are redirected to that workspace;
+work/render/download/cache/output roots remain on the configured local volumes.
+Run the episode-ready doctor check after workspace creation; without an active instance it
+is a machine diagnostic only and correctly returns not-ready for episode work.
+
+Use `shared_workspace.py publish-reference` for reviewed small text/report artifacts and
+`publish-cut-pad` only for a uniquely named timestamped still with the source-DVD hash and
+exact output-PAD mapping. The image stays in this instance's cut-PAD folder; only an
+authorized release maintainer can promote it to the curated release `Cut Pad Images/` on
+a later version sync. `doctor.py` checks shared-root configuration and reports whether
+the current process appears able to write the release root. It never tests ACLs by writing;
+the share administrator must enforce read-only access to the release tree and write access
+only to `devices/`.
+
 Run commands from this folder and initialize the measured job variables from the
 profile and the three user inputs (do not copy another episode's values):
 
@@ -115,7 +142,8 @@ $ff = $profile.tools.ffmpeg
 $fp = $profile.tools.ffprobe
 ```
 
-- Per-episode measurements and file references: `episodes\<code>.json`.
+- Per-episode measurements and file references: local `episodes\<code>.json`, or
+  `<instance-root>\manifest\<code>.json` in shared-release mode.
 - Bundle stage scripts: `scripts\`; Orc project template: `templates\stack_template.orcprj`.
 - Final gate: `python scripts\qc_report.py --episode <code>`; require exit 0 and inspect
   `roots.probe\<code>-qc-report.md`.

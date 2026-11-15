@@ -258,10 +258,23 @@ def main() -> int:
         print("FAIL platform: preflight_mac.py must run on macOS")
         return 2
 
-    profile_path = resolve_path(args.profile) if args.profile else Path(__file__).resolve().parent.parent / "machine.json"
+    bundle = Path(__file__).resolve().parent.parent
+    profile_value = args.profile or os.environ.get("LDP_PROFILE")
+    profile_path = resolve_path(profile_value) if profile_value else bundle / "machine.json"
+    devices_root = bundle / "devices"
+    if devices_root.is_dir() and not profile_value:
+        print(f"FAIL profile: shared release root requires a local profile; pass --profile or set LDP_PROFILE")
+        return 2
     if profile_path is None or not profile_path.is_file():
         print(f"FAIL profile: not found: {profile_path}")
         return 2
+    if devices_root.is_dir():
+        try:
+            profile_path.resolve().relative_to(bundle.resolve())
+            print("FAIL profile: shared release requires machine.json outside the bundle root")
+            return 2
+        except ValueError:
+            pass
     try:
         profile = json.loads(profile_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -441,7 +454,7 @@ def main() -> int:
         "build_padfix_vpy.py", "encode_episode_mac.py", "remux_padfixed_mac.py",
         "vspipe_util.py", "build_motion_trace.py", "qc_report.py",
         "verify_pad_identities.py", "check_space_budget.py", "doctor.py",
-        "bootstrap_deps.py", "dependency_lock.py", "run_stage.py",
+        "bootstrap_deps.py", "dependency_lock.py", "run_stage.py", "shared_workspace.py",
         "generate_runbooks.py",
     )
     missing_scripts = [name for name in required_scripts if not (scripts_dir / name).is_file()]
@@ -460,8 +473,16 @@ def main() -> int:
                 if not missing_dependencies else "missing: " + ", ".join(missing_dependencies))
 
     if args.episode:
-        episode_path = profile_path.parent / "episodes" / f"{args.episode}.json"
-        if not episode_path.is_file():
+        manifest_dir_value = os.environ.get("LDP_MANIFEST_DIR")
+        if (profile.get("shared") or {}).get("enabled") is True and not manifest_dir_value:
+            results.add("episode:manifest", "FAIL",
+                        "shared mode requires LDP_INSTANCE_ROOT; run scripts/shared_workspace.py init")
+            episode_path = None
+        else:
+            episode_path = (resolve_path(manifest_dir_value) if manifest_dir_value else
+                            bundle / "episodes")
+            episode_path = episode_path / f"{args.episode}.json" if episode_path else None
+        if episode_path is None or not episode_path.is_file():
             results.add("episode:manifest", "FAIL", f"missing manifest: {episode_path}")
         else:
             try:

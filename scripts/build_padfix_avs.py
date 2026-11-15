@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ldcommon import Ld, PipelineError, load_episode  # noqa: E402
+from ldcommon import Ld, PipelineError, assert_writable_path, load_episode  # noqa: E402
 
 FPS = "23.976023976"
 
@@ -37,6 +37,7 @@ def main() -> int:
     source_avs = Path(args.encode) if args.encode else ep.path("avs_encode")
     total = ep.frame_count
     avs_path = Path(args.out) if args.out else ep.path("avs_padfix")
+    assert_writable_path(avs_path, ld)
     audit = probe / f"{ep.code}-pad-audit.tsv"
     repair_file = probe / f"{ep.code}-pad-repair-frames.txt"
     report = probe / "rife-pad-replacements-local.tsv"

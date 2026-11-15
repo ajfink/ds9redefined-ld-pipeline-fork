@@ -52,6 +52,10 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--check", action="store_true", help="check outputs are current without writing")
     args = ap.parse_args(argv)
+    if (ROOT / "devices").is_dir() and not args.check:
+        print("shared release root is read-only; regenerate in the authoring checkout and republish the release",
+              file=sys.stderr)
+        return 2
     stale = []
     for filename in OUTPUTS:
         out = ROOT / filename

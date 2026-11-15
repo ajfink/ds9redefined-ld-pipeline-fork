@@ -111,8 +111,9 @@ fallback route is unavailable, ask the user rather than silently changing models
 
 ## One-time setup on each machine
 
-1. Copy this whole folder to the machine. On a different Windows computer, the shipped
-   `machine.json` belongs to its authoring PC; run the profile-discovery step:
+1. Copy this whole folder to the machine. On a different Windows computer using a **local
+   writable checkout**, the shipped `machine.json` belongs to its authoring PC; run the
+   profile-discovery step:
 
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File preflight.ps1 -Write
@@ -129,6 +130,10 @@ fallback route is unavailable, ask the user rather than silently changing models
    On Linux x86_64, a local copy may start from `machine-linux-x86_64.example.json` for
    dependency/capability checks only; the Linux production workflow is not validated and
    `doctor.py` will not mark it episode-ready.
+   **Shared bundle exception:** never run `preflight.ps1 -Write` with its default profile
+   path from the shared release. Keep `machine.json` outside the bundle; seed a local
+   profile from the platform example and use `shared_workspace.py configure-profile` to
+   set the shared root, then pass `--profile` to doctor/stage-runner commands.
 2. With the local profile paths known, run the Tool-update gate below. If components are
    missing or out of date, present each installed/latest version and ask whether to
    install/update specific components, **Update all**, or **Continue anyway**. Apply only
@@ -144,10 +149,12 @@ fallback route is unavailable, ask the user rather than silently changing models
    interpreter's listed direct packages; native tools/plugins are separate. Linux x86_64
    is a dependency candidate, not production-workflow support.
 4. Run `python scripts/doctor.py --json` after profile/tool selection. It delegates to
-   Windows or Mac preflight, checks the Python lock, and emits one report. Require
-   `ready_for_episode: true`; Mac's doctor result is component capability only, not
-   end-to-end certification. Linux deliberately returns not-ready/untested. Continue
-   anyway does not waive required capability/QC gates.
+    Windows or Mac preflight, checks the Python lock, and emits one report. Require
+    `ready_for_episode: true`; Mac's doctor result is component capability only, not
+    end-to-end certification. Linux deliberately returns not-ready/untested. Continue
+    anyway does not waive required capability/QC gates. In shared mode, create a unique
+    per-episode workspace first; the machine-level doctor without one reports setup
+    diagnostics but is intentionally not episode-ready.
 5. For a job-specific output location, update `roots.out` or pass it as the manifest's
    file root. Do not modify scripts to insert drive letters.
 
@@ -478,6 +485,8 @@ permission.
 | `scripts/doctor.py` | Unified read-only profile/dependency/platform report; Linux x86_64 remains explicitly not episode-ready |
 | `scripts/bootstrap_deps.py` / `dependencies/` | Direct Python version locks for Windows x64, Mac arm64, and candidate Linux x86_64; check-only by default, `--install` is explicit |
 | `scripts/run_stage.py` | Allowlisted stage dispatcher; dry-run plan by default, explicit `--execute`, doctor/manifest gates, and unique command logs/reports |
+| `scripts/shared_workspace.py` | Create collision-resistant device/instance/episode data folders and publish no-overwrite references/cut-PAD stills with provenance |
+| `scripts/shared_workspace.py` | Allocate a collision-resistant per-device/instance/episode folder under shared `devices/`; publish no-overwrite references and provenance-checked cut-PAD stills there |
 | `scripts/generate_runbooks.py` / `templates/runbooks/` | Regenerate model variants from the canonical runbook plus model-policy templates; `--check` detects drift |
 | `WORKFLOW_VERSION` / `WORKFLOW_VERSIONING.md` | Authoritative workflow version and core-change/device-log rules |
 | `V7-RELEASE.md` | V7 tooling overview and platform validation boundaries |
@@ -526,6 +535,68 @@ whole-project pipeline. Write-capable stages require `--execute`, a doctor pass,
 declared manifest gates. It never runs arbitrary shell text, performs cleanup, or replaces
 helper-level refusal/QC checks. Linux x86_64 can check its candidate dependency lock but
 production stage execution is blocked until the complete Linux workflow is validated.
+
+### Shared release-folder mode
+
+When multiple instances use the same `ld-pipeline` folder, treat the bundle as a
+read-only release. Keep each device's `machine.json` outside that folder. Configure
+`shared.enabled=true`, `shared.release_root=<this bundle path>`, and a device name in
+that local profile. `shared_workspace.py configure-profile --source <local-profile>
+--output <new-local-profile>` creates a new, no-overwrite local profile for this bundle.
+A release administrator must provision `devices/` and grant writes there only; the V7
+tools do not change ACLs. `doctor.py` marks shared mode not-ready if the current process
+appears able to write the release root.
+
+Before initializing an episode, create a new unique instance workspace:
+
+```powershell
+$profilePath = '<local machine.json outside W:\ld-pipeline>'
+$url = '<verified Archive item URL>'
+$source = '<local source-download destination>'
+$workspace = python scripts/shared_workspace.py init --profile $profilePath --episode S01E07 | ConvertFrom-Json
+$instance = $workspace.instance_root
+python scripts/run_stage.py --profile $profilePath --instance-root $instance `
+  --episode S01E07 --stage download --execute `
+  --script-arg=-Url --script-arg=$url --script-arg=-Destination --script-arg=$source
+python scripts/run_stage.py --profile $profilePath --instance-root $instance `
+  --episode S01E07 --stage init-episode --execute `
+  --script-arg=--url --script-arg=$url --script-arg=--downloads --script-arg=$source `
+  --script-arg=--no-dvd
+```
+
+For a DVD-backed episode, pass `--script-arg=--dvd --script-arg=<DVD path>` instead of
+`--no-dvd`. If timestamped curated/per-instance cut-PAD stills are available, first ask
+whether to use them; append `--script-arg=--cut-pad-images` and `--script-arg=use` or
+`--script-arg=skip` to record the choice. The
+download and init stages only create files in their configured local download folder and
+the per-instance manifest folder, respectively.
+
+Use the returned `instance_root` with each runner invocation:
+
+```powershell
+$profilePath = '<local machine.json outside W:\ld-pipeline>'
+$instance = '<instance_root returned by shared_workspace.py>'
+python scripts/run_stage.py --profile $profilePath --instance-root $instance `
+  --episode S01E07 --stage validate-inputs --execute
+```
+
+The workspace contains that episode's manifest, stage logs, reference inbox, and cut-PAD
+images. Other workflow outputs remain under the local profile's `roots.*` directories.
+For direct helper calls, set `LDP_PROFILE`, `LDP_INSTANCE_ROOT`, `LDP_MANIFEST_DIR`, and
+`LDP_CUT_PAD_IMAGES` in that command's shell environment. Publish a reviewed text/report
+reference with `shared_workspace.py publish-reference`; publish a cut-PAD PNG only with
+a verified timestamped filename, matching output PAD frame, and source-DVD SHA-256. The
+command also requires `--confirm-mapping` to record that the scene/timestamp-to-PAD
+relationship was independently reviewed.
+Curated `Cut Pad Images/` at the release root remains read-only.
+
+**ACL status for the current W share:** no ACL changes were made, per the operator's
+choice. The current root ACL still grants the connected LenovoFlex account Full Control.
+The tools route normal shared-mode writes under `devices/` and refuse shared-root output
+paths, but this is not an OS security boundary until a share administrator restricts the
+release root and grants write access only to `devices/`. In shared mode the doctor therefore
+reports not-ready and the stage runner blocks writes while the process still has release-root
+write access.
 
 The example manifests (`S01E01`, `S01E04`, `S01E05`) and `reference-runs/` are
 **measured historical regression data only**. They help interpret expected file

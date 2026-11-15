@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ldcommon import BUNDLE, Ld, PipelineError, load_episode  # noqa: E402
+from ldcommon import BUNDLE, Ld, PipelineError, assert_writable_path, load_episode  # noqa: E402
 
 TEMPLATE = BUNDLE / "templates" / "stack_template.orcprj"
 MIN_CAPTURES = 2
@@ -146,6 +146,8 @@ def main() -> int:
     downloads = Path(args.downloads) if args.downloads else ep.downloads()
     project_out = Path(args.project_out) if args.project_out else ep.path("stack_project")
     master_out = Path(args.master_out) if args.master_out else ep.path("stack_master")
+    assert_writable_path(project_out, ld)
+    assert_writable_path(master_out, ld)
     template = Path(args.template) if args.template else TEMPLATE
     if not template.exists():
         raise PipelineError(f"Orc template missing: {template}")

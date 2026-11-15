@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import re
 import unicodedata
+import sys
 from pathlib import Path
 
 BUNDLE = Path(__file__).resolve().parent.parent
@@ -22,6 +23,10 @@ def main() -> int:
     ap.add_argument("--source", default=str(BUNDLE / "DS9 LaserDisc OpenCode Runbook.md"))
     ap.add_argument("--output", default=str(BUNDLE / "DS9 LaserDisc Plain Text Instructions.txt"))
     args = ap.parse_args()
+    if (BUNDLE / "devices").is_dir():
+        print("shared release root is read-only; regenerate in the authoring checkout and republish the release",
+              file=sys.stderr)
+        return 2
     text = Path(args.source).read_text(encoding="utf-8")
     text = re.sub(r"(?m)^#{1,6}\s*", "", text)
     text = re.sub(r"(?m)^```[^\n]*\n?", "", text)

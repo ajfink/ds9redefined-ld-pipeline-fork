@@ -27,7 +27,8 @@ from json import JSONDecoder
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ldcommon import BUNDLE, Ld, PipelineError, load_episode  # noqa: E402
+from ldcommon import (BUNDLE, Ld, PipelineError, episode_manifest_path,
+                      load_episode, redact_shared_text)  # noqa: E402
 
 MIN_CAPTURES = 2
 MAX_CAPTURES = 6
@@ -150,13 +151,14 @@ def _run_and_log(command: list[str], log_path: Path) -> subprocess.CompletedProc
     except OSError as exc:
         raise PipelineError(f"could not run {command[0]}: {exc}") from exc
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_path.write_text(
+    log_text = (
         "Command: " + subprocess.list2cmdline(command) + "\n"
         + f"Exit code: {result.returncode}\n\n"
         + "--- stdout ---\n" + result.stdout
-        + "\n--- stderr ---\n" + result.stderr,
-        encoding="utf-8",
+        + "\n--- stderr ---\n" + result.stderr
     )
+    ld = Ld()
+    log_path.write_text(redact_shared_text(log_text, ld), encoding="utf-8")
     return result
 
 
@@ -305,7 +307,7 @@ def main() -> int:
     if len(captures) != len(set(captures)):
         raise PipelineError(f"capture labels must be unique: {captures}")
 
-    manifest_path = BUNDLE / "episodes" / f"{ep.code}.json"
+    manifest_path = episode_manifest_path(ep.code, ld)
     original_bytes = manifest_path.read_bytes()
     original_sha = hashlib.sha256(original_bytes).hexdigest()
     original_data = json.loads(original_bytes.decode("utf-8"))
@@ -413,12 +415,10 @@ def main() -> int:
                     final_project.unlink()
                 raise
 
-        final_report_path.write_text(
-            _report_summary(ep.code, run_id, original_reference, decisions,
-                            stable_project if args.dry_run else final_project, manifest_path,
-                            status),
-            encoding="utf-8",
-        )
+        summary = _report_summary(ep.code, run_id, original_reference, decisions,
+                                  stable_project if args.dry_run else final_project,
+                                  manifest_path, status)
+        final_report_path.write_text(redact_shared_text(summary, ld), encoding="utf-8")
         final_decision = decisions[-1]
         print(f"Orc-selected reference: {selected}")
         print(f"stable input order: {', '.join(final_decision['order'])}")
@@ -427,11 +427,9 @@ def main() -> int:
         print("No master render was run; continue with the existing stack-quality gate.")
         return 0
     except PipelineError as exc:
-        final_report_path.write_text(
-            _report_summary(ep.code, run_id, original_reference, decisions,
-                            stable_project, manifest_path, "STOP", str(exc)),
-            encoding="utf-8",
-        )
+        summary = _report_summary(ep.code, run_id, original_reference, decisions,
+                                  stable_project, manifest_path, "STOP", str(exc))
+        final_report_path.write_text(redact_shared_text(summary, ld), encoding="utf-8")
         print(f"ERROR: {exc}", file=sys.stderr)
         print(f"selection report: {final_report_path}", file=sys.stderr)
         return 2

@@ -22,6 +22,9 @@ from dependency_lock import (LockError, compare_lock, profile_platform,
 
 def load_profile(path: str | None) -> tuple[Path | None, dict]:
     chosen = path or os.environ.get("LDP_PROFILE")
+    devices = Path(__file__).resolve().parent.parent / "devices"
+    if not chosen and devices.is_dir():
+        raise LockError("shared release detected; pass --profile pointing to a local machine.json outside the release tree")
     if chosen:
         p = Path(os.path.expandvars(os.path.expanduser(chosen))).resolve()
     else:
@@ -31,9 +34,18 @@ def load_profile(path: str | None) -> tuple[Path | None, dict]:
     if not p.is_file():
         raise LockError(f"profile not found: {p}")
     try:
-        return p, json.loads(p.read_text(encoding="utf-8"))
+        profile = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise LockError(f"cannot read profile {p}: {exc}") from exc
+    if devices.is_dir():
+        try:
+            p.relative_to(devices.parent.resolve())
+            raise LockError("machine profile must be outside the shared release tree")
+        except ValueError:
+            pass
+        if (profile.get("shared") or {}).get("enabled") is not True:
+            raise LockError("shared release profile must set shared.enabled=true")
+    return p, profile
 
 
 def main() -> int:

@@ -11,6 +11,8 @@
 !/episodes/_template.json
 /reference-pool/
 /reference-runs/
+/devices/
+/devices/                  # shared per-device/instance episode state; never release source
 
 # Captures, decoded audio, media, generated caches, and temporary outputs.
 *.tbc

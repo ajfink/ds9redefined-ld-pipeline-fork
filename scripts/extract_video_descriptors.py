@@ -26,7 +26,7 @@ from fractions import Fraction
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ldcommon import Ld, PipelineError, load_episode  # noqa: E402
+from ldcommon import Ld, PipelineError, assert_writable_path, load_episode  # noqa: E402
 
 W, H = 48, 36
 
@@ -83,7 +83,9 @@ def main() -> int:
             out = ep.path(key)
         except PipelineError:
             out = ld.probe() / f"{ep.code}-desc-{args.source}.npy"
+    assert_writable_path(out, ld)
     meta = out.with_suffix(out.suffix + ".meta.json")
+    assert_writable_path(meta, ld)
     existing = [p for p in (out, meta) if p.exists()]
     if existing and not args.force:
         raise PipelineError(f"refusing to overwrite descriptor artifacts: {out} / {meta}")

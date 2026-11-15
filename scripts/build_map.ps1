@@ -60,6 +60,9 @@ $probeRoot = Get-LdRoot $prof 'probe'
 if (-not $SumOut) { $SumOut = Join-Path $probeRoot (([IO.Path]::GetFileNameWithoutExtension($Log)) + '-cadence-summary.txt') }
 if (-not $DiOut) { $DiOut = Join-Path $probeRoot (([IO.Path]::GetFileNameWithoutExtension($Log)) + '-di-map.txt') }
 if (-not $CadOut) { $CadOut = Join-Path $probeRoot (([IO.Path]::GetFileNameWithoutExtension($Log)) + '-full-cadence.txt') }
+foreach ($outputPath in @($Log, $MapOut, $SumOut, $DiOut, $CadOut, $Motion)) {
+    if ($outputPath) { Assert-LdWritablePath -Profile $prof -Path $outputPath }
+}
 foreach ($f in @($Log, $Source)) { if (-not (Test-Path -LiteralPath $f)) { throw "Input not found: $f" } }
 foreach ($f in @($MapOut, $SumOut, $DiOut, $CadOut)) {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $f) | Out-Null

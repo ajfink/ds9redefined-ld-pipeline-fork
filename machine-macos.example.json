@@ -1,7 +1,12 @@
 {
-  "_readme": "macOS Apple-silicon example only. Replace every /Users/YOUR_ACCOUNT path before copying to machine.json. Keep the real machine.json local; do not publish it.",
+  "_readme": "macOS Apple-silicon example only. Replace every /Users/YOUR_ACCOUNT path before copying to a device-local machine.json. Never store machine.json in the shared release tree. For shared mode set shared.enabled=true and shared.release_root to the bundle, then create a per-instance workspace under its devices/ folder.",
   "machine": "MAC-OPENCODE",
   "os": "darwin",
+  "shared": {
+    "enabled": false,
+    "release_root": "",
+    "device_name": ""
+  },
   "tools": {
     "ffmpeg": "/Users/YOUR_ACCOUNT/tools/ffmpeg/ffmpeg",
     "ffprobe": "/Users/YOUR_ACCOUNT/tools/ffmpeg/ffprobe",

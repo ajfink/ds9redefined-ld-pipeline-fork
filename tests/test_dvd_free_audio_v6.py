@@ -39,7 +39,8 @@ class DvdFreePromotionTests(unittest.TestCase):
             corrected.write_bytes(b"corrected")
             synced.write_bytes(b"synced")
             report_path.write_text("{}\n", encoding="utf-8")
-            ep = SimpleNamespace(code="S01E99", data=original)
+            ep = SimpleNamespace(code="S01E99", data=original,
+                                 ld=SimpleNamespace(profile={"shared": {"enabled": False}}))
             report = {
                 "duration_candidate_effective_rate_hz": 44056.1,
                 "experimental_candidate": {"output_media": {"duration": "100.0"}},
@@ -50,7 +51,8 @@ class DvdFreePromotionTests(unittest.TestCase):
                     "skip_method": "measured geometry",
                 },
             }
-            with patch.object(timing, "BUNDLE", bundle):
+            with patch.object(timing, "BUNDLE", bundle), \
+                    patch("ldcommon.BUNDLE", bundle):
                 backup = timing.promote_no_dvd_manifest(
                     ep, report, corrected, synced, report_path, 0.32,
                     timing.sha256_file(manifest_path))
@@ -70,12 +72,14 @@ class DvdFreePromotionTests(unittest.TestCase):
                     "no_dvd_proceed_approved": True,
                     "deliverable_tracks": ["ld"], "audio": {}, "files": {}}
             manifest.write_text(json.dumps(data), encoding="utf-8")
-            ep = SimpleNamespace(code="S01E99", data=data)
+            ep = SimpleNamespace(code="S01E99", data=data,
+                                 ld=SimpleNamespace(profile={"shared": {"enabled": False}}))
             corrected = bundle / "corrected.flac"
             synced = bundle / "synced.flac"
             corrected.write_bytes(b"x")
             synced.write_bytes(b"y")
-            with patch.object(timing, "BUNDLE", bundle):
+            with patch.object(timing, "BUNDLE", bundle), \
+                    patch("ldcommon.BUNDLE", bundle):
                 with self.assertRaises(PipelineError):
                     timing.promote_no_dvd_manifest(
                         ep, {}, corrected, synced, bundle / "report.json", 1.01,

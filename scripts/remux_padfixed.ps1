@@ -34,6 +34,7 @@ $fp = Get-LdTool $prof 'ffprobe'
 $video = if ($Video) { $Video } else { Resolve-LdFile $prof $ep 'padfixed_video' }
 $deliverableKey = if ($ep.deliverable) { [string]$ep.deliverable } else { 'padfixed' }
 $out = if ($Output) { $Output } else { Resolve-LdFile $prof $ep $deliverableKey }
+Assert-LdWritablePath -Profile $prof -Path $out
 $dur = Get-LdNumber $ep.video.duration_s 'video.duration_s'
 $tracks = @($ep.mux_tracks)
 if (-not $tracks) { throw "manifest has no mux_tracks - record ['ld'] or ['ld','51','srt']" }

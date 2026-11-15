@@ -138,3 +138,40 @@ def compare_lock(target: str, interpreter: str) -> dict:
             "import_errors": actual.get("import_errors", {}),
             "expected_packages": dict(packages), "mismatches": mismatches,
             "ok": not mismatches}
+
+
+def shared_redactions(profile_path: str | Path, profile: dict) -> list[tuple[str, str]]:
+    """Map machine-local paths to stable logical labels before publishing logs."""
+    pairs = [(str(Path(profile_path).resolve()), "<device-local-profile>")]
+    if str(Path.home()) not in ("", "."):
+        pairs.append((str(Path.home().resolve()), "<user-home>"))
+    shared_root = None
+    shared_value = (profile.get("shared") or {}).get("release_root")
+    if shared_value:
+        shared_root = Path(os.path.expandvars(os.path.expanduser(str(shared_value)))).resolve()
+        pairs.append((str(shared_root), "<shared-release-root>"))
+    for section in ("tools", "roots", "python"):
+        values = profile.get(section) or {}
+        for name, raw in values.items():
+            if not raw or not isinstance(raw, (str, os.PathLike)):
+                continue
+            expanded = os.path.expandvars(os.path.expanduser(str(raw)))
+            path = Path(expanded)
+            if path.is_absolute():
+                if shared_root is not None:
+                    try:
+                        path.resolve().relative_to(shared_root)
+                        continue
+                    except ValueError:
+                        pass
+                pairs.append((str(path.resolve()), f"<{section}.{name}>"))
+    # Replace longer paths first so a work sub-root becomes its own logical token.
+    return sorted(set(pairs), key=lambda item: len(item[0]), reverse=True)
+
+
+def redact_shared_text(text: str, redactions: list[tuple[str, str]]) -> str:
+    for original, replacement in redactions:
+        text = re.sub(re.escape(original), lambda _: replacement, text, flags=re.IGNORECASE)
+        forward = original.replace("\\", "/")
+        text = re.sub(re.escape(forward), lambda _: replacement, text, flags=re.IGNORECASE)
+    return text

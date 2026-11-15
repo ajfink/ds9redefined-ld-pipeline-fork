@@ -59,5 +59,8 @@ FROM Version 6 -> Version 7
   `generate_runbooks.py --check` to detect drift.
 - Added the Linux x86_64 profile/environment candidate. Linux production workflow, fresh-Mac V7
   end-to-end delivery, Linux ARM64, and Windows ARM64 remain unvalidated.
+- Added shared-release mode with unique per-device/instance/episode workspaces under
+  `devices/`; manifests and stage logs are routed there, with no-overwrite reference and
+  provenance-aware cut-PAD publication. The tooling did not change share ACLs.
 - Validation: see the V7 entry in the authoring-device log and `V7-RELEASE.md`; installation is
   opt-in and no native tools/plugins are silently installed or upgraded.

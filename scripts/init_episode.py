@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -23,7 +25,8 @@ from urllib.parse import unquote, urlparse
 from urllib.request import urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ldcommon import BUNDLE, Ld, PipelineError  # noqa: E402
+from ldcommon import (BUNDLE, Ld, PipelineError, assert_writable_path,
+                     episode_manifest_path, shared_instance_root)  # noqa: E402
 
 
 def archive_id(url: str) -> str:
@@ -71,6 +74,31 @@ def title_from_capture(captures: list[dict], code: str) -> str:
         if match:
             return match.group(1).strip(" -_")
     return ""
+
+
+def verified_instance_cut_pad_images(folder: Path, code: str) -> list[Path]:
+    """Only offer instance-staged stills whose V7 provenance sidecar matches the PNG."""
+    out = []
+    for png in sorted(folder.glob("DVD-*.png")) if folder.is_dir() else []:
+        match = re.fullmatch(r"DVD-(\d{2})-(\d{2})-(\d{2})\.(\d{3})-f(\d{8})\.png",
+                             png.name, re.IGNORECASE)
+        sidecar = png.with_suffix(".provenance.json")
+        if not match or not sidecar.is_file():
+            continue
+        try:
+            provenance = json.loads(sidecar.read_text(encoding="utf-8"))
+            if (str(provenance.get("episode", "")).casefold() != code.casefold() or
+                    provenance.get("reviewed_episode_scene_and_pad_mapping") is not True or
+                    not isinstance(provenance.get("output_pad_frame"), int) or
+                    provenance.get("png_sha256") != hashlib.sha256(png.read_bytes()).hexdigest() or
+                    provenance.get("dvd_timestamp") !=
+                    f"{match.group(1)}:{match.group(2)}:{match.group(3)}.{match.group(4)}" or
+                    not re.fullmatch(r"[0-9a-f]{64}", str(provenance.get("source_dvd_sha256", "")))):
+                continue
+        except (OSError, json.JSONDecodeError):
+            continue
+        out.append(png)
+    return out
 
 
 def episode_files(code: str, title: str = "", script_ext: str = ".avs") -> dict:
@@ -138,6 +166,8 @@ def main() -> int:
         raise PipelineError("Emissary is two-part; use the existing S01E01 manifest and dedicated Part I/II workflow")
 
     ld = Ld()
+    if (ld.profile.get("shared") or {}).get("enabled") is True:
+        shared_instance_root(ld.profile)
     download_dir = Path(args.downloads).resolve()
     if not download_dir.is_dir():
         raise PipelineError(f"download destination is not a directory: {download_dir}")
@@ -159,6 +189,11 @@ def main() -> int:
             root_overrides["downloads"] = str(download_dir)
     else:
         root_overrides["downloads"] = str(download_dir)
+    shared_mode = (ld.profile.get("shared") or {}).get("enabled") is True
+    if shared_mode and root_overrides:
+        raise PipelineError(
+            "shared mode keeps machine-local absolute paths out of the shared manifest; "
+            "set local roots.downloads_root/downloads_template in machine.json so this folder resolves canonically")
     dl_manifest = download_dir / "download-manifest.csv"
     if not dl_manifest.is_file():
         raise PipelineError(f"verified download manifest missing: {dl_manifest}; run download_archive.ps1 first")
@@ -229,6 +264,10 @@ def main() -> int:
                 dvd_spec = {"root": "dvd_root", "name": rel.as_posix()}
             except ValueError:
                 pass
+        if shared_mode and "path" in dvd_spec:
+            raise PipelineError(
+                "shared mode keeps machine-local absolute paths out of the shared manifest; "
+                "add this DVD library to the local profile roots.dvd_root and retry")
         dvd_info = subprocess.run([ld.ffprobe(), "-v", "error", "-show_entries",
             "stream=codec_type,codec_name,channels:format=duration:format_tags=title", "-of", "json", str(dvd)],
             capture_output=True, text=True, encoding="utf-8", errors="replace")
@@ -249,6 +288,17 @@ def main() -> int:
 
     cut_pad_dir = BUNDLE / "Cut Pad Images" / code
     cut_pad_images = sorted(cut_pad_dir.glob("DVD-*.png")) if cut_pad_dir.is_dir() else []
+    instance_cut_dir = os.environ.get("LDP_CUT_PAD_IMAGES")
+    if instance_cut_dir:
+        instance_cut = Path(os.path.expandvars(os.path.expanduser(instance_cut_dir)))
+        cut_pad_images.extend(verified_instance_cut_pad_images(instance_cut, code))
+    shared = ld.profile.get("shared") or {}
+    if shared.get("enabled") is True:
+        devices = Path(shared["release_root"]) / "devices"
+        for candidate_dir in devices.glob(f"*/episodes/{code}/cut-pad-images"):
+            cut_pad_images.extend(verified_instance_cut_pad_images(candidate_dir, code))
+    # Deduplicate identical paths while retaining deterministic order.
+    cut_pad_images = sorted({p.resolve() for p in cut_pad_images})
     if args.no_dvd and cut_pad_images and args.cut_pad_images is None:
         raise PipelineError(
             f"shared cut-pad stills are available in {cut_pad_dir}; ask the user whether to use them, "
@@ -259,7 +309,11 @@ def main() -> int:
     if not title and dvd is not None:
         print("WARN: could not derive a human title from DVD tags/filename; confirm it and update title before reporting.", file=sys.stderr)
 
-    out = Path(args.manifest_out) if args.manifest_out else BUNDLE / "episodes" / f"{code}.json"
+    default_manifest = episode_manifest_path(code, ld)
+    out = Path(args.manifest_out).resolve() if args.manifest_out else default_manifest
+    assert_writable_path(out, ld)
+    if (ld.profile.get("shared") or {}).get("enabled") is True and out.parent != default_manifest.parent.resolve():
+        raise PipelineError("shared mode manifest output must stay in this instance's manifest folder")
     if out.exists():
         raise PipelineError(f"refusing to overwrite existing manifest: {out}")
     template = json.loads((BUNDLE / "episodes" / "_template.json").read_text(encoding="utf-8"))

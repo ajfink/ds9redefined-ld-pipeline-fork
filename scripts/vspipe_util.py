@@ -102,7 +102,16 @@ def pipe(vs_cmd: list[str], ff_cmd: list[str], log: Path | None, env: dict,
     FFmpeg can exit 0 after encoding *fewer* frames than required if vspipe
     died partway.
     """
-    logf = open(log, "ab", buffering=0) if log else None
+    shared_log = bool(log and env.get("LDP_INSTANCE_ROOT"))
+    raw_log = Path(log) if log else None
+    ld = None
+    if shared_log:
+        from ldcommon import Ld
+        ld = Ld()
+        with tempfile.NamedTemporaryFile(prefix="ld-pipeline-encode-", suffix=".log",
+                                         delete=False) as fh:
+            raw_log = Path(fh.name)
+    logf = open(raw_log, "ab", buffering=0) if raw_log else None
     start = logf.tell() if logf is not None else 0
     dest = logf if logf is not None else subprocess.DEVNULL
     try:
@@ -115,22 +124,37 @@ def pipe(vs_cmd: list[str], ff_cmd: list[str], log: Path | None, env: dict,
         vsp_err = vsp.wait()
 
         def _tail() -> str:
-            if log is None or not log.is_file():
+            if raw_log is None or not raw_log.is_file():
                 return ""
-            with open(log, "rb") as f:
+            with open(raw_log, "rb") as f:
                 f.seek(start)
                 data = f.read()
             return data[-1500:].decode("utf-8", "replace")
 
         bad = ff_err != 0 or (require_vspipe_ok and vsp_err != 0)
-        if bad:
-            codes = ", ".join(n for n, c in (("vspipe", vsp_err), ("ffmpeg", ff_err))
-                              if c != 0)
-            raise PipelineError(f"{codes} failed - see {log}: {_tail()}")
-        return 0
+        codes = ", ".join(n for n, c in (("vspipe", vsp_err), ("ffmpeg", ff_err))
+                           if c != 0)
+        tail = _tail()
     finally:
         if logf is not None:
             logf.close()
+    if shared_log and raw_log is not None and log is not None:
+        from ldcommon import redact_shared_text
+        final_log = Path(log)
+        final_log.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            safe_text = redact_shared_text(raw_log.read_text(encoding="utf-8", errors="replace"), ld)
+            with final_log.open("x", encoding="utf-8", newline="\n") as f:
+                f.write(safe_text)
+        except FileExistsError as exc:
+            raise PipelineError(f"refusing to overwrite shared instance encode log: {final_log}") from exc
+        finally:
+            raw_log.unlink(missing_ok=True)
+    elif log is not None and raw_log is not None and raw_log != Path(log):
+        raw_log.unlink(missing_ok=True)
+    if bad:
+        raise PipelineError(f"{codes} failed - see {log}: {tail}")
+    return 0
 
 
 # Historical name kept so existing call sites and the retired port still work.

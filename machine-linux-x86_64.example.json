@@ -1,7 +1,12 @@
 {
-  "_readme": "Candidate Linux x86_64 profile for dependency and capability checks only. The full Linux workflow is not validated/supported. Copy locally to machine.json, replace every path, and retain the warning.",
+  "_readme": "Candidate Linux x86_64 profile for dependency and capability checks only. The full Linux workflow is not validated/supported. Copy locally to machine.json, replace every path, and retain the warning. Never store machine.json in the shared release tree.",
   "machine": "LINUX-X86_64",
   "os": "linux",
+  "shared": {
+    "enabled": false,
+    "release_root": "",
+    "device_name": ""
+  },
   "tools": {
     "python": "/home/YOUR_ACCOUNT/tools/ld-pipeline-linux/bin/python",
     "ffmpeg": "/usr/bin/ffmpeg",

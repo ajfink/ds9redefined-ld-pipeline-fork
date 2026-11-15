@@ -24,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from ldcommon import Ld, PipelineError, load_episode  # noqa: E402
+from ldcommon import Ld, PipelineError, assert_writable_path, load_episode  # noqa: E402
 from av_check_output import build_offset_model  # noqa: E402
 
 FPS = 30000.0 / 1001.0
@@ -180,6 +180,8 @@ def main() -> int:
     srt_out = Path(args.srt_out) if args.srt_out else ep.path("retimed_srt")
     map_out = Path(args.map_out) if args.map_out else ep.path("retime_map")
     outputs = [graph_out, audio_out, srt_out, map_out]
+    for output in outputs:
+        assert_writable_path(output, ld)
     if not args.dry_run:
         existing = [str(p) for p in outputs if p.exists()]
         if existing:

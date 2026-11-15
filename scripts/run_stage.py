@@ -21,9 +21,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
-from dependency_lock import LockError, profile_platform, resolve_interpreter  # noqa: E402
+sys.path.insert(0, str(ROOT))
+from dependency_lock import (LockError, profile_platform, redact_shared_text,
+                             resolve_interpreter, shared_redactions)  # noqa: E402
+from ldcommon import shared_instance_root  # noqa: E402
 
 STAGES = {
+    "download": {"kind": "download", "write": True},
+    "init-episode": {"kind": "init", "write": True},
     "validate-manifest": {"kind": "validate", "manifest_stage": "manifest", "write": False},
     "validate-inputs": {"kind": "validate", "manifest_stage": "inputs", "write": False},
     "validate-stack": {"kind": "validate", "manifest_stage": "stack", "write": False},
@@ -49,14 +54,27 @@ STAGES = {
 
 
 def load_profile(path: str | None) -> tuple[Path, dict]:
-    chosen = path or os.environ.get("LDP_PROFILE") or str(ROOT / "machine.json")
+    chosen = path or os.environ.get("LDP_PROFILE")
+    devices = ROOT / "devices"
+    if not chosen and devices.is_dir():
+        raise LockError("shared release detected; provide --profile to a local profile outside the release tree")
+    chosen = chosen or str(ROOT / "machine.json")
     p = Path(os.path.expandvars(os.path.expanduser(chosen))).resolve()
     if not p.is_file():
         raise LockError(f"profile not found: {p}; copy the matching machine example to machine.json")
     try:
-        return p, json.loads(p.read_text(encoding="utf-8"))
+        profile = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise LockError(f"cannot read profile {p}: {exc}") from exc
+    if devices.is_dir():
+        try:
+            p.relative_to(ROOT.resolve())
+            raise LockError("shared mode requires a device-local profile outside the release tree")
+        except ValueError:
+            pass
+        if (profile.get("shared") or {}).get("enabled") is not True:
+            raise LockError("shared-release profile must set shared.enabled=true")
+    return p, profile
 
 
 def py(profile: dict) -> str:
@@ -90,6 +108,11 @@ def make_action(stage: str, episode: str, profile: dict, extra: list[str], repor
                 "--stage", spec["manifest_stage"]]
     if kind == "python":
         return python_command(profile, spec["script"], episode, extra)
+    if kind == "init":
+        return [py(profile), str(SCRIPTS / "init_episode.py"), *extra]
+    if kind == "download":
+        return [powershell(profile), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                str(SCRIPTS / "download_archive.ps1"), *extra]
     if kind == "no-dvd":
         if not report_out:
             raise LockError("audio-promote-no-dvd requires --report-out <new-unique-report.json>")
@@ -136,14 +159,15 @@ def display(command: list[str]) -> str:
     return subprocess.list2cmdline(command) if os.name == "nt" else shlex.join(command)
 
 
-def run_captured(command: list[str], env: dict[str, str], log_path: Path) -> subprocess.CompletedProcess:
+def run_captured(command: list[str], env: dict[str, str], log_path: Path,
+                 redactions: list[tuple[str, str]] | None = None) -> subprocess.CompletedProcess:
     proc = subprocess.run(command, capture_output=True, text=True, encoding="utf-8",
                           errors="replace", env=env)
     with log_path.open("a", encoding="utf-8", newline="\n") as log:
-        log.write("COMMAND: " + display(command) + "\n")
-        log.write(proc.stdout or "")
+        log.write("COMMAND: " + redact_shared_text(display(command), redactions or []) + "\n")
+        log.write(redact_shared_text(proc.stdout or "", redactions or []))
         if proc.stderr:
-            log.write("\n[stderr]\n" + proc.stderr)
+            log.write("\n[stderr]\n" + redact_shared_text(proc.stderr, redactions or []))
         log.write(f"\nEXIT CODE: {proc.returncode}\n\n")
     if proc.stdout:
         sys.stdout.write(proc.stdout)
@@ -152,9 +176,10 @@ def run_captured(command: list[str], env: dict[str, str], log_path: Path) -> sub
     return proc
 
 
-def run_logged(command: list[str], env: dict[str, str], log_path: Path) -> int:
+def run_logged(command: list[str], env: dict[str, str], log_path: Path,
+               redactions: list[tuple[str, str]] | None = None) -> int:
     with log_path.open("a", encoding="utf-8", newline="\n") as log:
-        log.write("COMMAND: " + display(command) + "\n\n")
+        log.write("COMMAND: " + redact_shared_text(display(command), redactions or []) + "\n\n")
         log.flush()
         proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, encoding="utf-8", errors="replace",
@@ -162,7 +187,7 @@ def run_logged(command: list[str], env: dict[str, str], log_path: Path) -> int:
         assert proc.stdout is not None
         for line in proc.stdout:
             sys.stdout.write(line)
-            log.write(line)
+            log.write(redact_shared_text(line, redactions or []))
         proc.stdout.close()
         rc = proc.wait()
         log.write(f"\nEXIT CODE: {rc}\n")
@@ -172,7 +197,7 @@ def run_logged(command: list[str], env: dict[str, str], log_path: Path) -> int:
 def write_stage_report(path: Path, profile_path: Path, episode: str, stage: str,
                        command: list[str], started: str, status: str,
                        exit_code: int | None, log_path: Path,
-                       gates: list[dict]) -> None:
+                       gates: list[dict], redactions: list[tuple[str, str]] | None = None) -> None:
     report = {"schema": "ld-pipeline-stage-run-v1",
               "workflow_version": (ROOT / "WORKFLOW_VERSION").read_text(encoding="ascii").strip(),
               "episode": episode, "stage": stage, "profile": str(profile_path),
@@ -181,6 +206,8 @@ def write_stage_report(path: Path, profile_path: Path, episode: str, stage: str,
               "exit_code": exit_code, "status": status, "gates": gates,
               "log": str(log_path)}
     report_path = path
+    if redactions:
+        report = json.loads(redact_shared_text(json.dumps(report), redactions))
     with report_path.open("x", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
         f.write("\n")
@@ -192,8 +219,11 @@ def main() -> int:
     ap.add_argument("--episode", help="episode code (not needed with --list)")
     ap.add_argument("--stage", choices=sorted(STAGES))
     ap.add_argument("--profile", help="machine profile; defaults to LDP_PROFILE or bundle machine.json")
+    ap.add_argument("--instance-root", help="required per-instance episode workspace in shared mode")
     ap.add_argument("--execute", action="store_true", help="execute; default only prints the bounded plan")
     ap.add_argument("--report-out", help="required new report path for audio-promote-no-dvd")
+    ap.add_argument("--publish-reference", action="append", default=[],
+                    help="after a successful stage, copy this useful report into shared references/ (shared mode only)")
     ap.add_argument("--script-arg", action="append", default=[],
                     help="one argument passed to the allowlisted stage script; repeat as needed")
     ap.add_argument("--list", action="store_true", help="list allowlisted stages")
@@ -215,11 +245,31 @@ def main() -> int:
         spec = STAGES[args.stage]
         env = os.environ.copy()
         env["LDP_PROFILE"] = str(profile_path)
-        doctor = [py(profile), str(SCRIPTS / "doctor.py"), "--profile", str(profile_path), "--episode", args.episode, "--json"]
+        shared = (profile.get("shared") or {}).get("enabled") is True
+        instance = None
+        redactions = shared_redactions(profile_path, profile) if shared else []
+        if shared:
+            if not args.instance_root:
+                raise LockError("shared mode requires --instance-root from scripts/shared_workspace.py init")
+            env["LDP_INSTANCE_ROOT"] = str(Path(args.instance_root).expanduser().resolve())
+            instance = shared_instance_root(profile)
+            env["LDP_MANIFEST_DIR"] = str(instance / "manifest")
+            env["LDP_INSTANCE_LOGS"] = str(instance / "logs")
+            env["LDP_CUT_PAD_IMAGES"] = str(instance / "cut-pad-images")
+            if args.publish_reference and not spec.get("write"):
+                raise LockError("--publish-reference requires an executing write-capable stage")
+        elif args.instance_root or args.publish_reference:
+            raise LockError("--instance-root/--publish-reference require shared.enabled=true in the selected profile")
+        doctor = [py(profile), str(SCRIPTS / "doctor.py"), "--profile", str(profile_path), "--json"]
+        if args.stage not in ("init-episode", "download"):
+            doctor += ["--episode", args.episode]
+        if instance:
+            doctor += ["--instance-root", str(instance)]
         gates = ([validate_command(args.episode, profile, spec["gate"])] if spec.get("gate") else [])
         if args.stage == "remux":
             gates.append(validate_command(args.episode, profile, "encode"))
-            manifest = ROOT / "episodes" / f"{args.episode}.json"
+            manifest_dir = Path(env["LDP_MANIFEST_DIR"]) if env.get("LDP_MANIFEST_DIR") else ROOT / "episodes"
+            manifest = manifest_dir / f"{args.episode}.json"
             if manifest.is_file():
                 manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
                 tracks = manifest_data.get("mux_tracks") or []
@@ -239,7 +289,8 @@ def main() -> int:
             return 0
 
         logs_raw = (profile.get("roots") or {}).get("logs")
-        logs = Path(os.path.expandvars(os.path.expanduser(str(logs_raw)))) if logs_raw else None
+        logs = (instance / "logs") if instance else (
+            Path(os.path.expandvars(os.path.expanduser(str(logs_raw)))) if logs_raw else None)
         if logs is None or not logs.is_dir():
             raise LockError(f"roots.logs must exist before executing a stage: {logs_raw!r}")
         stamp = datetime.now().strftime("%Y%m%dT%H%M%S%f")
@@ -248,31 +299,43 @@ def main() -> int:
         start = datetime.now(timezone.utc).isoformat()
         with log_path.open("x", encoding="utf-8") as log:
             log.write(f"workflow_version={(ROOT / 'WORKFLOW_VERSION').read_text(encoding='ascii').strip()}\n")
-            log.write(f"episode={args.episode} stage={args.stage} profile={profile_path}\n\n")
+            profile_label = "<device-local-profile>" if shared else str(profile_path)
+            log.write(f"episode={args.episode} stage={args.stage} profile={profile_label}\n\n")
         gate_results = []
         if spec["write"]:
-            check = run_captured(doctor, env, log_path)
+            check = run_captured(doctor, env, log_path, redactions)
             doctor_row = {"kind": "doctor", "command": doctor, "exit_code": check.returncode}
             gate_results.append(doctor_row)
             if check.returncode:
                 write_stage_report(report_path, profile_path, args.episode, args.stage,
                                    action, start, "BLOCKED_DOCTOR", check.returncode,
-                                   log_path, gate_results)
+                                   log_path, gate_results, redactions)
                 return check.returncode or 1
         for gate in gates:
-            gate_proc = run_captured(gate, env, log_path)
+            gate_proc = run_captured(gate, env, log_path, redactions)
             gate_results.append({"kind": "manifest", "command": gate,
                                  "exit_code": gate_proc.returncode})
             if gate_proc.returncode:
                 write_stage_report(report_path, profile_path, args.episode, args.stage,
                                    action, start, "BLOCKED_MANIFEST_GATE", gate_proc.returncode,
-                                   log_path, gate_results)
+                                   log_path, gate_results, redactions)
                 return gate_proc.returncode or 1
         print("COMMAND: " + display(action), flush=True)
-        rc = run_logged(action, env, log_path)
+        rc = run_logged(action, env, log_path, redactions)
+        if rc == 0 and args.publish_reference:
+            for reference in args.publish_reference:
+                publish = [py(profile), str(SCRIPTS / "shared_workspace.py"),
+                           "publish-reference", "--profile", str(profile_path),
+                           "--instance-root", str(instance), "--source", reference]
+                published = run_captured(publish, env, log_path, redactions)
+                gate_results.append({"kind": "publish-reference", "command": publish,
+                                     "exit_code": published.returncode})
+                if published.returncode:
+                    rc = published.returncode
+                    break
         write_stage_report(report_path, profile_path, args.episode, args.stage,
                            action, start, "PASS" if rc == 0 else "FAIL", rc,
-                           log_path, gate_results)
+                           log_path, gate_results, redactions)
         return 0 if rc == 0 else rc
     except (OSError, json.JSONDecodeError, LockError) as exc:
         print(f"STAGE RUNNER ERROR: {exc}", file=sys.stderr)

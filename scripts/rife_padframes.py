@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import json
 import re
 import shutil
 import subprocess
@@ -82,11 +84,49 @@ def parse_shared_cut_image(spec: str, episode: str, bundle: Path) -> tuple[int, 
         raise PipelineError(f"cut-pad output frame must be an integer: {frame_s!r}") from exc
     source_png = Path(path_s).expanduser().resolve()
     image_root = (bundle / "Cut Pad Images" / episode).resolve()
-    if not source_png.is_relative_to(image_root):
-        raise PipelineError(f"shared cut PAD image must come from {image_root}: {source_png}")
+    allowed = source_png.is_relative_to(image_root)
+    if not allowed:
+        device_root = (bundle / "devices").resolve()
+        try:
+            relative = source_png.relative_to(device_root)
+        except ValueError:
+            relative = None
+        # devices/<device-instance>/episodes/<episode>/cut-pad-images/<png>
+        allowed = bool(relative and len(relative.parts) == 5 and
+                       relative.parts[1] == "episodes" and
+                       relative.parts[2].casefold() == episode.casefold() and
+                       relative.parts[3] == "cut-pad-images")
+    if not allowed:
+        raise PipelineError(f"shared cut PAD image must come from curated {image_root} or a device-instance cut-pad-images/{episode} folder: {source_png}")
     match = DVD_IMAGE_RE.fullmatch(source_png.name)
     if not match:
         raise PipelineError(f"shared image filename must contain the DVD timestamp and decoded frame: {source_png.name}")
+    try:
+        source_png.relative_to((bundle / "devices").resolve())
+        instance_image = True
+    except ValueError:
+        instance_image = False
+    if instance_image:
+        sidecar = source_png.with_suffix(".provenance.json")
+        if not sidecar.is_file():
+            raise PipelineError(f"per-instance cut-PAD image requires its provenance sidecar: {sidecar}")
+        try:
+            provenance = json.loads(sidecar.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise PipelineError(f"invalid cut-PAD provenance sidecar {sidecar}: {exc}") from exc
+        digest = hashlib.sha256(source_png.read_bytes()).hexdigest()
+        try:
+            provenance_frame = int(provenance.get("output_pad_frame", -1))
+        except (TypeError, ValueError) as exc:
+            raise PipelineError(f"cut-PAD provenance has invalid output_pad_frame: {sidecar}") from exc
+        if (str(provenance.get("episode", "")).casefold() != episode.casefold() or
+                provenance_frame != frame or
+                provenance.get("reviewed_episode_scene_and_pad_mapping") is not True or
+                provenance.get("png_sha256") != digest or
+                provenance.get("dvd_timestamp") !=
+                f"{match.group(1)}:{match.group(2)}:{match.group(3)}.{match.group(4)}" or
+                not re.fullmatch(r"[0-9a-f]{64}", str(provenance.get("source_dvd_sha256", "")))):
+            raise PipelineError(f"cut-PAD provenance does not verify image/frame/mapping: {sidecar}")
     timestamp = f"{match.group(1)}:{match.group(2)}:{match.group(3)}.{match.group(4)}"
     return frame, source_png, timestamp, int(match.group(5))
 

@@ -2,6 +2,8 @@
 
 V6 was released before V7. This file records V6 integration/deferment decisions; the
 current tooling additions and validation boundaries are summarized in `V7-RELEASE.md`.
+The original §1 layout put per-device folders beside `ld-pipeline`; V7 supersedes that
+proposal with isolated per-instance episode folders under the shared root's `devices/`.
 
 **Marker at V6 publication:** Version 6 (`WORKFLOW_VERSION` at that release). Items marked
 integrated were included in V6; remaining entries are deferred proposals and do not

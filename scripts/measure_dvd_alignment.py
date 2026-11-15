@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ldcommon import Ld, PipelineError, load_episode  # noqa: E402
+from ldcommon import Ld, PipelineError, assert_writable_path, load_episode  # noqa: E402
 
 FPS = 30000.0 / 1001.0
 FEATURES = 48 * 36
@@ -89,7 +89,9 @@ def main() -> int:
     master_path = Path(args.master_desc) if args.master_desc else ep.path("master_descriptors")
     dvd_path = Path(args.dvd_desc) if args.dvd_desc else ep.path("dvd_descriptors")
     out = Path(args.out) if args.out else ep.path("align_npy")
+    assert_writable_path(out, ld)
     report = Path(args.report) if args.report else ep.path("alignment_report")
+    assert_writable_path(report, ld)
     existing = [p for p in (out, report) if p.exists()]
     if existing and not args.force:
         raise PipelineError(f"refusing to overwrite alignment artifacts: {out}, {report}")

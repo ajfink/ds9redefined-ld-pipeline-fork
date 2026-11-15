@@ -27,9 +27,20 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$explicitProfile = [bool]$Profile
+$explicitProfile = [bool]$Profile -or [bool]$env:LDP_PROFILE
+if (-not $Profile -and $env:LDP_PROFILE) { $Profile = $env:LDP_PROFILE }
 if (-not $Profile) { $Profile = Join-Path $here 'machine.json' }
 $template = Join-Path $here 'machine.example.json'
+$sharedDevices = Join-Path $here 'devices'
+if ((Test-Path -LiteralPath $sharedDevices -PathType Container) -and -not $explicitProfile) {
+    Write-Host "Shared release detected at $here - set LDP_PROFILE to a local machine.json outside the release tree."
+    exit 2
+}
+if ((Test-Path -LiteralPath $sharedDevices -PathType Container) -and
+    [System.IO.Path]::GetFullPath($Profile).StartsWith(([System.IO.Path]::GetFullPath($here).TrimEnd('\') + '\'), [StringComparison]::OrdinalIgnoreCase)) {
+    Write-Host "Shared release profiles must be local and outside ${here}: $Profile"
+    exit 2
+}
 
 $script:results = New-Object System.Collections.Generic.List[object]
 function Add-Result([string]$name, [string]$status, [string]$detail) {
@@ -78,6 +89,12 @@ if ($Write -and -not $explicitProfile -and $haveProfile -and $prof.machine -and
     $resetCopiedProfile = $true
 }
 if (-not $prof.machine -or $prof.machine -eq 'UNNAMED') { $prof.machine = $env:COMPUTERNAME }
+if ((Test-Path -LiteralPath $sharedDevices -PathType Container) -and
+    (-not $prof.shared -or -not $prof.shared.enabled -or
+     [System.IO.Path]::GetFullPath([string]$prof.shared.release_root) -ne [System.IO.Path]::GetFullPath($here))) {
+    Write-Host "Shared release profile must set shared.enabled=true and shared.release_root=$here."
+    exit 2
+}
 if ($resetCopiedProfile) { Add-Result 'profile' 'WARN' "copied profile belonged to another machine; initialized from template for $env:COMPUTERNAME" }
 elseif (-not $haveProfile) { Add-Result 'profile' 'WARN' "created from template by discovery" }
 else { Add-Result 'profile' 'PASS' $Profile }
@@ -378,14 +395,19 @@ if ($prof.roots.work -and (Test-Path -LiteralPath $prof.roots.work)) {
 
 # ---- optional: one episode manifest ---------------------------------------
 if ($Episode) {
-    $mp = Join-Path $here "episodes\$Episode.json"
+    if ($prof.shared -and $prof.shared.enabled) {
+        if (-not $env:LDP_MANIFEST_DIR) {
+            Add-Result "episode:$Episode" 'FAIL' 'shared mode requires LDP_INSTANCE_ROOT/LDP_MANIFEST_DIR; run shared_workspace.py init'
+            $mp = $null
+        } else { $mp = Join-Path $env:LDP_MANIFEST_DIR "$Episode.json" }
+    } else { $mp = Join-Path $here "episodes\$Episode.json" }
     $ep = $null
-    if (Test-Path -LiteralPath $mp) {
+    if ($mp -and (Test-Path -LiteralPath $mp)) {
         Add-Result "episode:$Episode" 'PASS' $mp
         try { $ep = Get-Content -LiteralPath $mp -Raw | ConvertFrom-Json }
         catch { Add-Result "episode:$Episode" 'FAIL' "manifest is not valid JSON: $($_.Exception.Message)" }
     } else {
-        Add-Result "episode:$Episode" 'FAIL' "manifest missing: $mp"
+        if ($mp) { Add-Result "episode:$Episode" 'FAIL' "manifest missing: $mp" }
     }
     $dl = $null
     if ($ep -and $ep.roots -and $ep.roots.downloads) {

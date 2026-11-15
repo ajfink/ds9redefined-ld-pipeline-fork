@@ -11,14 +11,30 @@ $script:LdBundle = Split-Path -Parent $PSScriptRoot
 function Get-LdProfile {
     <# Returns the machine profile object, or fails with an actionable message. #>
     $p = $env:LDP_PROFILE
+    $sharedDevices = Join-Path $script:LdBundle 'devices'
+    if (-not $p -and (Test-Path -LiteralPath $sharedDevices -PathType Container)) {
+        throw "shared release detected at $script:LdBundle - set LDP_PROFILE to a local profile outside the release tree"
+    }
     if (-not $p) { $p = Join-Path $script:LdBundle 'machine.json' }
     if (-not (Test-Path -LiteralPath $p)) {
         $alt = Join-Path $script:LdBundle 'machine.example.json'
         if (Test-Path -LiteralPath $alt) { $p = $alt }
         else { throw "no machine profile at $p - run preflight.ps1 -Write" }
     }
-    try { return Get-Content -LiteralPath $p -Raw | ConvertFrom-Json }
+    try { $profile = Get-Content -LiteralPath $p -Raw | ConvertFrom-Json }
     catch { throw "profile is not valid JSON: $p ($($_.Exception.Message))" }
+    if (Test-Path -LiteralPath $sharedDevices -PathType Container) {
+        $bundleFull = [System.IO.Path]::GetFullPath($script:LdBundle).TrimEnd('\') + '\'
+        $profileFull = [System.IO.Path]::GetFullPath($p)
+        if ($profileFull.StartsWith($bundleFull, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "shared release profile must be outside ${script:LdBundle}: $p"
+        }
+        if (-not $profile.shared -or -not $profile.shared.enabled -or
+            [System.IO.Path]::GetFullPath([string]$profile.shared.release_root) -ne [System.IO.Path]::GetFullPath($script:LdBundle)) {
+            throw "local shared-mode profile must set shared.enabled=true and shared.release_root=$script:LdBundle"
+        }
+    }
+    return $profile
 }
 
 function Get-LdTool {
@@ -31,14 +47,71 @@ function Get-LdTool {
 
 function Get-LdRoot {
     param([Parameter(Mandatory)]$Profile, [Parameter(Mandatory)][string]$Name)
+    if ($Name -eq 'logs' -and $Profile.shared -and $Profile.shared.enabled) {
+        if (-not $env:LDP_INSTANCE_ROOT) { throw "shared mode requires LDP_INSTANCE_ROOT; run scripts/shared_workspace.py init" }
+        $instance = [System.IO.Path]::GetFullPath($env:LDP_INSTANCE_ROOT)
+        $devices = [System.IO.Path]::GetFullPath((Join-Path $script:LdBundle 'devices')).TrimEnd('\') + '\'
+        if (-not $instance.StartsWith($devices, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "LDP_INSTANCE_ROOT must be beneath $devices"
+        }
+        return Join-Path $instance 'logs'
+    }
     $v = $Profile.roots.$Name
     if (-not $v) { throw "root '$Name' is not set in the profile" }
     return $v
 }
 
+function Assert-LdWritablePath {
+    param([Parameter(Mandatory)]$Profile, [Parameter(Mandatory)][string]$Path)
+    if (-not ($Profile.shared -and $Profile.shared.enabled)) { return }
+    if (-not $env:LDP_INSTANCE_ROOT) { throw "shared mode requires LDP_INSTANCE_ROOT; run scripts/shared_workspace.py init" }
+    $bundle = [System.IO.Path]::GetFullPath($script:LdBundle).TrimEnd('\') + '\'
+    $target = [System.IO.Path]::GetFullPath($Path)
+    if (-not $target.StartsWith($bundle, [StringComparison]::OrdinalIgnoreCase)) { return }
+    $instance = [System.IO.Path]::GetFullPath($env:LDP_INSTANCE_ROOT).TrimEnd('\') + '\'
+    $allowed = @('manifest','logs','references','cut-pad-images') | ForEach-Object {
+        [System.IO.Path]::GetFullPath((Join-Path $instance $_)).TrimEnd('\') + '\'
+    }
+    foreach ($root in $allowed) {
+        if ($target.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { return }
+    }
+    throw "shared mode forbids writing to the release tree: $target; use the active instance's manifest/logs/references/cut-pad-images folder or a local output root"
+}
+
+function Protect-LdSharedText {
+    param([Parameter(Mandatory)]$Profile, [AllowNull()][string]$Text)
+    if ($null -eq $Text -or -not ($Profile.shared -and $Profile.shared.enabled)) { return $Text }
+    $release = [System.IO.Path]::GetFullPath([string]$Profile.shared.release_root).TrimEnd('\') + '\'
+    if ($env:LDP_PROFILE) { $Text = $Text -replace [regex]::Escape($env:LDP_PROFILE), '<device-local-profile>' }
+    if ($env:USERPROFILE) { $Text = $Text -replace [regex]::Escape($env:USERPROFILE), '<user-home>' }
+    foreach ($section in @('tools','roots')) {
+        $values = $Profile.$section
+        if (-not $values) { continue }
+        foreach ($property in $values.PSObject.Properties) {
+            $value = [string]$property.Value
+            if (-not $value -or -not [System.IO.Path]::IsPathRooted($value)) { continue }
+            $full = [System.IO.Path]::GetFullPath($value)
+            if ($full.StartsWith($release, [StringComparison]::OrdinalIgnoreCase)) { continue }
+            $Text = $Text -replace [regex]::Escape($value), "<$section.$($property.Name)>"
+            $Text = $Text -replace [regex]::Escape($full), "<$section.$($property.Name)>"
+        }
+    }
+    return $Text
+}
+
 function Get-LdEpisode {
     param([Parameter(Mandatory)][string]$Code)
-    $p = Join-Path $script:LdBundle "episodes\$Code.json"
+    $profile = Get-LdProfile
+    if ($profile.shared -and $profile.shared.enabled) {
+        if (-not $env:LDP_INSTANCE_ROOT -or -not $env:LDP_MANIFEST_DIR) {
+            throw "shared mode requires LDP_INSTANCE_ROOT/LDP_MANIFEST_DIR; run scripts/shared_workspace.py init"
+        }
+        $expectedManifestDir = [System.IO.Path]::GetFullPath((Join-Path $env:LDP_INSTANCE_ROOT 'manifest'))
+        if ([System.IO.Path]::GetFullPath($env:LDP_MANIFEST_DIR) -ne $expectedManifestDir) {
+            throw "LDP_MANIFEST_DIR must be the current instance's manifest folder: $expectedManifestDir"
+        }
+        $p = Join-Path $env:LDP_MANIFEST_DIR "$Code.json"
+    } else { $p = Join-Path $script:LdBundle "episodes\$Code.json" }
     if (-not (Test-Path -LiteralPath $p)) {
         throw "no manifest for $Code - create episodes\$Code.json from episodes\_template.json after measuring it"
     }
@@ -76,20 +149,23 @@ function Invoke-LdFfmpeg {
        x265's quiet log level suppresses its settings banner. #>
     param([Parameter(Mandatory)][string]$Ffmpeg, [Parameter(Mandatory)][string[]]$Arguments,
           [string]$Log)
-    $recordRoot = if ($Log) { Split-Path -Parent $Log } else { Get-LdRoot (Get-LdProfile) 'logs' }
-    if (-not $recordRoot) { $recordRoot = Get-LdRoot (Get-LdProfile) 'logs' }
+    $prof = Get-LdProfile
+    if ($Log) { Assert-LdWritablePath -Profile $prof -Path $Log }
+    $recordRoot = if ($Log) { Split-Path -Parent $Log } else { Get-LdRoot $prof 'logs' }
+    if (-not $recordRoot) { $recordRoot = Get-LdRoot $prof 'logs' }
     $versionPath = Join-Path $script:LdBundle 'WORKFLOW_VERSION'
     if (-not (Test-Path -LiteralPath $versionPath)) { throw "workflow version marker missing: $versionPath" }
     $workflowVersion = (Get-Content -LiteralPath $versionPath -Raw).Trim()
     if ($workflowVersion -notmatch '^[1-9]\d*$') { throw "invalid workflow version marker: '$workflowVersion'" }
     New-Item -ItemType Directory -Force -Path $recordRoot | Out-Null
     $recordPath = Join-Path $recordRoot ("ffmpeg-command-{0}.json" -f [guid]::NewGuid().ToString('N'))
+    Assert-LdWritablePath -Profile $prof -Path $recordPath
     $record = [ordered]@{
         workflow_version = [int]$workflowVersion
         started_utc = [DateTimeOffset]::UtcNow.ToString('o')
-        executable = $Ffmpeg
-        arguments = @($Arguments)
-        output_log = $Log
+        executable = Protect-LdSharedText $prof $Ffmpeg
+        arguments = @($Arguments | ForEach-Object { Protect-LdSharedText $prof ([string]$_) })
+        output_log = Protect-LdSharedText $prof $Log
     }
     $recordJson = ConvertTo-Json -InputObject $record -Depth 5
     [System.IO.File]::WriteAllText($recordPath, $recordJson + [Environment]::NewLine,
@@ -98,8 +174,14 @@ function Invoke-LdFfmpeg {
     $old = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     if ($Log) {
-        & $Ffmpeg @Arguments 2>&1 | Tee-Object -FilePath $Log | Select-Object -Last 6 |
-            ForEach-Object { Write-Host $_ }
+        if ($prof.shared -and $prof.shared.enabled) {
+            & $Ffmpeg @Arguments 2>&1 |
+                ForEach-Object { Protect-LdSharedText $prof ($_.ToString()) } |
+                Tee-Object -FilePath $Log | Select-Object -Last 6 | ForEach-Object { Write-Host $_ }
+        } else {
+            & $Ffmpeg @Arguments 2>&1 | Tee-Object -FilePath $Log | Select-Object -Last 6 |
+                ForEach-Object { Write-Host $_ }
+        }
     } else {
         & $Ffmpeg @Arguments 2>&1 | Select-Object -Last 6 | ForEach-Object { Write-Host $_ }
     }

@@ -6,6 +6,8 @@ templates, V7 doctor/stage-runner tools, and platform Python locks. It intention
 
 - `machine.json` or machine-specific profiles;
 - measured episode manifests or work outputs;
+- the shared `devices/` tree of mutable per-instance manifests/logs/references/cut-PAD inboxes;
+- `devices/` per-device/instance logs, references, manifests, or cut-PAD inboxes (these are shared mutable data, not release source);
 - the archival `reference-pool/` and historical `reference-runs/` data;
 - TBC/EFM captures, WAV/FLAC audio, video, descriptor caches, or other generated images;
 - all but the intentionally curated, single-frame cut-PAD stills in `Cut Pad Images/<episode>/`;

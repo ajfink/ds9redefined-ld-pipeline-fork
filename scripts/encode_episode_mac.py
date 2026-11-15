@@ -45,11 +45,12 @@ import re
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))         # sibling modules (vspipe_util)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # ldcommon
-from ldcommon import Ld, PipelineError, load_episode  # noqa: E402
+from ldcommon import Ld, PipelineError, assert_writable_path, load_episode  # noqa: E402
 from vspipe_util import (  # noqa: E402
     X265_PARAMS, pipe, probe_sar, vspipe_bin, vspipe_env)
 
@@ -167,7 +168,8 @@ def main() -> int:
     script = choose_script(ep, base, padfix, version)
 
     ff, ffp = ld.tool("ffmpeg"), ld.tool("ffprobe")
-    log = ld.root("logs") / f"encode-{ep.code}-{args.pass_}.log"
+    log = ld.root("logs") / (
+        f"encode-{ep.code}-{args.pass_}-{datetime.now().strftime('%Y%m%dT%H%M%S%f')}.log")
     info = vspipe_info(script)
 
     if args.pass_ == "validate":
@@ -211,6 +213,7 @@ def main() -> int:
 
     # ---------------- final pass: one video-only encode ----------------
     dst = Path(args.output) if args.output else ep.path("padfixed_video")
+    assert_writable_path(dst, ld)
     if dst.suffix.lower() != ".mkv":
         raise PipelineError(f"final video output must be .mkv: {dst}")
     frames = ep.frame_count                       # refuses if unmeasured

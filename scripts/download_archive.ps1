@@ -87,6 +87,7 @@ foreach ($f in $selected) { $selectedBytes += [long]$f.size }
 Write-Host "Selected     : $($selected.Count) files ($($tbcFiles.Count) TBCs; captures: $($captureLabels -join ', '))"
 Write-Host ("Expected total: {0:N0} bytes ({1:N1} GB decimal / {2:N1} GiB)" -f $selectedBytes, ($selectedBytes / 1e9), ($selectedBytes / 1GB))
 $destinationFullPath = [IO.Path]::GetFullPath($Destination)
+Assert-LdWritablePath -Profile $profile -Path $destinationFullPath
 [long]$additionalBytes = 0
 foreach ($f in $selected) {
     $expected = [long]$f.size

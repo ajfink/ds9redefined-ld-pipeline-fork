@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -19,7 +20,8 @@ from fractions import Fraction
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ldcommon import Ld, PipelineError, load_episode  # noqa: E402
+from ldcommon import (Ld, PipelineError, assert_writable_path, load_episode,
+                      redact_shared_text)  # noqa: E402
 
 FPS_NUM, FPS_DEN = 24000, 1001
 SAMPLE_RATE = 44100
@@ -185,10 +187,19 @@ def main() -> int:
     }
     out = Path(args.report_out) if args.report_out else ld.probe() / (
         f"{ep.code}-ld-only-sync-check-{datetime.now().strftime('%Y%m%dT%H%M%S%f')}.json")
+    assert_writable_path(out, ld)
     if out.exists():
         raise PipelineError(f"refusing to overwrite sync report: {out}")
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    report_text = json.dumps(result, indent=2) + "\n"
+    instance_root = os.environ.get("LDP_INSTANCE_ROOT")
+    if instance_root:
+        try:
+            out.resolve().relative_to(Path(instance_root).resolve())
+            report_text = redact_shared_text(report_text, ld)
+        except ValueError:
+            pass
+    out.write_text(report_text, encoding="utf-8")
     print(f"PASS - no-DVD LD timebase and exact endpoint sample budget verified; report: {out}")
     print("WARN - absolute lip-sync offset was not independently cross-correlated (no DVD reference was supplied).")
     return 0

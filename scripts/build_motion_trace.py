@@ -32,7 +32,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ldcommon import PipelineError, load_episode  # noqa: E402
+from ldcommon import Ld, PipelineError, assert_writable_path, load_episode  # noqa: E402
 
 
 def main() -> int:
@@ -47,8 +47,9 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="print stats, do not write")
     args = ap.parse_args()
 
+    ld = Ld()
     if args.episode:
-        ep = load_episode(args.episode)
+        ep = load_episode(args.episode, ld)
         source = str(ep.path("stack_master"))
     elif args.source:
         source = str(Path(args.source).resolve())
@@ -59,6 +60,7 @@ def main() -> int:
     if not src_path.is_file():
         raise PipelineError(f"source not found: {src_path}")
     out = Path(args.out)
+    assert_writable_path(out, ld)
     if out.exists():
         raise PipelineError(f"refusing to overwrite existing file: {out}")
 

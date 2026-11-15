@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ldcommon import Ld, PipelineError, load_episode  # noqa: E402
+from ldcommon import Ld, PipelineError, assert_writable_path, load_episode  # noqa: E402
 
 FPS = 30000.0 / 1001.0
 SR = 16000
@@ -225,6 +225,7 @@ def main() -> int:
     rms = float(res.std(ddof=2)) if len(y) > 2 else 0.0
     ppm = slope * 1000.0          # y in ms, x in s -> ppm is slope * 1000
     out = Path(args.out) if args.out else ld.probe() / f"{ep.code}-av-check-{Path(audio_path).stem}.tsv"
+    assert_writable_path(out, ld)
     if out.exists():
         raise PipelineError(f"refusing to overwrite report: {out}")
     with out.open("w", newline="", encoding="utf-8") as f:

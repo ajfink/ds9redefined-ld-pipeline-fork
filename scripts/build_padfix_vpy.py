@@ -45,7 +45,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ldcommon import Ld, PipelineError, load_episode  # noqa: E402
+from ldcommon import Ld, PipelineError, assert_writable_path, load_episode  # noqa: E402
 
 
 def rgb_to_yuv_p10(rgb, subsampling_w: int = 1, subsampling_h: int = 1):
@@ -214,6 +214,7 @@ def main() -> int:
     total = ep.frame_count
     out_path = Path(args.out) if args.out else Path(
         str(ep.path("avs_padfix")).replace(".avs", ".vpy"))
+    assert_writable_path(out_path, ld)
     audit = probe / f"{ep.code}-pad-audit.tsv"
     report = probe / "rife-pad-replacements-local.tsv"
     label = ep.data.get("pad_report_label") or ep.code

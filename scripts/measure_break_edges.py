@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ldcommon import Ld, PipelineError, load_episode  # noqa: E402
+from ldcommon import Ld, PipelineError, assert_writable_path, load_episode  # noqa: E402
 
 FPS = 30000.0 / 1001.0
 FEATURES = 48 * 36
@@ -103,6 +103,7 @@ def main()->int:
     breaks=(ep.data.get('retime') or {}).get('breaks') or []
     if not breaks: raise PipelineError(f"{ep.code}: record candidate retime.breaks[].ld_black intervals first")
     out=Path(args.out) if args.out else (ep.path("break_edge_report") if ep.data.get("files",{}).get("break_edge_report") else ld.probe()/f"{ep.code}-break-edge-measurements.tsv")
+    assert_writable_path(out, ld)
     if out.exists():
         if not args.force: raise PipelineError(f"refusing to overwrite edge report: {out}")
         backup=out.with_name(out.name+'.bak')

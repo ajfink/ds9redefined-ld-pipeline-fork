@@ -15,12 +15,15 @@ episode's frame count.
 Profile resolution order:
   $LDP_PROFILE -> <bundle>/machine.json -> <bundle>/machine.example.json
 
-Manifests live at <bundle>/episodes/<code>.json.
+Local manifests live at <bundle>/episodes/<code>.json. In shared-release mode,
+the active episode manifest is redirected to the caller's unique
+``LDP_INSTANCE_ROOT/manifest`` folder; no shared-root manifest writes are allowed.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -64,6 +67,21 @@ def _load_json(path: Path):
 class Ld:
     def __init__(self, profile_path: str | os.PathLike | None = None):
         p = profile_path or os.environ.get("LDP_PROFILE")
+        shared_devices = BUNDLE / "devices"
+        if not p and shared_devices.is_dir():
+            raise PipelineError(
+                f"{BUNDLE} is configured as a shared release tree; do not use a bundle-local profile. "
+                "Set LDP_PROFILE to a local machine.json and initialize a unique workspace with "
+                "scripts/shared_workspace.py.")
+        if p and shared_devices.is_dir():
+            candidate = Path(os.path.expandvars(os.path.expanduser(str(p)))).resolve()
+            try:
+                candidate.relative_to(BUNDLE.resolve())
+                inside_release = True
+            except ValueError:
+                inside_release = False
+            if inside_release:
+                raise PipelineError(f"machine profile must be outside the shared release tree: {candidate}")
         self.profile_path = Path(p) if p else BUNDLE / "machine.json"
         if not self.profile_path.exists():
             alt = BUNDLE / "machine.example.json"
@@ -75,6 +93,14 @@ class Ld:
                 raise PipelineError(f"no machine profile at {self.profile_path} - "
                                     f"run preflight.ps1 -Write")
         self.profile = _load_json(self.profile_path)
+        shared = self.profile.get("shared") or {}
+        if shared_devices.is_dir():
+            release_value = shared.get("release_root")
+            release = Path(os.path.expandvars(os.path.expanduser(str(release_value)))) if release_value else None
+            if shared.get("enabled") is not True or release is None or release.resolve() != BUNDLE.resolve():
+                raise PipelineError(
+                    "shared-release mode requires a local profile outside the bundle with "
+                    "shared.enabled=true and shared.release_root set to this bundle")
 
     # ---- tools ----
     def tool(self, name: str) -> Path:
@@ -96,6 +122,8 @@ class Ld:
 
     # ---- roots ----
     def root(self, name: str) -> Path:
+        if name == "logs" and (self.profile.get("shared") or {}).get("enabled") is True:
+            return shared_instance_root(self.profile) / "logs"
         v = (self.profile.get("roots") or {}).get(name)
         if not v:
             raise PipelineError(f"root '{name}' is not set in {self.profile_path}")
@@ -240,11 +268,134 @@ def load_profile(path=None) -> Ld:
 
 def load_episode(code: str, ld: Ld | None = None) -> Episode:
     ld = ld or Ld()
-    p = BUNDLE / "episodes" / f"{code}.json"
+    p = episode_manifest_path(code, ld)
     if not p.exists():
         raise PipelineError(f"no manifest for {code}: {p} - create it from "
-                            f"episodes/_template.json after measuring the episode")
+                            f"episodes/_template.json after verified downloads")
     return Episode(code, _load_json(p), ld)
+
+
+def shared_instance_root(profile: dict | None = None) -> Path:
+    """Resolve and validate the active per-instance directory beneath shared devices/."""
+    profile = profile or Ld().profile
+    shared = profile.get("shared") or {}
+    if shared.get("enabled") is not True:
+        raise PipelineError("shared workspace is not enabled in the selected local profile")
+    instance = os.environ.get("LDP_INSTANCE_ROOT")
+    if not instance:
+        raise PipelineError("shared mode requires LDP_INSTANCE_ROOT; run scripts/shared_workspace.py init")
+    root = Path(os.path.expandvars(os.path.expanduser(instance))).resolve()
+    release = Path(os.path.expandvars(os.path.expanduser(str(shared.get("release_root") or BUNDLE)))).resolve()
+    if release != BUNDLE.resolve():
+        raise PipelineError(f"shared.release_root must identify the bundle used by these scripts: {BUNDLE}")
+    devices = release / "devices"
+    if not devices.is_dir():
+        raise PipelineError(f"shared devices directory is not provisioned: {devices}; create it and set per-device ACLs")
+    try:
+        root.relative_to(devices.resolve())
+    except ValueError as exc:
+        raise PipelineError(f"LDP_INSTANCE_ROOT must be inside {devices}, not {root}") from exc
+    if not root.is_dir():
+        raise PipelineError(f"LDP_INSTANCE_ROOT is not an initialized directory: {root}")
+    try:
+        relative = root.relative_to(devices.resolve())
+    except ValueError as exc:
+        raise PipelineError(f"LDP_INSTANCE_ROOT is outside the shared devices tree: {root}") from exc
+    if len(relative.parts) != 3 or relative.parts[1] != "episodes":
+        raise PipelineError("LDP_INSTANCE_ROOT must have form devices/<device-instance>/episodes/<episode>")
+    device_name = str(shared.get("device_name") or profile.get("machine") or "device")
+    safe_device = re.sub(r"[^A-Za-z0-9._-]+", "-", device_name).strip(".-_")[:64]
+    if not relative.parts[0].startswith(safe_device + "-"):
+        raise PipelineError("LDP_INSTANCE_ROOT belongs to a different device label; create this device's workspace")
+    metadata_path = root / "workspace.json"
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PipelineError(f"shared instance metadata is missing/invalid at {metadata_path}: {exc}") from exc
+    expected_relative = root.relative_to(release).as_posix()
+    if (metadata.get("release_root") != "." or
+            metadata.get("instance_relative_path") != expected_relative or
+            metadata.get("machine") != profile.get("machine") or
+            str(metadata.get("episode", "")).casefold() != root.name.casefold() or
+            relative.parts[0].rsplit("-", 1)[-1] != metadata.get("instance_id")):
+        raise PipelineError("shared instance metadata does not match the selected release/workspace")
+    return root
+
+
+def shared_enabled(profile: dict | None = None) -> bool:
+    if profile is None:
+        raise PipelineError("shared_enabled requires a loaded profile")
+    return (profile.get("shared") or {}).get("enabled") is True
+
+
+def episode_manifest_path(code: str, ld: Ld | None = None) -> Path:
+    """Return the current manifest location without ever writing to a shared release tree."""
+    ld = ld or Ld()
+    shared = ld.profile.get("shared") or {}
+    if shared.get("enabled") is True:
+        instance = shared_instance_root(ld.profile)
+        if instance.name.casefold() != code.casefold():
+            raise PipelineError(f"active shared workspace is for {instance.name}, not requested episode {code}")
+        manifest_dir = instance / "manifest"
+        configured = os.environ.get("LDP_MANIFEST_DIR")
+        if configured and Path(os.path.expandvars(os.path.expanduser(configured))).resolve() != manifest_dir.resolve():
+            raise PipelineError("LDP_MANIFEST_DIR must equal <LDP_INSTANCE_ROOT>/manifest in shared mode")
+        return manifest_dir / f"{code}.json"
+    override = os.environ.get("LDP_MANIFEST_DIR")
+    if override:
+        return Path(os.path.expandvars(os.path.expanduser(override))).resolve() / f"{code}.json"
+    return BUNDLE / "episodes" / f"{code}.json"
+
+
+def assert_writable_path(path: str | os.PathLike, ld: Ld | None = None) -> Path:
+    """In shared mode, allow writes under the active instance only, never the release tree."""
+    ld = ld or Ld()
+    target = Path(path).expanduser().resolve()
+    if (ld.profile.get("shared") or {}).get("enabled") is not True:
+        return target
+    bundle = BUNDLE.resolve()
+    try:
+        target.relative_to(bundle)
+    except ValueError:
+        return target
+    instance = shared_instance_root(ld.profile)
+    allowed_roots = (instance / "manifest", instance / "logs", instance / "references",
+                     instance / "cut-pad-images")
+    if target == instance / "workspace.json" or any(
+            target == allowed or target.is_relative_to(allowed) for allowed in allowed_roots):
+        return target
+    raise PipelineError(f"shared mode forbids writing to the release tree: {target}; "
+                        f"use only this instance's manifest/logs/references/cut-pad-images folders "
+                        f"under {instance}")
+
+
+def redact_shared_text(text: str, ld: Ld) -> str:
+    """Redact local machine paths before persisting output in a shared instance folder."""
+    if (ld.profile.get("shared") or {}).get("enabled") is not True:
+        return text
+    pairs: list[tuple[str, str]] = [(str(ld.profile_path.resolve()), "<device-local-profile>")]
+    if str(Path.home()) not in ("", "."):
+        pairs.append((str(Path.home().resolve()), "<user-home>"))
+    shared_root = Path(str((ld.profile.get("shared") or {}).get("release_root") or BUNDLE)).resolve()
+    for section in ("tools", "roots", "python"):
+        for name, value in ((ld.profile.get(section) or {}).items()):
+            if not value or not isinstance(value, (str, os.PathLike)):
+                continue
+            candidate = Path(os.path.expandvars(os.path.expanduser(str(value))))
+            if not candidate.is_absolute():
+                continue
+            try:
+                candidate.resolve().relative_to(shared_root)
+                continue
+            except ValueError:
+                pass
+            pairs.append((str(candidate.resolve()), f"<{section}.{name}>"))
+    pairs = sorted(set(pairs), key=lambda pair: len(pair[0]), reverse=True)
+    for original, replacement in pairs:
+        text = re.sub(re.escape(original), lambda _: replacement, text, flags=re.IGNORECASE)
+        text = re.sub(re.escape(original.replace("\\", "/")),
+                      lambda _: replacement, text, flags=re.IGNORECASE)
+    return text
 
 
 def main_smoke():

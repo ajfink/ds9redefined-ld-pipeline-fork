@@ -22,18 +22,30 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(ROOT))
 from dependency_lock import (LockError, compare_lock, profile_platform,
-                             resolve_interpreter, target_for)
+                             redact_shared_text, resolve_interpreter,
+                             shared_redactions, target_for)
+from ldcommon import shared_instance_root
 
 
 def profile_path(value: str | None) -> Path:
     chosen = value or os.environ.get("LDP_PROFILE")
+    devices = ROOT / "devices"
+    if not chosen and devices.is_dir():
+        raise LockError("shared release detected; pass --profile pointing to a local machine.json outside the release tree")
     if chosen:
         path = Path(os.path.expandvars(os.path.expanduser(chosen))).resolve()
     else:
         path = ROOT / "machine.json"
     if not path.is_file():
         raise LockError(f"machine profile not found: {path}; copy the matching machine-*.example.json to machine.json")
+    if devices.is_dir():
+        try:
+            path.relative_to(ROOT.resolve())
+            raise LockError("machine profile must be outside the shared release tree")
+        except ValueError:
+            pass
     return path
 
 
@@ -168,6 +180,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--profile", help="machine profile; defaults to LDP_PROFILE or bundle machine.json")
     ap.add_argument("--episode", help="also pass this episode to the platform preflight")
+    ap.add_argument("--instance-root", help="active per-instance episode directory under shared devices/")
     ap.add_argument("--json", action="store_true", help="emit one JSON report")
     ap.add_argument("--report-out", help="write a new JSON report file; refuses overwrite")
     args = ap.parse_args()
@@ -181,6 +194,73 @@ def main() -> int:
         interpreter = resolve_interpreter(profile)
         env = os.environ.copy()
         env["LDP_PROFILE"] = str(profile_file)
+        if args.instance_root:
+            env["LDP_INSTANCE_ROOT"] = str(Path(args.instance_root).expanduser().resolve())
+        shared_report = {"enabled": False}
+        shared_config = profile.get("shared") or {}
+        if shared_config.get("enabled") is True:
+            release = Path(os.path.expandvars(os.path.expanduser(
+                str(shared_config.get("release_root") or "")))).resolve()
+            devices = release / "devices"
+            shared_report = {"enabled": True, "release_root": str(release),
+                             "devices_root": str(devices)}
+            if release != ROOT.resolve():
+                raise LockError(f"shared.release_root must equal the code bundle path: {ROOT}")
+            if not devices.is_dir():
+                raise LockError(f"shared devices/ folder must be pre-provisioned: {devices}")
+            instance_value = env.get("LDP_INSTANCE_ROOT")
+            instance = None
+            if instance_value:
+                instance = shared_instance_root(profile)
+                manifest_dir = instance / "manifest"
+                expected_env = {"LDP_MANIFEST_DIR": str(manifest_dir),
+                                "LDP_INSTANCE_LOGS": str(instance / "logs"),
+                                "LDP_CUT_PAD_IMAGES": str(instance / "cut-pad-images")}
+                for key, value in expected_env.items():
+                    if env.get(key) and Path(env[key]).resolve() != Path(value).resolve():
+                        raise LockError(f"{key} does not point at the active instance folder")
+                    env[key] = value
+                required_instance_dirs = (manifest_dir, instance / "logs", instance / "references",
+                                          instance / "cut-pad-images")
+                missing_dirs = [str(path) for path in required_instance_dirs if not path.is_dir()]
+                if missing_dirs:
+                    raise LockError("shared instance is incomplete; run shared_workspace.py init: " +
+                                    ", ".join(missing_dirs))
+            else:
+                manifest_dir = None
+            write_roots = ("downloads_root", "work", "probe", "avs", "audio", "subs",
+                           "out", "prores", "stack", "logs")
+            misplaced = []
+            for name in write_roots:
+                raw = (profile.get("roots") or {}).get(name)
+                if not raw:
+                    continue
+                candidate = Path(os.path.expandvars(os.path.expanduser(str(raw)))).resolve()
+                try:
+                    candidate.relative_to(release)
+                    misplaced.append(f"roots.{name}={candidate}")
+                except ValueError:
+                    pass
+            if misplaced:
+                raise LockError("write roots must remain outside the shared release tree: " +
+                                "; ".join(misplaced))
+            shared_report.update({
+                "instance_ready": instance is not None,
+                "instance_root": str(instance) if instance else None,
+                "manifest_dir": str(manifest_dir) if manifest_dir else None,
+                "device_write_scope": str(devices),
+                "release_root_acl_warning": (
+                    "the current process appears able to write the release root; configure the "
+                    "share ACL read-only for the release tree and writable only under devices/"
+                    if os.access(release, os.W_OK) else
+                    "release-root write access is not reported for this process"),
+                "release_root_writable_for_process": os.access(release, os.W_OK),
+                "application_write_scope": "episode manifest, stage logs, references, and cut-PAD images are redirected into this unique instance folder",
+            })
+            if instance is None:
+                shared_report["setup_note"] = "machine-level checks only; initialize a unique episode workspace before a stage can be episode-ready"
+        elif (ROOT / "devices").is_dir():
+            raise LockError("this bundle has a shared devices/ area; set shared.enabled=true in a local profile")
         lock_report = compare_lock(target, interpreter)
 
         if profile_os != target_os:
@@ -198,8 +278,11 @@ def main() -> int:
             "macos": "component preflight only; fresh-Mac V7 end-to-end QC remains outstanding",
             "linux": "UNTESTED: x86_64 dependency/capability candidate only; do not process a delivery",
         }[target_os]
+        shared_ready = (shared_report.get("enabled") is not True or
+                        (shared_report.get("instance_ready") is True and
+                         shared_report.get("release_root_writable_for_process") is not True))
         ready = bool(platform_report.get("ok") and lock_report.get("ok") and
-                     profile_os == target_os and target_os != "linux")
+                     profile_os == target_os and target_os != "linux" and shared_ready)
         report = {
             "schema": "ld-pipeline-doctor-v1",
             "created_utc": datetime.now(timezone.utc).isoformat(),
@@ -210,15 +293,27 @@ def main() -> int:
             "profile_os": profile_os,
             "workflow_status": workflow_status,
             "dependency_lock": lock_report,
+            "shared_workspace": shared_report,
             "platform_preflight": platform_report,
             "ready_for_episode": ready,
             "ok": ready,
             "read_only": True,
         }
+        if shared_config.get("enabled") is True:
+            report = json.loads(redact_shared_text(json.dumps(report),
+                                                   shared_redactions(profile_file, profile)))
         if args.report_out:
             out = Path(args.report_out).expanduser().resolve()
             if out.exists():
                 raise LockError(f"refusing to overwrite doctor report: {out}")
+            if shared_config.get("enabled") is True:
+                if not shared_report.get("instance_root"):
+                    raise LockError("shared doctor report-out requires an initialized instance workspace")
+                allowed = Path(shared_report["instance_root"]) / "logs"
+                try:
+                    out.relative_to(allowed.resolve())
+                except ValueError as exc:
+                    raise LockError(f"shared doctor reports must be written under the active instance logs: {allowed}") from exc
             out.parent.mkdir(parents=True, exist_ok=True)
             with out.open("x", encoding="utf-8") as f:
                 json.dump(report, f, indent=2)
@@ -230,6 +325,9 @@ def main() -> int:
             print(f"V{report['workflow_version']} doctor — {target}\nprofile: {profile_file}")
             print(f"workflow: {workflow_status}")
             print(f"Python lock: {'PASS' if lock_report['ok'] else 'FAIL'} ({lock_report['lock']})")
+            if shared_report.get("enabled"):
+                print("shared workspace: " + str(shared_report.get("instance_root")))
+                print("shared root policy: WARN - " + str(shared_report.get("release_root_acl_warning")))
             pf = platform_report
             if pf.get("checks"):
                 for row in pf["checks"]:

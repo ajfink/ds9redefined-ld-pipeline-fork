@@ -57,7 +57,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ldcommon import PipelineError, load_episode, load_profile  # noqa: E402
+from ldcommon import Ld, PipelineError, assert_writable_path, load_episode, load_profile  # noqa: E402
 
 RANGE_RE = re.compile(r"\[(\d+)\s+(\d+)\]")
 
@@ -239,6 +239,7 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="print, do not write")
     args = ap.parse_args()
 
+    ld = load_profile()
     source = build_source(args)
     ranges = build_ranges(args)
 
@@ -246,7 +247,7 @@ def main() -> int:
     t0 = args.trim_start
     t1 = args.trim_end
     if args.episode:
-        ep = load_episode(args.episode)
+        ep = load_episode(args.episode, ld)
         pad = ep.data.get("audio", {}).get("pad_frames") if pad is None else pad
         t0 = ep.data.get("video", {}).get("head_trim") if t0 is None else t0
         t1 = ep.data.get("video", {}).get("tail_trim") if t1 is None else t1
@@ -259,6 +260,7 @@ def main() -> int:
     text = render(source, int(pad), int(t0), int(t1), ranges, args.repair)
 
     out = Path(args.out)
+    assert_writable_path(out, ld)
     print(f"source      : {source}")
     print(f"pad/trim    : pad={pad} head={t0} tail={t1}")
     print(f"repair set  : {len(ranges)} range(s)")

@@ -19,6 +19,14 @@ lower V6 audio, video, safety, space, or QC gates.
   `--execute` is required for execution. Write stages run the doctor and their declared
   manifest validators, then save unique command logs and JSON results. Linux production
   stage execution is blocked.
+- Added shared-release mode for multiple read-only consumers: each device/OpenCode
+  instance initializes a unique `devices/<device>-<random>/episodes/<code>/` workspace
+  containing its manifest, logs, references, and cut-PAD inbox. Shared-mode scripts require
+  an external local profile and route manifest writes/logs into that instance; curated
+  release files remain read-only. No ACLs are changed automatically; administrators must
+  provision `devices/` and grant write access only there. The W share's current ACL was not
+  changed per operator direction, so it still requires administrator enforcement for an
+  OS-level read-only guarantee.
 - `scripts/generate_runbooks.py`: generates the Qwen4B and Qwen4B/Luna runbooks from
   `DS9 LaserDisc OpenCode Runbook.md` plus short model-policy templates. `--check`
   detects stale generated copies.
@@ -37,6 +45,13 @@ lower V6 audio, video, safety, space, or QC gates.
   plugins, PowerShell integration, and full episode delivery are unvalidated. Do not
   process a production episode or call Linux supported based on lock/bootstrap success.
 - Linux ARM64 and Windows ARM64 remain untested.
+- The shared-drive application paths avoid writing to the release root, but V7 does not
+  provision/modify filesystem ACLs. If the share grants write access at the root, an
+  administrator must correct that ACL before calling it OS-enforced read-only.
+- The shared-mode follow-up tests `shared_workspace.py` initialization/provenance and
+  per-instance manifest/write-path guards. Full suite: 48 passed, 7 Mac/VapourSynth-only
+  skipped; Windows doctor passes in local mode. The active W account still has root write
+  access, so W shared-mode doctor correctly blocks stage execution pending an ACL change.
 
 See `WORKFLOW_VERSIONING.md` and the V7 entry in `W:\ld-pipeline-execution-log.md` for
 validation evidence and known limits.
