@@ -4,8 +4,11 @@
 V9 orchestration and supervised canary adapters. This remains a separate application
 candidate; see `V10-RELEASE.md` and `WORKFLOW_VERSIONING.md` before syncing any files.
 
-**Intended GitHub project:** <https://github.com/ajfink/ds9redefined-ld-pipeline-fork>.
-This working copy has not been published or connected to a new remote by this change.
+**GitHub project:** <https://github.com/ajfink/ds9redefined-ld-pipeline-fork>.
+The FromStunToKill application is published on the
+[`fromstuntokill-app` branch](https://github.com/ajfink/ds9redefined-ld-pipeline-fork/tree/fromstuntokill-app);
+the repository's `main` branch remains the V10 baseline. Machine-local intake config,
+profiles, episode data, and media are excluded from the branch.
 
 **Design goal:** make the workflow clear and reliable enough for capable free or low-cost
 models to run with its bounded steps, explicit ACTION/VERIFY/STOP gates, and deterministic

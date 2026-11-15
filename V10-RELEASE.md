@@ -10,7 +10,8 @@ It remains an application candidate; same-version numbering does not make it aut
 The optional local Tk cockpit is a prototype frontend over the existing plan schema and
 `run_workflow.py`; the command-line workflows remain available. The intended GitHub project
 is <https://github.com/ajfink/ds9redefined-ld-pipeline-fork>; `origin` already points there
-and its remote `main` is V10. No code was pushed during this iteration.
+and its remote `main` is V10. The source-only `fromstuntokill-app` branch is published; no
+pull request was created.
 
 ## Included
 
@@ -67,10 +68,9 @@ and its remote `main` is V10. No code was pushed during this iteration.
 - The new GUI plan-model tests cover real-template immutability, DVD/no-DVD argument
   generation, plan validation, and overwrite refusal. The desktop window itself still needs
   an interactive user acceptance pass; the V10 plan/runner contract is unchanged.
-- GitHub preparation check: the `origin` remote already targets the requested project; its
-  only advertised branch is `main` at the V10 commit. GitHub CLI is not installed, so no
-  repository settings or remote branch were created. The existing local development branch
-  and uncommitted work remain untouched; `CONFIGURE HERE FIRST.json` is excluded from any
-  proposed publication.
+- GitHub preparation check: `main` remains the V10 baseline and `fromstuntokill-app` holds
+  the application branch. GitHub CLI is not installed, so no repository settings or pull
+  request were created. The local `CONFIGURE HERE FIRST.json` is ignored and excluded; only
+  the sanitized example is published.
 
 See `WORKFLOW_VERSIONING.md`, `changelog.txt`, and the mainline V10 implementation record.
