@@ -2,9 +2,10 @@
 """Run one allowlisted pipeline stage with explicit gates and durable logs.
 
 Planning is the default; ``--execute`` is required to launch a workflow command.
-There is no arbitrary shell mode. Write-capable stages first run the unified
-doctor and declared manifest validators; each invoked helper retains its own
-refuse-overwrite and quality gates.
+There is no arbitrary shell mode. The download stage uses downloader-specific
+URL/integrity/space checks so it can start early. Other write-capable stages run
+the unified doctor and declared manifest validators; each invoked helper retains
+its own refuse-overwrite and quality gates.
 """
 from __future__ import annotations
 

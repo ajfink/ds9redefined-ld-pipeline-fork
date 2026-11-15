@@ -97,6 +97,10 @@ fallback beneath the profile's `roots.logs` (or `roots.work`); they never fall b
 writing elsewhere in the README/release tree. Fallback artifacts remain local, not visible
 to other devices. Pass the returned `instance_root` to `run_stage.py` to resume the same
 workspace; do not run two instances against one root concurrently.
+Initialize/reuse the workspace before creating the episode manifest; `init_episode.py` and
+`run_stage.py` also do this automatically. If a legacy `episodes/<code>.json` already exists
+from a pre-workspace run, preserve it and reconcile/migrate it deliberately at a safe
+boundary—never guess which device owns it or overwrite it automatically.
 
 In shared mode, keep `machine.json` outside the README folder and set
 `shared.enabled=true`, `shared.release_root=<folder containing this README>`, and a device

@@ -25,6 +25,8 @@ quality gate was relaxed.
 - Updated README, PORTING, canonical/Qwen/ASCII runbooks, profile examples, release notes,
   and changelog for README-relative workspace placement, fallback behavior, ACL ownership,
   and timing records.
+- Fixed the device-local fallback candidate resolver defect reported by the Lenovo Legion
+  instance; regression tests cover fallback creation and local cut-PAD provenance.
 
 ## Validation status
 

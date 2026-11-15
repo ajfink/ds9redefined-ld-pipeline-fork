@@ -94,6 +94,9 @@ FROM Version 7 -> Version 8
 - Added per-workspace logging guidance and `scripts/stage_clock.py` for manual stages.
   `run_stage.py` logs active elapsed time and gate/action breakdowns; manual clocks can be
   paused during human gate waits so waiting time is excluded from stage duration.
+- Fixed the README-workspace local-fallback candidate resolver (a missing device-label
+  binding found in the Lenovo Legion device log); added tests for shared-folder creation,
+  local fallback, manifest/log routing, and fallback cut-PAD provenance.
 - Validation: 63 passed, 7 Mac/VapourSynth-only skipped; Python compilation, PowerShell
   parsing, runbook generation, and timing/fallback tests passed. See `V8-RELEASE.md` and the
   V8 entry in the device execution log.

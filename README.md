@@ -591,6 +591,9 @@ falls back to writing elsewhere in the README/release tree. The fallback data is
 won't be visible to other devices until deliberately published/copied. Keep the returned
 `instance_root` for this episode to resume in the same workspace; do not start a second
 concurrent run against it.
+Initialize/reuse it before creating the manifest; the initializer and stage runner also
+resolve it automatically. Preserve and explicitly reconcile any legacy root-level manifest
+rather than copying or overwriting it without confirming ownership.
 
 ```powershell
 $profilePath = '<device-local profile outside the README folder>'
