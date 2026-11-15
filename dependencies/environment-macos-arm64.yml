@@ -1,0 +1,18 @@
+name: ld-pipeline-v7-macos-arm64
+channels:
+  - conda-forge
+dependencies:
+  - python=3.15.2
+  - vapoursynth=82
+  - ffmpeg=9.0.2
+  - zimg
+  - fftw
+  - pkg-config
+  - pip
+  - pip:
+      - numpy==2.5.4
+      - opencv-python-headless==5.0.0
+      - Pillow==13.0.0
+# This pins the direct runtime versions reported by the M5 setup, not every
+# conda transitive build string. Resolve/record a full conda-lock on real Mac
+# hardware before treating this environment as a reproducible release image.

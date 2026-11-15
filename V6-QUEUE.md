@@ -1,8 +1,11 @@
-# Version 6 release plan and deferred follow-ups
+# Version 6 release plan and deferred follow-ups (historical)
 
-**Authoritative marker:** Version 6 (`WORKFLOW_VERSION`). Items marked integrated are
-included in this release; all other entries remain deferred proposals and do not change
-the V6 procedure or authorize untested behavior.
+V6 was released before V7. This file records V6 integration/deferment decisions; the
+current tooling additions and validation boundaries are summarized in `V7-RELEASE.md`.
+
+**Marker at V6 publication:** Version 6 (`WORKFLOW_VERSION` at that release). Items marked
+integrated were included in V6; remaining entries are deferred proposals and do not
+change the V6 procedure or authorize untested behavior.
 
 ## Authority and distribution roles
 

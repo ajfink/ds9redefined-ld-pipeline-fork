@@ -2,6 +2,7 @@
 /machine*.json
 !/machine.example.json
 !/machine-macos.example.json
+!/machine-linux-x86_64.example.json
 /machine-authoring-profile.original.json
 
 # Measured episode state and offline archival/reference material are not part of

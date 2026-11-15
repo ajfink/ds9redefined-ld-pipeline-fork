@@ -1,0 +1,6 @@
+# Workflow V7 candidate direct-package version lock. Python: 3.10.14, Linux x86_64.
+# The shared Python versions are pinned for setup consistency, but Linux has not
+# passed the pipeline's native-plugin or end-to-end workflow validation.
+numpy==2.2.6
+opencv-python-headless==4.13.0.92
+Pillow==12.2.0

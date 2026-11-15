@@ -1,0 +1,6 @@
+# Workflow V7 direct-package version lock. Python: 3.10.14, Windows x86_64.
+# Verified against the V7 authoring environment. Install into the interpreter
+# selected by machine.json with scripts/bootstrap_deps.py --install.
+numpy==2.2.6
+opencv-python==4.13.0.92
+Pillow==12.2.0

@@ -1,0 +1,18 @@
+name: ld-pipeline-v7-linux-x86_64-candidate
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10.14
+  - vapoursynth=82
+  - ffmpeg=9.0.2
+  - zimg
+  - fftw
+  - pkg-config
+  - pip
+  - pip:
+      - numpy==2.2.6
+      - opencv-python-headless==4.13.0.92
+      - Pillow==12.2.0
+# Candidate environment only. Linux x86_64 lacks an end-to-end pipeline pass;
+# Decode-Orc, TIVTC/BestSource plugin builds, PowerShell integration, and final
+# delivery must be validated before this becomes a supported platform recipe.

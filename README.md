@@ -1,6 +1,6 @@
 # DS9 LaserDisc OpenCode Operator Pack
 
-**Workflow version: 6** — check `WORKFLOW_VERSION` and follow the core-change/device-log
+**Workflow version: 7** — check `WORKFLOW_VERSION` and follow the core-change/device-log
 rules in `WORKFLOW_VERSIONING.md` before editing or syncing workflow files.
 
 **Design goal:** make the workflow clear and reliable enough for capable free or low-cost
@@ -21,10 +21,11 @@ ACTION/VERIFY steps. If the configured fallback `opencode-go/gpt-6-luna` is avai
 use `DS9 LaserDisc OpenCode Runbook - Qwen4B-Luna.md` for its narrowly gated fallback
 protocol. The main runbook remains the technical source of truth.
 
-Windows x64 is the authoritative/reference workflow. V6 also includes an Apple-silicon
+Windows x64 is the authoritative/reference workflow. V7 also includes an Apple-silicon
 macOS VapourSynth path; its helpers and M5 stage evidence are included, but a fresh-Mac
-end-to-end V6 delivery has not yet been validated. Linux and ARM64 platforms remain
-research-only unless marked otherwise. This is not a single unattended encoder: OpenCode
+end-to-end V7 delivery has not yet been validated. Linux x86_64 dependency locks are
+provided, but the Linux workflow is still unvalidated; Linux ARM64 and Windows ARM64 also
+remain untested. This is not a single unattended encoder: OpenCode
 measures per-episode values, records them in a manifest, runs gated helpers, and stops at
 ambiguity/failure. Topaz is never launched automatically.
 
@@ -120,11 +121,14 @@ fallback route is unavailable, ask the user rather than silently changing models
    This initializes/discovers paths; it is not the final readiness pass. It saves an
    existing profile to a unique dated backup before writing; keep that backup. If several
    plausible work roots exist, discovery warns and requires an explicit `roots.work` rather
-    than silently selecting one. On Mac, do not
-    run the Windows preflight: copy `machine-macos.example.json` to a local
-    `machine.json`, replace the example paths, and follow the fresh-Mac bootstrap in
-    `PORTING.md`. Set custom roots that discovery could not determine, especially
+   than silently selecting one. On Mac, do not
+   run the Windows preflight: copy `machine-macos.example.json` to a local
+   `machine.json`, replace the example paths, and follow the fresh-Mac bootstrap in
+   `PORTING.md`. Set custom roots that discovery could not determine, especially
    `roots.work` and `roots.dvd_root`; set `upscale_root` only for legacy E01 files.
+   On Linux x86_64, a local copy may start from `machine-linux-x86_64.example.json` for
+   dependency/capability checks only; the Linux production workflow is not validated and
+   `doctor.py` will not mark it episode-ready.
 2. With the local profile paths known, run the Tool-update gate below. If components are
    missing or out of date, present each installed/latest version and ask whether to
    install/update specific components, **Update all**, or **Continue anyway**. Apply only
@@ -133,12 +137,18 @@ fallback route is unavailable, ask the user rather than silently changing models
    packages. The bundle includes `ffms2.dll` and `RemapFrames_x64.dll`; machine-specific
    TFM/TDecimate/QTGMC plugins must also be available to AviSynth+. On Mac, use the Mac
    component list in `PORTING.md`.
-3. After updates, or after the user chooses **Continue anyway**, rerun Windows preflight
-   and require **PREFLIGHT OK** plus exit code 0. On Mac, run
-   `python scripts/preflight_mac.py`; resolve required failures, but do not treat its
-   capability result as end-to-end workflow validation. `Continue anyway` does not
-   waive required capability/QC gates.
-4. For a job-specific output location, update `roots.out` or pass it as the manifest's
+3. Check pinned direct Python package versions with the read-only default:
+   `python scripts/bootstrap_deps.py --print --json`. If packages are missing/mismatched,
+   show the delta and get the user's install/update choice before running
+   `python scripts/bootstrap_deps.py --install`. It modifies only the selected Python
+   interpreter's listed direct packages; native tools/plugins are separate. Linux x86_64
+   is a dependency candidate, not production-workflow support.
+4. Run `python scripts/doctor.py --json` after profile/tool selection. It delegates to
+   Windows or Mac preflight, checks the Python lock, and emits one report. Require
+   `ready_for_episode: true`; Mac's doctor result is component capability only, not
+   end-to-end certification. Linux deliberately returns not-ready/untested. Continue
+   anyway does not waive required capability/QC gates.
+5. For a job-specific output location, update `roots.out` or pass it as the manifest's
    file root. Do not modify scripts to insert drive letters.
 
 Windows `preflight.ps1` checks FFmpeg/AviSynth/x265 capabilities and functionally
@@ -147,7 +157,8 @@ QTGMC remains conditional: if measured inserts require it, validate QTGMC and it
 dependencies before that repair stage. Preflight also checks RIFE weights, bundled AVS
 DLLs, DVD-root mapping, Python dependencies, and free space. The Mac
 `preflight_mac.py` checks its applicable FFmpeg/VapourSynth/Orc toolchain, profile roots,
-and free space. Neither check is a quality pass or an end-to-end episode validation.
+and free space. Neither platform check is a quality pass or an end-to-end episode
+validation. `scripts/doctor.py` is the unified read-only entry point; it installs nothing.
 
 ### Required tool-update gate (Windows and Mac)
 
@@ -464,7 +475,12 @@ permission.
 |---|---|
 | `preflight.ps1` | Backup-safe profile discovery, ambiguity-safe root selection, and checks; Windows also smoke-tests LSMASHSource/TFM/TDecimate, with QTGMC conditional on measured inserts |
 | `scripts/preflight_mac.py` | Mac profile/tool/root/VapourSynth capability check (`--episode` and `--json` supported); checks workflow version and does not prove full workflow readiness |
+| `scripts/doctor.py` | Unified read-only profile/dependency/platform report; Linux x86_64 remains explicitly not episode-ready |
+| `scripts/bootstrap_deps.py` / `dependencies/` | Direct Python version locks for Windows x64, Mac arm64, and candidate Linux x86_64; check-only by default, `--install` is explicit |
+| `scripts/run_stage.py` | Allowlisted stage dispatcher; dry-run plan by default, explicit `--execute`, doctor/manifest gates, and unique command logs/reports |
+| `scripts/generate_runbooks.py` / `templates/runbooks/` | Regenerate model variants from the canonical runbook plus model-policy templates; `--check` detects drift |
 | `WORKFLOW_VERSION` / `WORKFLOW_VERSIONING.md` | Authoritative workflow version and core-change/device-log rules |
+| `V7-RELEASE.md` | V7 tooling overview and platform validation boundaries |
 | `changelog.txt` | Short release history; retrospective V1–V5 notes and accepted V6 changes |
 | `Cut Pad Images/<episode>/` | Curated single-frame DVD cut-PAD repair stills, named by verified DVD timestamp/frame; not a DVD reference substitute |
 | `scripts/download_archive.ps1` | Metadata-verified, resumable source download; ListOnly prints capture/file totals, aggregate bytes, and a projected free-space gate |
@@ -493,6 +509,23 @@ permission.
 | `scripts/av_check_output.py` / `scripts/ld_only_sync_check.py` / `sync_check.py` | DVD-referenced absolute A/V, no-DVD exact timeline/sample-budget validation, and between-track drift checks |
 | `scripts/qc_report.py` | Final delivery report; skipped/unverified required checks fail closed |
 | `scripts/regen_plain_text.py` | Rebuild the ASCII companion from the main Markdown runbook |
+
+### V7 entry points
+
+```text
+python scripts/bootstrap_deps.py --print --json
+python scripts/doctor.py --json [--episode S01E07]
+python scripts/run_stage.py --list
+python scripts/run_stage.py --episode S01E07 --stage encode-final        # plan only
+python scripts/run_stage.py --episode S01E07 --stage encode-final --execute
+python scripts/generate_runbooks.py --check
+```
+
+The stage runner dispatches one allowlisted action at a time; it is not an unattended
+whole-project pipeline. Write-capable stages require `--execute`, a doctor pass, and their
+declared manifest gates. It never runs arbitrary shell text, performs cleanup, or replaces
+helper-level refusal/QC checks. Linux x86_64 can check its candidate dependency lock but
+production stage execution is blocked until the complete Linux workflow is validated.
 
 The example manifests (`S01E01`, `S01E04`, `S01E05`) and `reference-runs/` are
 **measured historical regression data only**. They help interpret expected file

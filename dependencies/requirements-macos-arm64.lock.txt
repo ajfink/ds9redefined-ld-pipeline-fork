@@ -1,0 +1,7 @@
+# Workflow V7 direct-package version lock. Python: 3.15.2, macOS arm64.
+# Python package versions match the M5 component report; a fresh V7 end-to-end
+# Mac run is still outstanding. VapourSynth and native plugins are in the
+# accompanying conda environment recipe, not these pip requirements.
+numpy==2.5.4
+opencv-python-headless==5.0.0
+Pillow==13.0.0

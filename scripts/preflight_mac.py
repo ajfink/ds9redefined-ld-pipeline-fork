@@ -440,12 +440,24 @@ def main() -> int:
         "pad_audit.py", "fullres_check.py", "rife_padframes.py",
         "build_padfix_vpy.py", "encode_episode_mac.py", "remux_padfixed_mac.py",
         "vspipe_util.py", "build_motion_trace.py", "qc_report.py",
-        "verify_pad_identities.py", "check_space_budget.py",
+        "verify_pad_identities.py", "check_space_budget.py", "doctor.py",
+        "bootstrap_deps.py", "dependency_lock.py", "run_stage.py",
+        "generate_runbooks.py",
     )
     missing_scripts = [name for name in required_scripts if not (scripts_dir / name).is_file()]
     results.add("bundle:workflow-scripts", "PASS" if not missing_scripts else "FAIL",
                 f"{len(required_scripts) - len(missing_scripts)}/{len(required_scripts)} present"
                 if not missing_scripts else "missing: " + ", ".join(missing_scripts))
+    deps_dir = Path(__file__).resolve().parent.parent / "dependencies"
+    dependency_files = ("requirements-windows-x86_64.lock.txt",
+                        "requirements-macos-arm64.lock.txt",
+                        "requirements-linux-x86_64.lock.txt",
+                        "environment-macos-arm64.yml",
+                        "environment-linux-x86_64.yml")
+    missing_dependencies = [name for name in dependency_files if not (deps_dir / name).is_file()]
+    results.add("bundle:dependency-locks", "PASS" if not missing_dependencies else "FAIL",
+                f"{len(dependency_files) - len(missing_dependencies)}/{len(dependency_files)} present"
+                if not missing_dependencies else "missing: " + ", ".join(missing_dependencies))
 
     if args.episode:
         episode_path = profile_path.parent / "episodes" / f"{args.episode}.json"

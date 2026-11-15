@@ -1,0 +1,50 @@
+{
+  "_readme": "Candidate Linux x86_64 profile for dependency and capability checks only. The full Linux workflow is not validated/supported. Copy locally to machine.json, replace every path, and retain the warning.",
+  "machine": "LINUX-X86_64",
+  "os": "linux",
+  "tools": {
+    "python": "/home/YOUR_ACCOUNT/tools/ld-pipeline-linux/bin/python",
+    "ffmpeg": "/usr/bin/ffmpeg",
+    "ffprobe": "/usr/bin/ffprobe",
+    "orc": "",
+    "pwsh": "/usr/bin/pwsh",
+    "vspipe": "",
+    "rife_engine": "",
+    "rife_model_dir": "",
+    "sevenzip": ""
+  },
+  "roots": {
+    "downloads_root": "/mnt/fast/DS9 downloads",
+    "downloads_template": "DS9 {episode} LaserDisc",
+    "work": "/mnt/fast/ld-work",
+    "probe": "/mnt/fast/ld-work/probe",
+    "avs": "/mnt/fast/ld-work/scripts",
+    "audio": "/mnt/fast/ld-work/audio",
+    "subs": "/mnt/fast/ld-work/subs",
+    "out": "/mnt/fast/ld-work/out",
+    "prores": "/mnt/fast/ld-work/prores",
+    "stack": "/mnt/fast/ld-work/stack",
+    "logs": "/mnt/fast/ld-work/logs",
+    "runbook_dir": "/home/YOUR_ACCOUNT/ld-pipeline",
+    "dvd_root": "",
+    "archive_share": "",
+    "upscale_root": ""
+  },
+  "python": {
+    "interpreter": "/home/YOUR_ACCOUNT/tools/ld-pipeline-linux/bin/python",
+    "require": [
+      "numpy",
+      "cv2",
+      "PIL"
+    ]
+  },
+  "limits": {
+    "min_free_gb": 80,
+    "heavy_jobs": 1,
+    "select_terms_max": 32
+  },
+  "notes": [
+    "Use dependencies/environment-linux-x86_64.yml and the x86_64 direct Python lock for environment preparation.",
+    "Decode-Orc/PowerShell/VapourSynth plugin integration and the complete Linux delivery/QC workflow remain unvalidated. Do not use this profile as a support claim."
+  ]
+}

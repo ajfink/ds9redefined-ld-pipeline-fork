@@ -1,1023 +1,460 @@
-# DS9 LaserDisc → Upscale-Ready Master: Qwen4B + GPT-6 Luna Fallback
+<!-- AUTO-GENERATED: run scripts/generate_runbooks.py. Edit this template and the canonical runbook, not the generated output. -->
+# DS9 LaserDisc Workflow — Qwen4B with GPT-6 Luna fallback
 
-**Primary model:** local `Qwen3.5 4B`.
-**Fallback model:** `opencode-go/gpt-6-luna`, invoked only for the unresolved cases
-listed in this file after the local model completes the prescribed checks.
+**Generated from:** `DS9 LaserDisc OpenCode Runbook.md` and this template. The canonical runbook is the single source for technical procedure and thresholds.
 
-This variant uses exactly the same technical procedure as `Qwen4B.md`; only the
-escalation policy differs. Qwen3.5 4B remains responsible for commands, measurements,
-manifest edits, and all deterministic pass/fail gates.
+## Model operating contract
 
-**Canonical companion:** `DS9 LaserDisc OpenCode Runbook.md`
+Qwen4B is primary. Use `opencode-go/gpt-6-luna` only at an explicit DELEGATE trigger in README or the canonical workflow, and include the relevant artifacts, measurements, and already-attempted checks. Luna advises on that bounded question; it does not authorize a gate bypass, overwrite, install, or release claim. If the fallback is unavailable, ask the user rather than silently changing models.
+
+### Required behavior
+
+1. Read `README.md` and this complete generated guide before starting a job.
+2. Work one bounded stage at a time. After each command, inspect the exit code and declared artifacts; never infer success from a command being launched.
+3. Keep measured values in `episodes/<code>.json`; never copy values from historical examples. Unknowns remain null or unset.
+4. Preserve inputs, manifests, reports, and backups. Never delete or overwrite an existing output unless the script's explicit gate allows it.
+5. Ask when the DVD choice, cut-PAD mapping, or another user decision is required. Follow every VERIFY/STOP gate, including the no-DVD absolute-sync limitation.
+6. If a tool is missing, a capability check fails, or evidence disagrees, stop and report the exact command/output rather than inventing a workaround.
+
+### ACTION / VERIFY / STOP format
+
+- **ACTION:** one command or one bounded inspection, plus the expected artifact.
+- **VERIFY:** exact exit status, report fields, count/hash, or gate evidence that establishes success.
+- **STOP:** state the failed prerequisite/evidence and ask for help; never guess a number or claim a skipped check passed.
+
+---
+
+## Canonical technical workflow
+
+# Canonical technical procedure
 **Plain-text companion:** `DS9 LaserDisc Plain Text Instructions.txt`
 
-This is the same ACTION / VERIFY procedure as `Qwen4B.md`, with an explicit, rarely used GPT-6 Luna fallback policy. The technical procedure is intentionally kept identical to reduce model-variant drift.
+This is a repeatable process, not a license to copy Emissary-specific trims or timing. Anything labeled **MEASURE** must be measured for the current episode. The final product is an upscale-ready MKV; do not launch Topaz automatically.
 
-**This is a repeatable process, not a license to copy Emissary-specific trims or timing.** Anything marked **MEASURE** must be measured for the current episode. Never reuse a number from §11.
+## At a glance
 
-The final product is an upscale-ready MKV. **Do not launch Topaz.**
+1. Confirm the episode/archive/DVD; inventory and hash TBC, JSON, and raw EFM inputs.
+2. Build the weighted ProRes master from the complete capture set (the count varies); require stack evidence, expected frame count, and zero decode faults.
+3. Measure cadence, repair only identified interlaced inserts, measure head/tail trims, and keep the frame domains consistent.
+4. Decode raw EFM; measure absolute A/V offset and rate per episode; correct only the measured drift.
+5. Measure the DVD↔LD picture map, then prepare replacements for only confirmed post-IVTC `PAD_1` blinks in the source-derived AVS.
+6. Validate without encoding; encode once to x265 CRF 14 / slow / tune grain / Main 10, then stream-copy mux optional tracks.
+7. Piecewise-retime DVD 5.1 and English SRT; full-decode and QC the final output.
+8. Leave Topaz for manual use.
 
----
+The numbered sections below are the actual procedure and gates; this list is only the orientation/quick review.
 
-## 0. How to use this runbook
+During a long source download, do useful independent prep rather than waiting: verify
+and probe the matching DVD, check machine readiness, and preserve clearly labeled
+preliminary evidence. Do not create/validate the episode manifest until the downloader
+has verified every selected source file. DVD-only prep does not authorize guessing any
+LD cadence, timing, audio, or picture-map value.
 
-### Your operating rules
 
-1. Execute every mechanical step in order. A mechanical step is one where both the action and the success condition are written down below.
-2. Do **not** ask before doing a mechanical step. Just do it and check the VERIFY line.
-3. On an ambiguous measurement, finish every local check in the relevant section first. If an explicit fallback trigger below applies, use GPT-6 Luna once, then rerun the VERIFY. Otherwise STOP and ask the user. Hard failures and numeric gate failures are never sent to a model for overruling.
-4. A failed hash, missing file, command error, frame-count mismatch, or failed numeric gate is a factual failure. Do not ask GPT-6 to overrule it; report **step, command, actual result, expected result, and artifact path**.
-5. Never guess a number. Never claim a gate passed without running the check.
-6. A cleanup request applies only to the exact user-named download folder. Use the
-   Recycle Bin by default; permanent deletion needs explicit confirmation for that
-  exact path. Never delete a reference DVD, master, output, or sibling asset. If the
-  target is missing, report that and stop.
-- If cleanup and a new episode job are in one prompt, mark cleanup `done/not found/blocked`
-  and keep its target scope closed. A missing download folder is not a reason to search
-  for or delete its DVD. Do not ask the user again after they already chose a sequence.
-- In PowerShell, `Remove-Item`/`rmdir` permanently removes; it does not send data to the
-  Recycle Bin. Do not use it to implement the default cleanup. If a supported Recycle
-  Bin operation is unavailable, stop and ask.
+## 1. OpenCode job brief and machine setup
 
-### Tool, download, and cleanup guard
+**Start with `README.md` in this folder.** It is the current OpenCode entry point and
+machine setup contract. This document remains the detailed procedure; the Qwen
+variants are alternate presentation styles, not separate workflows.
 
-- In this OpenCode setup, `execute`/Code Mode accepts JavaScript only. The
-  `import`/`export` `sourceType: module` error means Python went to the JS parser;
-  use the `shell` tool for Python/PowerShell. Do not retry the same code in `execute`.
-- Shell is Windows PowerShell 5.1: no `&&`, Unix `dir` flags, `rmdir /S /Q`, or textual
-  `timeout 30s; ...`. Set timeouts/background on the shell tool itself. Use one command
-  per call; a semicolon does not stop later commands when an earlier command fails.
-  Correct a shell/tool syntax error once; do not create ad hoc check scripts in CWD.
-- Do not search an entire drive or invent `Search-Path`/`Find-Path` commands. Read
-  `machine.json`, then list/check only the exact profile-rooted path.
-- A preflight passes only with the full `PREFLIGHT OK.` footer and exit code 0. Never
-  call it passed from truncated output or an exit code of 1.
-- "Clean up" is not permanent-delete authorization. Only the exact user-named
-  download directory is in scope; default to the Recycle Bin. Permanent deletion needs
-  explicit confirmation after showing the exact full path, inventory, and size. Never
-  delete or substitute anything under `roots.dvd_root`, `roots.prores`, `roots.out`, or
-  `reference-runs`. If a target is missing, report "not found"; do not infer success.
-  Verify final output and current on-disk QC, and preserve download-manifest/QC evidence.
-- `download-manifest.csv` verifies source hashes/sizes; it is not delivery QC. Read the
-  current on-disk QC report and verify the delivered file; never rely on prior chat
-  memory or manifest presence as proof of QC success.
-- Keep intermediates needed after the current stage under `roots.probe`, `roots.logs`, or
-  their declared output root; OS Temp is disposable only. Do not run Temp cleanup during a
-  job or continue if a required intermediate vanished without verifying/regenerating it.
-- Before each new episode, follow the key-tool update gate and Windows/Mac tool matrix
-  in `README.md` / `PORTING.md`. Check upstream versions for the exact profile-resolved
-  tools. If any are missing or outdated, show the component/state/version list and ask
-  whether to install/update specific components, **Update all**, or **Continue anyway**. Apply only the user's
-  choice, record it, and freeze the toolchain after the episode starts. Do not use blanket
-  package upgrades.
-- Resolve one exact `$source` from the user's path or `roots.downloads_template` and
-  use it unchanged for preview and download. Never lowercase/rename it. The downloader
-  preview prints exact labels/count, aggregate bytes, and `SPACE GATE`; require PASS.
-- Run large transfers with the shell tool's background mode and save its job ID. A
-  short foreground timeout is an interrupted command, not evidence of a network stall.
-  The downloader writes its manifest only after every selected file is complete and
-  verified. If a command times out, check process status and timed file-size samples;
-  resume the same destination only after confirming the previous process is stopped.
-  Never run two downloaders for the same item.
- - Sequence is: key-tool update inventory -> ask update choice -> apply selected updates
-    or record Continue anyway -> machine preflight -> list-only/space gate -> start one
-    verified download -> immediately work ahead on independent prep (DVD probe, readiness,
-    space estimates, next-step commands; do not wait idle) -> complete verified download
-    -> `init_episode.py` -> `validate_episode.py --stage inputs`. Do not upgrade mid-episode,
-   validate before download completion, or create the manifest before the download manifest exists.
- - Record `WORKFLOW_VERSION` at job start and confirm it before each stage. If workflow files
-   or version change mid-job, stop before the next stage and reconcile the current gate.
-   Before write-heavy stages, run `scripts/check_space_budget.py` with an episode-specific
-   peak-space estimate; preserve the configured reserve.
+The user supplies the verified Archive item URL, the destination folder for source
+files, and a matching DVD episode/version if available. Verify episode/title from the
+Archive/capture evidence and DVD when present; ask if they disagree. If no DVD is
+available, ask whether the user explicitly wants the LD-only timing path. The final
+output folder defaults to `roots.out` in `machine.json`; record any override.
 
-### Legend
+### Tool choice and preservation gate
 
-| Marker | Meaning |
-|---|---|
-| **ACTION** | Do this exactly. |
-| **VERIFY** | Check this. It must pass before continuing. |
-| **DELEGATE** | After local checks, send a batched evidence packet to `opencode-go/gpt-6-luna` via the configured `/deep` route. |
-| **STOP** | Hard failure or ambiguity unresolved after one permitted fallback. |
-| **TRAP** | A known failure. Read before acting. |
-| **MEASURE** | A value you must obtain for *this* episode. Never copy one from §11. |
+- `execute`/Code Mode in this OpenCode setup is JavaScript, not a Python or PowerShell
+  terminal. If Python is sent there and the tool reports an `import`/`export`
+  `sourceType: module` parse error, switch to `shell`; do not retry Python in `execute`.
+- The Windows shell is PowerShell 5.1. Avoid `&&`, Unix/cmd flags, and textual
+  `timeout 30s; command` wrappers. Configure timeout/background in the tool call and
+  run destructive operations as a separate call with a verified full path.
+- Do not treat truncated preflight output as success. Require the full `PREFLIGHT OK.`
+  footer and exit code 0.
+- “Clean up” does not mean permanent delete. Only the exact user-named download
+  directory can be considered. Never infer a DVD, reference master, output, or sibling
+  folder as a substitute target. Default to Recycle Bin; permanent removal requires
+  explicit confirmation for that exact path. If it is already missing, report that
+  fact; `PathNotFound` is not proof that deletion succeeded.
+- Before any source cleanup, verify the final delivered file and current on-disk QC
+  report, preserve the download manifest/QC provenance, and check that the target is
+  under the configured downloads root—not `roots.dvd_root`, `roots.prores`, `roots.out`,
+  or `reference-runs`.
+- `download-manifest.csv` proves only source file size/MD5 verification; it is not
+  delivery QC. Verify the delivered media and current `qc_report.py` output on disk,
+  not from prior conversation memory or manifest presence.
 
-### GPT-6 Luna fallback contract (rare, evidence-only)
+Before downloading or rendering, complete the cross-platform key-tool update gate in
+`README.md` / `PORTING.md`, then run the bundle's `preflight.ps1` on Windows. On Mac,
+use the platform-specific capability checks in `PORTING.md`; this does not imply the
+full Mac pipeline is validated. If `machine.json`
+belongs to another computer, `preflight.ps1 -Write` initializes a new profile from the
+template. Set any roots not discoverable on that machine and rerun until the full output
+ends in `PREFLIGHT OK.` **and exit code is 0**. Do not truncate the log and infer a pass
+from partial output, or treat exit code 1 as expected. Do not replace profile-resolved
+paths with `Z:` or `X:` constants.
+Record `WORKFLOW_VERSION` in the device/job log before starting. Confirm it has not changed
+before every stage; if core files or the version change mid-job, pause before the next
+stage, re-read its current instructions, and reconcile rather than mixing procedures.
 
-1. Qwen3.5 4B runs all commands and obtains all measurements first.
-2. Use `/deep <task>` with target `opencode-go/gpt-6-luna` only for a listed ambiguous case. Do not delegate routine file checks, arithmetic, path lookup, command execution, or explicit numeric gates.
-3. Send one batch containing: episode/section; exact question; relevant measurements and their units; log/report paths; methods that agree/disagree; and which VERIFY checks passed.
-4. Require the response format: `Decision: PASS / FAIL / MEASURE MORE / STOP; Evidence: ...; Next action: ...`.
-5. Apply the answer only if the next VERIFY passes. If `/deep` cannot select this model, or the answer is inconclusive/contradicts a hard gate, STOP and ask the user. Never silently substitute another model.
-
-### 0.5 Exact fallback triggers
-
-Use `/deep` only after local checks are complete and one of these remains unresolved:
-
-1. Archive/DVD identity still conflicts after metadata and FFprobe checks.
-2. Stack metrics conflict or the alignment sweep has no unique, supported peak.
-3. Cadence/insert treatment remains ambiguous after the full TFM and motion review.
-4. Multiple fade-up/trim candidates remain indistinguishable after descriptor checks.
-5. Audio-rate fits are statistically inconclusive or independent methods conflict.
-6. PAD/content/cut classification remains ambiguous after full-raster, flank, and DVD checks.
-7. Break-edge methods still disagree by more than 3 frames after one remeasurement; send one batched request.
-8. A retime gap remains negative after verifying signs and silence boundaries.
-9. Independent tail-alignment windows conflict after remeasurement.
-10. A black hit remains unclassified after PAD-map/full-raster/DVD checks.
-
-Never invoke the fallback for a missing file, hash/size mismatch, command error, frame-count mismatch, out-of-threshold QC value, or routine script execution.
-
-### Stop/fallback checkpoints
-
-Read these now. If an ambiguity-only STOP appears, check the exact fallback triggers in section 0.5 first. Factual failures remain STOP.
-
-1. §1 — DVD or archive item is ambiguous.
-2. §3 — stack refresh reports a reference that is not input 1, or a gate fails.
-3. §4 — cadence VERDICT is not a clean uniform 3:2, or the fade-up cannot be anchored.
-4. §5 — the audio rate fit is inconclusive or the act breaks disagree.
-5. §6 — a dark single-frame event cannot be classified as PAD vs real content.
-6. §7 — the DVD↔LD offset measurements disagree beyond tolerance.
-7. §7 — a retime gap comes out negative.
-8. §10 — any QC item fails.
-
----
-
-## 1. Job brief and machine setup
-
-### ACTION - read the canonical entry point first
-
-Read `README.md` in this folder. It defines the current machine/profile setup, the
-Archive/download inputs and optional matching DVD choice, the bundled helpers, and the final QC contract. This Qwen variant
-provides the ACTION / VERIFY / STOP presentation of the detailed procedure; it does
-not override the README or manifest.
-
-### ACTION - use the profile, never fixed drive letters
-
-On Windows, run `preflight.ps1`; on macOS, copy `machine-macos.example.json` to local
-`machine.json`, replace all example paths, and run `python scripts/preflight_mac.py`.
-Resolve tools and roots only from that profile. Mac V6 still needs a fresh-host
-end-to-end delivery/QC before it can be claimed fully validated. Do not paste another
-machine's drive or home-directory paths into commands.
-
-Run commands from this bundle folder. Initialize the job variables from the profile
-and the three inputs supplied by the user:
+Run commands from this folder and initialize the measured job variables from the
+profile and the three user inputs (do not copy another episode's values):
 
 ```powershell
 $profile = Get-Content .\machine.json -Raw | ConvertFrom-Json
-$ep = '<derive and verify from Archive/capture names and DVD if present>'
+$ep = '<derive and verify from Archive/DVD>'
 $title = '<verified title>'
 $url = '<user-provided Archive item URL>'
-$source = '<user-provided destination; if omitted, derive it from the profile template>'
-$dvd = '<verified matching DVD MKV path, or NONE after explicit no-DVD approval>'
+$source = '<the user-provided download destination; if omitted, derive it in section 2>'
+$dvd = '<verified DVD MKV path, or NONE after explicit no-DVD approval>'
 $work = $profile.roots.work
 $orc = $profile.tools.orc
 $ff = $profile.tools.ffmpeg
 $fp = $profile.tools.ffprobe
 ```
 
-### ACTION - confirm the DVD and Archive item
+- Per-episode measurements and file references: `episodes\<code>.json`.
+- Bundle stage scripts: `scripts\`; Orc project template: `templates\stack_template.orcprj`.
+- Final gate: `python scripts\qc_report.py --episode <code>`; require exit 0 and inspect
+  `roots.probe\<code>-qc-report.md`.
+- The detailed E01/E04/E05 figures below are historical regression evidence only. Never
+  copy their frame counts, trim values, audio rates/skips, alignment maps, or retime steps.
 
-The user's job prompt supplies an Archive item URL, a download destination, and a matching
-DVD version if available. Verify the URL/DVD identity with metadata/FFprobe. If no DVD is
-available, ask whether the user explicitly wants LD-only timing; if shared cut-pad images
-exist, ask whether they want to use them. An Archive item title that repeats its slug is
-not, by itself, a human episode title. Derive the title from verified capture/Archive
-evidence and DVD evidence when present; if identity is ambiguous, STOP and ask.
-
-### VERIFY
-
-- Archive URL resolves to the intended episode.
-- If a DVD is supplied, its title/streams match the episode; if absent, the user's
-  explicit LD-only choice is recorded. No-DVD mode cannot provide DVD 5.1/SRT or an
-  external absolute A/V cross-correlation.
-- Destination and profile work/output roots have sufficient free space.
-- The episode manifest will be created by `init_episode.py` after all source files verify;
-  do not create a placeholder manifest to get ahead of the download. Unknown measurements
-  remain null/unset, not copied from section 11.
-
-### Other rules
-
-- Derive `$source` from the profile template if the user supplied no destination:
-  `Join-Path $profile.roots.downloads_root ($profile.roots.downloads_template.Replace('{episode}', $ep))`.
-- Run `scripts/download_archive.ps1 -Url $url -Destination $source -ListOnly` first;
-  require exact capture labels/count and `SPACE GATE PASS`. Do not estimate the item
-  size by hand. Capture complete output and save `$LASTEXITCODE` before inspecting it;
-  do not pipe the running command to `Select-Object -First` because that can break the
-  pipe and produce a false `-1` exit. Launch the same command without `-ListOnly` in
-  shell background mode.
-- Wait for the downloader's final all-files-verified message and `download-manifest.csv`
-  before running `init_episode.py`; only then run `validate_episode.py --episode <ep>
-  --stage inputs`. No manifest during a partial download is expected.
-- Use `scripts/select_stack_reference.py` for a fresh graph/reference refresh; it never
-  renders. Follow ACTION 3.4 for the explicit render command and output gates.
-- `scripts/build_map.ps1`, `scripts/encode_episode.ps1`, and the PAD/QC scripts resolve
-  paths from the profile and manifest.
-- Preserve inputs and logs; never overwrite or clean files without explicit approval.
-- DVD picture-map/edge adjudication and audio-rate fitting remain measurement-led.
-  Once the manifest contains the adjudicated schedule, use
-  `scripts\retime_dvd_assets.py`; never run E04/E05-specific retime scripts on a new
-  episode. If alignment/edge measurements cannot be validated, STOP.
-- Emissary is the only two-part episode. Its per-part workflow is not covered by the
-  generic one-part encoder/QC.
-
-### Copy/paste starter prompt (for the user)
+### Copy/paste job prompt
 
 ```text
-Read README.md, then DS9 LaserDisc OpenCode Runbook - Qwen4B-Luna.md.
+Read README.md and DS9 LaserDisc OpenCode Runbook.md in this folder.
+Check key-tool versions in PORTING.md before downloading. If required components are
+missing or outdated, show the state/latest-version list and ask whether to install/update
+specific components, Update all, or Continue anyway; apply only the user's choice. Do not
+upgrade mid-episode.
 LaserDisc Archive URL: <https://archive.org/details/...>
 Save source files to: <absolute folder path>
 Matching DVD episode/version (optional; path or NONE): <path or NONE>
-If NONE: ask whether to proceed with LD-only duration/PAD audio timing.
-If NONE and Cut Pad Images/<episode> has PNGs: ask whether to use shared stills for confirmed cut PADs.
-Final output folder (optional): <path, or machine.json roots.out>
-Derive and verify episode/title. While the verified download runs, do the independent
-DVD/machine prep in section 2. Measure every timing only when its required artifacts
-exist; update episodes/<code>.json and follow each VERIFY/STOP gate. Preserve inputs and
-deliver only after qc_report exits 0.
-Never delete a reference DVD or any path outside an exact user-named download folder.
-No Topaz.
+If NONE: ask whether to proceed using the LD-only duration/PAD audio path.
+If NONE and Cut Pad Images/<episode> contains PNGs: ask whether to use them for confirmed cut PADs.
+Final output folder (optional): <path, or use machine.json roots.out>
+Derive and verify episode/title from the Archive and DVD. Run the complete workflow,
+measure every episode-specific value, update episodes/<code>.json, and use the bundled
+scripts. Stop if a tool/input/gate is missing or ambiguous. Do not reuse historical
+numbers or overwrite files. Preserve all assets by default. If I explicitly request
+cleanup, use only the exact download-folder path and Recycle Bin; never delete a
+reference DVD. Permanent deletion requires a separate confirmation for that exact path.
+Do not launch Topaz. Deliver only after QC exits 0.
 ```
 
----
+The bundle is Windows x64 and measurement-led, not unattended. In particular, audio
+rate fitting and DVD picture-map/silence-edge adjudication require the detailed
+procedure. `scripts\retime_dvd_assets.py` applies only the measured manifest schedule;
+if alignment/edge measurements cannot be validated, stop rather than using an E04/E05
+script.
 
 ## 2. Archive pages and input inventory
 
-### ACTION — locate the archive item
+Known Internet Archive item pages:
 
-Known item pages:
+- Emissary Part I: <https://archive.org/details/DS9-S01E01-LaserDisc-Copies>
+- Emissary Part II (item is named S01E02): <https://archive.org/details/DS9-S01E02-LaserDisc-Copies>
+- A Man Alone, one-part example: <https://archive.org/details/DS9-S01E04-LaserDisc-Copies>
+- Past Prologue, one-part example: <https://archive.org/details/DS9-S01E03-LaserDisc-Copies>
+- Other items generally follow `https://archive.org/details/DS9-S01E##-LaserDisc-Copies`; verify the page and title.
 
-- Emissary Part I: `https://archive.org/details/DS9-S01E01-LaserDisc-Copies`
-- Emissary Part II (item is named S01E02): `https://archive.org/details/DS9-S01E02-LaserDisc-Copies`
-- A Man Alone (one-part example): `https://archive.org/details/DS9-S01E04-LaserDisc-Copies`
-- Past Prologue (one-part example): `https://archive.org/details/DS9-S01E03-LaserDisc-Copies`
-- Others generally follow `https://archive.org/details/DS9-S01E##-LaserDisc-Copies`.
+Use the Archive metadata API through `scripts\download_archive.ps1 -ListOnly` to inventory the exact TBCs, paired JSON, raw EFM/EFM.7z, capture labels, sizes, and hashes. Capture sets vary; trust the complete selected filename list and capture count, not a remembered episode pattern. An Archive metadata title equal to the item slug identifies the item, but does not by itself establish the human episode title; verify it against the supplied DVD. The downloader prints aggregate bytes and a projected free-space gate. Require `SPACE GATE PASS` with `limits.min_free_gb` still available; never estimate total size from the TBC count.
 
-**VERIFY** — the page title matches the episode.
+Resolve the download folder once and use the same absolute `$source` path for preview and transfer. If the user did not provide one, derive the profile default:
 
-**Luna fallback - trigger 1 (section 0.5):** only if the local Archive/DVD identity check remains ambiguous.
-**STOP** — if the page and title disagree.
+```powershell
+$source = Join-Path $profile.roots.downloads_root ($profile.roots.downloads_template.Replace('{episode}', $ep))
+```
 
-### ACTION — inventory the captures
+Do not lowercase it, remove spaces, or invent a new folder name. Preview with:
+`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\download_archive.ps1 -Url $url -Destination $source -ListOnly`.
+Capture the complete process output and save `$LASTEXITCODE` immediately after it exits;
+only then filter or truncate the captured output. Piping the running downloader directly
+to `Select-Object -First` can close the pipe early and yield a false broken-pipe exit code.
 
-Use the item's "Show All"/original files and `*_files.xml` metadata. Record for every capture:
+The downloader accepts only Archive item URLs, fetches TBC + paired JSON + raw EFM/EFM.7z (never `.pcm`/`.log`), verifies Archive size/MD5, resumes partial files in the same destination, and never deletes an existing file. It writes `download-manifest.csv` only after all selected files are complete and verified; no manifest during an active/partial transfer is normal.
 
-- capture label (L1, L2, M1, P1, P2, P3, ...)
-- `.tbc` size + checksum
-- `.tbc.json` size + checksum
-- whether a **raw `.efm`** (or `.efm.7z`) exists
-- file sizes and checksums
+Launch large transfers with the OpenCode shell tool's **background** option and retain its job ID/log. Do not use a short foreground timeout or a textual `timeout` prefix. Run one downloader per item. If a tool call times out, check whether its process is still alive and sample the active file size twice. A stable size for five minutes indicates a stall only if the same transfer process is confirmed alive. If the process exited, report “interrupted”, then rerun the identical command to resume; do not claim it is still downloading. Preserve the final manifest.
 
-**TRAP** — labels and counts vary per item. Emissary used L1/M1/P1/P2/P3/P4; A Man Alone and Past Prologue have L1/L2/M1/P1/P2/P3. Use the **actual complete set**, never a remembered set.
+If partial files are found in a different folder from `$source`, do not start a second
+destination. Verify whether a downloader is active, inventory the exact partials, then
+ask the user whether to resume there (and record the root override) or move them to the
+profile-derived folder. Move only after confirming the destination has no conflicts;
+do not delete the old partial folder until the resumed download verifies.
 
-**TRAP** — raw EFM availability varies per capture. E04 shipped raw EFM for L1/P1/P2/P3 but only uploader `.pcm` for L2/M1. **A capture without raw EFM cannot be audio-verified.** Record this before choosing the audio source.
+### Independent prep while the download runs
 
-**VERIFY** — every large TBC and JSON has an individually checked hash/size. Do **not** trust a generic "PARTIAL" status without checking each file.
+Do not leave a multi-hour transfer as dead time. After confirming the transfer is healthy,
+use this period for work that does not depend on the LD capture files:
 
-**ACTION** - check free space on the user-provided download destination and configured local `roots.work`; do not assume Z: or X:.
+1. **Verify the DVD.** Check the exact supplied path (or an unambiguous exact match under
+   the configured DVD root), confirm the episode/title independently of the Archive
+   slug, and record file size/hash. If the identity is ambiguous or conflicts, stop and
+   ask; never substitute another episode's DVD.
+2. **Probe DVD streams and timeline.** Record video codec/dimensions/frame count and
+   measured presentation-rate evidence, audio codec/channel layouts/durations, and
+   subtitle types/languages. For an available English SRT, record its cue count and
+   check cues are monotonic and within the DVD duration. Do not trust `r_frame_rate` by
+   itself. If DVD packet PTS are non-monotonic, decode sequentially; never use `-ss`.
+ 3. **Check readiness.** Confirm the version inventory/update choice made before the
+    transfer, profile roots, download/work free-space gates, and preflight/capabilities.
+    Do not install updates mid-transfer/episode; if an update is discovered now, defer it
+    to the next episode or ask the user whether to pause and redo the update gate. Save
+    probe outputs and a short prep record under `roots.probe` or
+   `roots.logs`, clearly labeling each fact with its source; do not edit the DVD or place
+   analysis products beside user source files.
+4. **Protect the transfer and evidence.** Prefer lightweight metadata/probe work while
+   downloading. If a full sequential DVD decode or other prep would contend with the
+   download's disk/network/system resources, defer it until the transfer completes. Keep
+   one heavy job at a time. Record likely optional 5.1/SRT availability only as a
+   candidate; leave optional deliverable tracks disabled until their sources and
+   retiming data are verified.
 
-**STOP** — if hashes/sizes cannot be verified, or free space is insufficient and you are unsure which drive to use.
+Do **not** build, refresh, or render the weighted stack before every capture file is
+verified. DVD-only prep cannot measure the DVD↔LD picture map, LD audio rate/offset,
+cadence, trims, or retime schedule. Do not use another episode's measurements. Once
+`init_episode.py` creates the manifest after download verification, populate only supported
+manifest fields with confirmed facts; retain the detailed DVD probe and its provenance in
+`roots.probe` / `roots.logs`. Do not add ad hoc manifest keys. Leave uncertain values unset.
+If a proposed prep step requires an episode manifest or verified LD artifact, queue it
+for its proper later gate; never fabricate a temporary manifest to bypass that requirement.
 
-### ACTION — download with a resumable, verified job
-
-Use the bundled `scripts\download_archive.ps1`; first run with `-ListOnly`, then download. The downloader must:
-
-1. Fetch **only** required inputs: TBC + JSON + raw EFM. **Never** the archive `.pcm` or `.log`.
-2. Check each file's size and MD5 against item metadata.
-3. Write a `download-manifest.csv`.
-4. Be idempotent: skip verified files, resume partials with `curl --continue-at -`.
-5. Run detached so it survives interruptions.
-
-**Monitoring** — every ~30 min: sample the active curl target's size over 30 s.
-
-| Observation | Meaning | Action |
-|---|---|---|
-| Growing | healthy (40–55 MiB/s; ~454 GiB ≈ 2.5 h) | keep waiting |
-| **No growth for ~5 min** | stalled | kill only the curl process, restart the downloader |
-
-**VERIFY** — on restart, the script re-verifies finished files by MD5 (a few minutes per 74 GB) and resumes the partial from its exact byte offset.
-
-**TRAP** — never run two downloaders for the same item concurrently.
-
-### ACTION — use download time for independent prep
-
-Once the transfer is confirmed healthy, do useful prep that does not require LD captures:
-
-1. If a DVD is supplied, verify its exact path/version and episode/title against the
-   Archive; if it is absent, continue only after the user's explicit no-DVD choice. Never
-   substitute another episode's disc. No-DVD mode cannot provide DVD 5.1/SRT or an
-   external absolute A/V cross-correlation.
-2. Probe and record DVD video, audio, and subtitle streams: codecs, dimensions, frame
-   count/rate evidence, durations, audio channel layouts, subtitle format/language, and
-   source size/hash. For English SRT, check cue count, monotonicity, and range. Do not
-   trust `r_frame_rate` alone; if packet PTS are non-monotonic, decode sequentially and
-   never use `-ss`.
-3. Confirm the version inventory/update choice made before the transfer, profile roots,
-   free-space gates, and preflight/capabilities. Do not install updates mid-transfer or
-   mid-episode; if an update is discovered now, defer it to the next episode or ask whether
-   to pause and redo the update gate. Save probe output and a provenance-labeled prep note
-   under `roots.probe` or `roots.logs`; do not modify the source DVD.
-4. Prefer lightweight prep during the transfer. Defer a full DVD decode if it would
-   contend with the download's disk or system resources. Record possible DVD 5.1/SRT
-   availability as a candidate only; keep optional deliverable tracks disabled until
-   source and retiming data are verified.
-
-**VERIFY** — DVD facts and their evidence are saved outside source folders, with
-uncertain facts marked unknown. Do not populate the episode manifest yet.
-
-**TRAP** — do not build/refresh/render the stack until every capture verifies. DVD-only
-prep cannot measure the DVD↔LD picture map, LD audio rate/offset, cadence, trims, or
-retiming schedule. Never copy another episode's values or fabricate a temporary manifest.
-
-After all files verify, initialize with `python scripts\\init_episode.py --url <Archive-URL>
---downloads <folder> --dvd <DVD.mkv>` or, only after explicit user approval,
-`--no-dvd [--cut-pad-images use|skip]`. Confirm the derived episode/title/capture
-inventory and platform script file keys (`.avs` Windows / `.vpy` Mac), then run
-`python scripts\\validate_episode.py --episode <ep> --stage inputs`. Add `ld_native` and
-`ld_corrected` file keys only after the audio capture and correction rate are measured;
-do not guess those filenames during initialization.
-Set `capture_count = len(episodes[ep].captures)` from that manifest and use it in all
-source/map/render checks. Do not fill stack/audio/video measurements yet; obtain them
-in the following stages.
-
----
+After download, initialize without guessing measurements:
+`python scripts\init_episode.py --url <Archive-URL> --downloads <folder> --dvd <DVD.mkv>`.
+Confirm the title/capture list and run `python scripts\validate_episode.py --episode <code> --stage inputs` before building the Orc graph. E01/E02 are rejected by the generic initializer because Emissary needs its two-part procedure.
 
 ## 3. Build the weighted ProRes master
 
-### ACTION 3.1 — select Orc's reference and create the refreshed project
-
-The weighted template supports 2-6 verified captures. With one capture, STOP (no weighted-stack gain); with more than six, extend and test the template first.
-
-Run `python scripts\select_stack_reference.py --episode <ep>`. If no reference is
-declared, the helper uses the first manifest capture only as a scratch seed, asks Orc
-for `suggestedReference`, maps that source index to its capture label, and repeats with
-the suggestion first until stable (at most three refreshes). It records the selected
-reference and promotes the refreshed project; it never renders the master.
-
-**VERIFY** — report says the refresh completed/saved, `source_count == capture_count`, the final suggestion is input 1, and the manifest's `reference` matches that capture. Inspect runner-up, coverage, stack-noise and fit metrics in the report. The helper does not use a custom noise-only score.
-
-**STOP** — if there is no valid recommendation, Orc does not finish/save, the suggestion does not stabilize, or a pre-existing reference conflicts. `--reselect` is only for an intentional replacement. The helper never overwrites an existing stack project.
-
-**TRAP** - a careless label replacement once left `@@placeholder@@` strings and a doubled label in the YAML. After any hand-edit, verify the project file. Safe recovery: clear everything and let refresh rebuild it.
-
-**TRAP** - an empty `value:` may print `invalid range spec 'null'` during refresh. Verify Orc reports success and refreshed graph values are present; do not accept an unsaved refresh.
-
-### ACTION 3.2 — record the measured alignment map
-
-The selector's final Orc refresh has already measured/saved the maps and alignment.
-Read the alignment map from its report/project and record it in
-`episodes/<ep>.json` as measured. Do not hand-derive offsets or run a duplicate refresh.
-
-**VERIFY** — every capture appears once; all maps and source alignment are populated;
-the selected reference is input 1; the project sink matches `files.stack_master`; and
-the full refresh reports the expected source count. If any check fails, STOP.
-
-### VERIFY 3.3 — graph configuration
-
-Confirm the auto-selected, refreshed project contains exactly this graph:
-
-```
-one tbc_source + one frame_map per capture
-        -> source_align
-        -> stacker Weighted
-        -> video_sink
-```
-
-The selector has already put the stable Orc-recommended reference first; do not reorder
-or hand-edit the graph after refresh.
-
-Sink baseline (all required):
-
-```
-mov-prores, prores_profile=hq, decoder_type=ntsc3d,
-adapt_threshold=0.1, chroma_weight=2.0, ntsc_phase_comp=true,
-display aspect 4:3
-```
-
-**TRAP** — do **not** add unmeasured crops or post-stack filters.
-
-### ACTION 3.4 — render
-
-The reference selector only refreshes; it does not render. Before a render, estimate peak
-master plus scratch space and require:
-
-```
-python scripts/check_space_budget.py --stage stack-render --planned-gib <estimate>
-```
-
-Then run the manifest project with the profile-resolved Orc CLI, for example
-`orc-cli <project> --process`, targeting manifest `files.stack_master` under the profile
-`prores` root. Launch/monitor it as a background job; validate the artifact/log rather than
-relying only on the exit code.
-
-**TRAP — the single biggest speed lever:** render from the machine profile's local fast work volume. Historical local-vs-SMB throughput differs by machine; stage/measure on this host and do not assume a drive letter.
-
-**VERIFY (first 60–90 seconds)** — all must hold:
-
-- [ ] One "Loaded" line per input.
-- [ ] Expected processing frame range shown.
-- [ ] StackerStage reports `"inputs":[capture_count,capture_count]` on **every** frame — this proves every declared capture contributes, not a pass-through.
-- [ ] If the report shows pair comparisons, reconcile the count with this episode's
-      capture/pressing groups; do not copy E07's five-capture `10` as a fixed count.
-
-**VERIFY (on completion)** — `Successfully wrote <stack.frames> frames` equals the refreshed source_align output count recorded in the manifest, with **zero** unrecoverable samples.
-
-**STOP** — if `inputs` is not `[capture_count,capture_count]`, frame counts disagree, or there are unrecoverable samples.
-
-### ACTION 3.5 — stack gate
-
-This is an evidence review, not a separate StackerStage tool invocation. Use the refresh
-report and render log. Compare against a single-capture reference where available.
-
-**VERIFY** — all of:
-
-- [ ] It is proven **not** a pass-through.
-- [ ] Alignment confirmed by a small offset sweep.
-- [ ] Pooled picture residual, correlation, and noise reduction checked.
-
-**TRAP** — Emissary's example was correlation 0.998–0.999 and stack/single noise 0.80–0.83. **Do not copy those as universal thresholds** without understanding the tool's capture/reference assumptions.
-
-**Luna fallback - trigger 2 (section 0.5):** only if local stack metrics remain contradictory; clear failures are rework/STOP.
-**STOP** — if the gate result is outside a defensible range for this episode, or you cannot interpret it.
-
----
+1. After input validation, run `python scripts\select_stack_reference.py --episode <code>`.
+   It builds a scratch project with a deterministic provisional input order, runs Orc's
+   non-rendering refresh, maps `suggestedReference` to a capture label, and repeats with
+   that capture first until the recommendation is stable (maximum three refreshes). It
+   then records the selected `reference` and promotes the refreshed project to the
+   manifest's stack-project path. The seed is scratch-only, never a guessed manifest
+   value. If the manifest already has a different reference, use `--reselect` only when
+   intentionally replacing it; an existing project is never overwritten. Read the
+   selection report, verify all captures were analyzed and the final suggestion is input
+   1, then record the measured `alignment_map`. If Orc fails, emits no valid suggestion,
+   or does not stabilize, STOP; do not choose a reference from noise alone or hand-derive
+   offsets.
+2. Graph: one `tbc_source` and `frame_map` per capture → `source_align` → `stacker Weighted` → `video_sink`. Keep the measured reference/input order. Sink baseline: `mov-prores`, `prores_profile=hq`, `decoder_type=ntsc3d`, `adapt_threshold=0.1`, `chroma_weight=2.0`, `ntsc_phase_comp=true`, display aspect 4:3. Do not add unmeasured crops or post-stack filters.
+3. Before the render, estimate the peak ProRes and scratch-space demand and run
+   `python scripts\check_space_budget.py --stage stack-render --planned-gib <estimate>`.
+   Preserve `limits.min_free_gb` after the planned writes; do not reuse another episode's
+   output size as a default. Render the manifest project with the profile-resolved Orc CLI:
+   `orc-cli <project> --process` (resolve `<project>` and executable from the profile/manifest).
+   **Render from the local fast volume**: historical runs measured ~39 fps locally versus
+   ~4.5 fps on an SMB share. In the first 60–90 seconds check one “Loaded” line per input,
+   expected processing frame range, and StackerStage reports with the actual input count on
+   every frame (proves a real multi-capture stack, not a pass-through). On completion,
+   `Successfully wrote N frames` must equal the refreshed `source_align` output count, with
+   zero unrecoverable samples.
+4. The stack gate is an evidence review, not a separate StackerStage tool invocation. Use
+   the refresh report and render log. Confirm every capture contributes, fit is trusted,
+   no single-source-only coverage is unexplained, and predicted stack noise is better than
+   the best single capture. If the report exposes pairwise comparisons, reconcile the count
+   with the current input/pressing groups (E07's five captures in one pressing produced 10
+   pairs, `5 choose 2`; never reuse 10 as a fixed threshold). Where a single-capture
+   reference is available, compare it directly; confirm alignment with a small offset sweep
+   and inspect pooled residual/correlation/noise reduction. Emissary's correlation
+   0.998–0.999 and stack/single noise 0.80–0.83 are examples, not universal thresholds.
+   If the evidence needed to rule out pass-through or interpret stack quality is absent,
+   stop rather than marking stage 4 complete.
 
 ## 4. Cadence, AVS, and episode-specific trims
 
-**TFM compatibility policy** — current supported software on Windows and Mac is treated
-as sufficient for TFM compatibility. No parity flag, evidence lookup, or clip run is a
-cadence prerequisite. A historical parity test is recorded in the M5 log §8, but is
-informational only. This assumption does not measure the current episode's cadence.
+**TFM compatibility policy:** for workflow purposes, treat TFM as compatible when both
+platforms use current supported software. Do not gate cadence on a separate parity flag,
+evidence lookup, or clip run. A historical cross-machine test is recorded in
+`M5 Mac LaserDisc Project Updates Log.md`, §8, as informational background only. This
+assumption does not measure this episode's cadence.
 
-### ACTION 4.1 — generate the TFM log
+Generate a full-side TFM log from the native 29.97 master: `TFM(order=-1, pp=0, chroma=true, slow=2)`. Add a motion trace for the native-30p gate, then run `scripts\build_map.ps1 -Episode <code>` and read the full summary and `VERDICT`. Measure cadence; do not infer it from `idet` or motion alone. For uniform 3:2 use `TDecimate(mode=1, cycle=5, cycleR=1)` → exactly 24000/1001. If measured interlaced inserts need repair, use only the generated targeted QTGMC map; `FPSDivisor=2` is mandatory for 1:1 replacement. Keep output 10-bit and progressive; do not globally deinterlace, denoise, interpolate, or RIFE. Targeted single-frame `PAD_1` repair is the sole exception; follow §6's PAD-frame procedure, preserve total frame count, and never alter cadence/timing.
 
-Run a full-side TFM log from the native 29.97 master:
+**One frame domain for log and encode:** run the TFM log on the audio-aligned clip (`.Trim(pad,0)`, pad = the audio capture's measured alignment offset). The bundled `build_map.ps1 -Episode <code>` uses the same `audio.pad_frames`, measured output `video.head_trim` / `video.tail_trim`, TFM log, and motion trace from the manifest. The motion probe must run on a trim-only AviSynth script (a script that still contains TFM would re-run TFM and overwrite the log); its output is N-1 values (`tblend` drops frame 0), which the map builder pads automatically. It refuses to overwrite existing artifacts unless explicitly forced.
 
-```
-TFM(order=-1, pp=0, chroma=true, slow=2)
-```
+Measure per episode: AVS source `.Trim` alignment offset, front-matter/head trim, tail trim, output duration, `-AudioSkip`, audio capture offset, and any hybrid cadence ranges. The video Alignment Map offset is not the audio skip. Check the AVS frame domain carefully: pre-decimation trims are source/29.97 frames; post-decimation trims are 23.976 output frames. Log what domain each trim uses.
 
-Use bundled `scripts\build_map.ps1 -Episode <ep>`. Read its full summary and its `VERDICT`. Add motion trace for the native-30p gate.
+**Head-trim method (measured, not predicted):** (a) `blackdetect` the master head to find the front matter and the episode's first fade-up out of black; (b) map that master frame to an OUTPUT frame by descriptor-matching the encode AVS's output against the master around the region - black frames match each other ambiguously (corr ~0.94 against any black frame), so anchor on the fade-up itself (corr 1.0) and derive neighbors from it; (c) trim so the file starts 3 output frames before the fade-up (the E01/E04 rule); (d) `-AudioSkip` = the content-geometric WAV time of the first kept frame. The earlier `(master_frame - (pad + 1))` convention was one frame short when the EFM origin equals the master-frame pad; prove WAV0 from corrected-WAV vs IVTC duration, then use the measured origin. S01E05 found WAV0 = master frame 35 and used `(1487-35)/30000*1001 = 48.4484 s`. Likewise set `DELTA` to the raw master time of output frame 0 verified by descriptor match; S01E05 used master frame 1487, not 1486. Always remeasure absolute A/V on the delivered file with `python scripts/av_check_output.py --episode <code>`, not just between-track offset. Do NOT predict final frame count from TDecimate arithmetic; use the AVS metadata frame count reported by the non-encoding validate pass. SAR: `79:94` and `121:144` both resolve to 4:3 within 0.02%; preserve the measured display geometry.
 
-**VERIFY** — you have a `VERDICT` value.
+**Trim to the DVD timeline, not by eye (adopted after S01E05):** head/tail membership is decided by the measured DVD<->LD picture map, never by whether a passage merely looks like filler.
 
-**TRAP** — measure cadence. **Do not infer it from `idet` or motion alone.**
+- **Trim automatically:** anything *before the DVD timeline origin* is LD-only and never ships - disc text cards, the Paramount intro logo, trailers and other front matter. The deliverable still opens on the episode's fade-from-black: output frame 0 sits a few frames inside the opening black and the program fades up into content. Anchor the cut on the first fade-up (measured), not on a guessed front-matter duration, and re-measure per episode.
+- **Keep:** anything the DVD itself contains stays - including end-credit text and the Paramount outro logo. Timeline conformity with the DVD is worth more than a shorter file: the piecewise retime of the 5.1 and SRT assumes both timelines describe the same program, and dropping DVD content would shift every later map.
+- S01E05 worked example: DVD origin at master ~48.45 s; LD-only head master 0-48.75 s (studio logo/text); DVD opening black maps to master ~48.45-49.82 s; episode fade-up master 49.716 s. Trim = output `.Trim(1161, 0)` (master 49.583 s, 3 output frames before fade-up at output 1164), so no front matter survives. The DVD's own tail is retained unchanged (credit text DVD 2684.5-2719.2 s, Paramount outro logo DVD 2719.3-2723.2 s).
 
-### ACTION 4.2 — cadence decision
+Emissary regression only:
 
-| Measured result | Action |
-|---|---|
-| Uniform 3:2 | `TDecimate(mode=1, cycle=5, cycleR=1)` → exactly 24000/1001 |
-| Interlaced inserts present | Repair **only** the generated targeted QTGMC map; `FPSDivisor=2` is **mandatory** for 1:1 replacement |
+- Part I: output `Trim(1167,70718)`; 69,552 frames / 2900.90 s; head trim 48.631917 s.
+- Part II: `.Trim(20,0)` alignment and 61,214 output frames / 2553.134 s after its measured tail cut.
+- Other episodes: measure; never paste these constants.
 
-**VERIFY** — output is 10-bit and progressive.
+## 5. EFM audio: decode and verify, do not guess the rate
 
-**TRAP — never do these:** globally deinterlace, denoise, interpolate, or RIFE.
-
-**Exception:** targeted single-frame `PAD_1` repair only — follow §6's PAD procedure, preserve total frame count, and **never alter cadence/timing**.
-
-**Luna fallback - trigger 3 (section 0.5):** only if cadence/insert treatment remains ambiguous after full TFM/motion review.
-**STOP** — if the VERDICT is ambiguous, or the cadence is not uniform 3:2 and the insert map is unclear.
-
-### ACTION 4.3 — one frame domain (critical)
-
-Run the TFM log on the **audio-aligned clip** (`.Trim(pad,0)`, where `pad` = the audio capture's alignment offset), and hand-edit the **same** `.Trim(pad,0)` into the generated encode AVS's `src` line.
-
-**VERIFY** — the `.Trim(pad,0)` in the log script and the one in the encode AVS are identical.
-
-**TRAP** — if they differ, **every repair-map index is off by `pad` frames.**
-
-**TRAP** — the motion probe must run on a **trim-ONLY** AviSynth script. A script that still contains TFM would re-run TFM and overwrite the log. Its output is N-1 values (tblend drops frame 0); `build_map.ps1` pads this automatically.
-
-**TRAP** — `scripts\build_map.ps1` is bundled and resolves roots from `machine.json`.
-
-### ACTION 4.4 — measure per-episode values (**MEASURE**)
-
-Record each of these for the current episode:
-
-- [ ] AVS source `.Trim` alignment offset
-- [ ] front-matter/head trim
-- [ ] tail trim
-- [ ] output duration
-- [ ] `-AudioSkip`
-- [ ] audio capture offset
-- [ ] any hybrid cadence ranges
-
-**TRAP** — the video Alignment Map offset is **not** the audio skip.
-
-**TRAP — frame domains:** pre-decimation trims are source/29.97 frames; post-decimation trims are 23.976 output frames. Log which domain each trim uses.
-
-### ACTION 4.5 — head trim (measured, never predicted)
-
-| Step | Action |
-|---|---|
-| (a) | `blackdetect` the master head to find the front matter and the episode's first fade-up out of black |
-| (b) | Map that master frame to an OUTPUT frame by descriptor-matching the encode AVS output against the master around the region |
-| (c) | Trim so the file starts **3 output frames before the fade-up** (the E01/E04 rule) |
-| (d) | Compute `-AudioSkip` from the formula below |
-
-**Formula for `-AudioSkip`:**
-
-```
-wav_t = (master_frame - (pad + 1)) * 1001/30000
-```
-
-where `pad` = the audio capture's alignment offset. (E04: master 1485, pad 3, skip 49.416033 s.) The shortcut `(K-1)*1001/24000` agrees to sub-milliseconds.
-
-**TRAP** — black frames match each other **ambiguously** (corr ~0.94 against any black frame). Anchor on the **fade-up itself** (corr 1.0) and derive neighbors from it.
-
-**TRAP** — do **NOT** predict the final frame count from TDecimate arithmetic. The trailing partial cycle can drop an extra frame. Take the actual count from the non-encoding AVS metadata probe. (E04: 65,347 actual vs 65,349 predicted.)
-
-**TRAP — SAR:** `79:94` and `121:144` both resolve to 4:3 within 0.02 %. The encode emitted `79:94` on both E01 and E04. **Accept it** rather than fighting the mux.
-
-**Luna fallback - trigger 4 (section 0.5):** only if descriptor checks leave multiple fade-up/origin candidates.
-**STOP** — if the fade-up cannot be anchored (no clean corr 1.0 match), or the descriptor match is ambiguous.
-
-### ACTION 4.6 — trim to the DVD timeline, not by eye
-
-Head/tail membership is decided by the **measured DVD↔LD picture map**, never by whether a passage merely looks like filler.
-
-**RULE — trim automatically:** anything *before the DVD timeline origin* is LD-only and never ships — disc text cards, the Paramount intro logo, trailers, and other front matter.
-
-**RULE — keep:** anything the DVD itself contains stays — including end-credit text and the Paramount outro logo.
-
-**TRAP** — timeline conformity with the DVD is worth more than a shorter file. The piecewise retime of the 5.1 and SRT assumes both timelines describe the same program; dropping DVD content would shift every later map.
-
-**ACTION** — derive the DVD timeline origin from the DVD↔LD map, then anchor the cut on the first fade-up (**MEASURE** per episode), not on a guessed front-matter duration.
-
-**VERIFY** — output frame 0 sits a few frames inside the opening black and the program fades up into content; no front matter survives.
-
-**ORDERING NOTE** — this rule needs the DVD↔LD picture map, which is built in **§7**. If you have not built the map yet, either build it now or **defer the final head-trim decision until §7**. Do not guess the origin without the map.
-
-**Reference (do not copy):** S01E05 worked example — DVD origin at master ~48.45 s; LD-only head master 0–48.75 s; DVD opening black maps to master ~48.45–49.82 s; episode fade-up master 49.716 s; trim = output `.Trim(1161, 0)` (master 49.583 s, 3 output frames before fade-up at output 1164); DVD tail retained unchanged (credit text DVD 2684.5–2719.2 s, Paramount outro logo DVD 2719.3–2723.2 s). **These are S01E05 numbers — measure your own.**
-
-**Luna fallback - trigger 4 (section 0.5):** only if descriptor checks leave multiple fade-up/origin candidates.
-**STOP** — if the DVD timeline origin cannot be determined from the map.
-
----
-
-## 5. EFM audio: decode and verify, never guess the rate
-
-### ACTION 5.1 — decode
-
-Decode raw EFM with EFMSink. It does **not** auto-find the sidecar and needs `decode_mode=audio`:
+Decode raw EFM with EFMSink; it does not auto-find the sidecar and needs `decode_mode=audio`:
 
 ```powershell
 & $orc --source "tbc_source=input_path='$source\<capture>.tbc':efm_path='$source\<capture>.efm'" `
   --sink "EFMSink=output_path='$work\audio\<capture>-efm.wav':decode_mode=audio:report=true"
 ```
 
-Unpack `.efm.7z` first if needed. Keep the report and the original WAV.
+If needed, unpack `.efm.7z` first. Keep the report and original WAV. Never assume an archive `.pcm` is valid: Emissary’s uploader `L1.pcm` disagreed with fresh EFMSink audio and was not safe to use.
 
-**TRAP** — never assume an archive `.pcm` is valid. Emissary's uploader `L1.pcm` disagreed with fresh EFMSink audio and was not safe to use.
+When several captures include raw EFM, decode each candidate and compare reports before
+choosing the WAV used for correction. Record post-C2 loss, concealment, uncorrectable and
+missing sections, out-of-order sections, and Q-timecode continuity. Select from measured
+report evidence; do not select solely from capture label or the summary word `POOR` (that
+label can be triggered by missing sections even when data-loss percentages are small).
+Preserve all native WAVs and reports. EFMSink report timestamps are `MM:SS:FF` (minutes,
+seconds, frames), not `HH:MM:SS`.
 
-When multiple captures have raw EFM, decode and compare all candidate reports before
-choosing the source WAV. Record post-C2 loss, concealment, uncorrectable/missing sections,
-out-of-order sections, and Q-timecode continuity. `POOR` can be triggered by missing
-sections even when loss percentages are low; choose from the measured report evidence, not
-the label alone. Preserve all native WAVs/reports. Report times are `MM:SS:FF`, not
-`HH:MM:SS`. Once `audio.capture` is set, derive `audio.pad_frames` from that capture's
-offset in `alignment_map`, using the selector report's final Orc input order (not the
-manifest `captures` order); cross-check Orc's `Padding prepended` value. Do not substitute
-`video.head_trim` or `video.delta_s`.
+After recording `audio.capture`, set `audio.pad_frames` to that capture's offset in the
+measured Orc `alignment_map`. Map the alignment-map index using the **final Orc input order**
+in the selector report, not the manifest `captures` inventory order: the selector may put a
+different reference first. Cross-check the chosen offset against Orc's per-source
+`Padding prepended: N frames` report. This is a native/master-frame alignment measurement;
+never substitute `video.head_trim` or `video.delta_s`. E07 verified the mapping against
+three historical episodes and selected L1 at Orc input 2 with offset/padding 0; those are
+examples, not defaults.
 
-### ACTION 5.2 — audio evidence gates (select the DVD or no-DVD route)
+### V6 audio decision — matching DVD or explicit LD-only mode
 
-**Gate 1 — decoder/capture consistency**
-Decode a second raw EFM when available. Cross-correlate long non-silent portions.
+1. Preserve every native EFMSink WAV/report; compare all available captures. Record the selected capture's Orc input-order `audio.pad_frames`, a **leading capture-alignment offset**, not the total number of frame-map PAD inserts.
+2. Once output frame count, trims, and `video.delta_s` are measured, run `python scripts\audio_timing_diagnostic.py --episode <code>`. It reads native PCM, the stack project, and frame map only—not the DVD or DVD picture-alignment path. Record exact EFM samples/rate/duration, stack duration, full/projected PAD counts, structural trim, and fractional endpoint residual.
+3. **If a matching DVD is available**, use the DVD-reference path: build the DVD↔LD descriptor map before final encode, run raw-provisional/robust diagnostics, compare duration/PAD with picture-map and pad-corrected fade evidence, then approve a measured `ld_corrected` and `ld_synced`. Preserve the existing gates and do not use a DVD rate fit as a default.
+4. **If the user explicitly chose no-DVD mode**, run `python scripts\audio_timing_diagnostic.py --episode <code> --promote-dvd-free --report-out <new-unique.json>` after all required LD measurements exist. Use a new report path because the tool never overwrites prior evidence. It runs a stage-specific audio-volume space gate based on the native WAV size, applies the accepted duration/PAD candidate rate and capture-pad geometry, writes a full corrected FLAC plus exact-sample-count `ld_synced`, records hashes/recipe/endpoints, and updates the manifest with a backup. It refuses missing measurements, overwrites, DVD-track selections, and projected endpoint residuals beyond ±1 frame. The E07 A/B result passed at all seven windows (maximum difference 1 µs); that is the regression basis, not a claim that every future no-DVD episode has been externally cross-correlated.
+5. No-DVD QC runs `ld_only_sync_check.py`: it verifies the approved report/source hashes, measured capture-pad skip, exact audio sample budget, and delivered packet identity. It must separately report that absolute lip-sync offset was **not** cross-correlated against an external reference. If PAD/endpoint reconciliation or capture-origin evidence is ambiguous, STOP rather than force a rate or offset.
 
-- **VERIFY** — high Pearson score and constant offset.
-- **TRAP** — this proves decoder/capture consistency **only**. It does **not** prove absolute sync to the video.
+For DVD-backed measurements, `measure_audio_rate.py` labels its fit `44100/slope`; the fade-midpoint fit has a different offset/slope convention. Keep rate and fixed offset separate. Do not correlate across an unmodeled act-step staircase, use raw fade slope on a padded master, or rerun x265 for audio-only corrections.
 
-**Gate 2 — DVD-free duration/PAD candidate (primary candidate, not automatic approval)**
+**Never assume 44.056 kHz because the disc is NTSC.** E06 measured essentially no intrinsic rate change and applied a separate pad stretch; E07's 44056 was an effective padded-timeline correction. Keep native EFM and all candidates. A constant residual after encode is corrected by rebuilding LD audio and stream-copy remuxing; do **not** rerun x265 for an audio-only correction.
 
-Run `python scripts\audio_timing_diagnostic.py --episode <ep> --report-out <unique.json>`. It uses the exact native-WAV sample count, full stack duration and Orc frame-map PAD list, and does not read the DVD or write the manifest. Review full-map PADs, head-trimmed PADs, `stack.frames - audio_frames`, and any mismatch. The report may create a separate full-side candidate with `--candidate-out <new.flac>`; preserve native audio and never overwrite the DVD-based candidate.
-
-**TRAP** — `audio.pad_frames` is the selected capture's leading alignment, not the total video `PAD_1` count. Do not substitute one for the other or infer the PAD count by subtracting rounded durations.
-
-**Gate 3 — DVD picture map and rate corroboration (DVD route only)**
-
-Build the DVD↔LD picture map from the stack master **before final x265**. Once `video.delta_s` and `audio.pad_frames` are measured, run `python scripts\measure_audio_rate.py --episode <ep> --raw-provisional --out <unique.tsv> --summary-out <unique.json>`. It uses geometric skip only to center windows; the intercept absorbs constant origin error. Review every correlation, runner-up and edge peak. Use its OLS and robust Theil–Sen / leave-one-window-out fit as corroboration; it is diagnostic, never an automatic correction.
-
-- Use several long content windows on stable picture-map plateaus, including the tail.
-- Exclude act steps, fades/music-through windows, weak/ambiguous matches and edge peaks.
-- Never globally fit across an unmodeled edit staircase.
-- A fixed offset, rate drift and edit steps are three different quantities; correct them separately.
-
-**Gate 4 — fade-midpoint fit (DVD/corroboration route only)**
-
-At clean act breaks, use the fade MIDPOINT of video-black versus audio-silence. Fit only after accounting for the video PAD clock contribution and excluding flickering/marginal silences. Report the precise slope convention, sign and uncertainty. Gate 4 cannot validate its own fitted residual.
-
-**DVD RATE STOP** — do not commit a DVD-backed rate if duration/PAD, DVD-picture, and pad-corrected fade fits disagree beyond combined uncertainty, if PAD/origin evidence does not reconcile, or if fits use weak/edge windows. Keep the DVD-backed baseline until resolved. If no DVD is supplied, skip DVD-specific gates and use only the explicitly approved V6 duration/PAD route below; do not describe that route as externally cross-correlated.
-
-### ACTION 5.3 — resolve origin/skip, build audio-only outputs
-
-1. Verify WAV0 against the exact matching timeline endpoints; preserve the raw sample count and structural-trim evidence.
-2. Compute AudioSkip from the measured master frame of output zero and WAV0; cross-check `delta_s - audio.pad_frames/FPS`. Never use head trim as the audio origin.
-3. Record the selected effective rate, method, uncertainty, PAD counts (full map / trimmed / delivered), WAV0, skip sample and report paths. Do not merge incompatible slope signs: `measure_audio_rate` fits master-equivalent time versus raw-WAV time and labels its candidate `44100/slope`; the fade-offset fit has a different convention.
-4. **DVD route:** after rate/origin review, create a new corrected full-side candidate and sample-synced FLAC with the established DVD-backed procedure. **Explicit no-DVD route:** after output frames, DELTA, selected capture-pad geometry, projected PAD counts, endpoint residual, and the audio space gate are measured, run `audio_timing_diagnostic.py --episode <ep> --promote-dvd-free --report-out <new-unique.json>`. Use a unique report path; the helper never overwrites evidence. It writes new corrected/synced audio and records method/hashes with a manifest backup; it stops outside the ±1-frame endpoint limit.
-
-**VERIFY** — corrected duration/origin agrees with the measured target within the declared tolerance; synced FLAC is 44.1 kHz/16-bit stereo and has the exact target sample count. In no-DVD mode, QC must state that an external absolute A/V cross-correlation was unavailable; DVD 5.1/SRT are not included.
-
-**DVD-free production (V6):** E07's candidate and final-format test passed against the DVD only as a holdout. For an explicitly approved no-DVD job, after all LD video/PAD timing is measured, run `audio_timing_diagnostic.py --episode <ep> --promote-dvd-free --report-out <new-unique.json>`. It commits only the duration/PAD rate plus capture-pad geometry if PAD/endpoints reconcile within ±1 frame; inspect its report and hashes. QC verifies the LD-only timebase and exact sample budget, but must state that there was no external absolute A/V cross-correlation. If no DVD is supplied and shared `Cut Pad Images/<ep>` stills exist, use them only for individually confirmed cut PADs after matching the filename DVD timestamp/scene to the measured output frame; otherwise hold the previous LD frame. Never RIFE across the cut. DVD 5.1/SRT and DVD-map retiming are unavailable in this mode.
-
-**Luna fallback — trigger 5 (section 0.5):** only if the duration/PAD, picture-map, and pad-corrected fade estimates remain statistically inconclusive or conflict.
-
-### TRAP — rejected estimates
-
-Discarded estimates (292/1875/2500 ppm) came from a **reflected FFT lag convention** or weak peaks.
-
-- Correct FFT convention for these scripts: `irfft(conj(rfft(a))*rfft(b))`.
-- Compute Pearson on **only** the actual overlapping aligned samples.
-- Correlation >1 is a normalization bug.
-- Silence, repeated music, fade stings, and different mixes can produce false peaks.
-- Use several long windows and a line fit.
-
-**The rule:** never resample on NTSC theory alone. Use the DVD corroboration route when a matching DVD exists; otherwise use the optional explicit V6 no-DVD path and its limits. Do not auto-approve an experimental candidate.
-
----
+Other discarded estimates (292/1875/2500 ppm) came from a reflected FFT lag convention or weak peaks. Correct FFT convention for the scripts used here: `irfft(conj(rfft(a))*rfft(b))`; compute Pearson on only the actual overlapping aligned samples. Correlation >1 is a normalization bug. Silence, repeated music, fade stings, and different mixes can produce false peaks. Use several long windows and a line fit.
 
 ## 6. Primary video encode
 
-### ACTION 6.1 — encode arguments
+The final encode is the only full-program x265 encode. Windows uses the source-derived
+AviSynth scripts; macOS uses the included VapourSynth chain. Validate metadata plus a
+short null decode (no x265), record `video.frames`/`video.duration_s`, finish and validate
+source-derived PAD repair, then run exactly one video-only CRF 14 / slow / grain / Main 10
+encode (`encode_episode.ps1 -Pass final` on Windows or `encode_episode_mac.py --pass final`
+on macOS). The platform remux helper stream-copies the already prepared `ld_synced` and
+available tracks, then checks packet identity. If audio changes, rebuild it and remux; do
+not run x265 again.
 
-Windows uses `scripts\encode_episode.ps1`; macOS uses `scripts/encode_episode_mac.py`. Validation probes source-script metadata and decodes three frames to a null muxer; it performs **no video encode**. `final` is run once after the platform source-derived PAD-repair script is ready:
+Quality target: grain-preserving HEVC Main 10, 23.976p, no bitrate ceiling. Emissary averaged ~10.35–10.82 Mbps and ~3.2–3.5 GB per part, around 9–10 fps on this machine; results vary. Do not force 15 Mbps CBR, use veryslow, or use NVENC as the final. NVENC p7 15 Mbps is optional preview/reference only. Do not denoise or discard genuine grain.
 
-```text
--c:v libx265 -profile:v main10 -pix_fmt yuv420p10le
--crf 14 -preset slow -tune grain
--color_primaries smpte170m -color_trc smpte170m -colorspace smpte170m -color_range tv
-```
+Geometry: 768x484 native captured raster in this workflow; maintain measured 4:3 display aspect and consistent SAR across parts. Exact 4:3 SAR for 768x484 is 121:144. The current Emissary mux reports 79:94, close but not identical; inspect the actual stream and ensure displayed 4:3 rather than blindly copying stale SAR values. Preserve limited range and SMPTE 170M tags.
 
-Example:
+Keep the matching final `ffmpeg-command-*.json` sidecar: it records the exact resolved
+executable, argument array, and workflow version because the quiet x265 log level may
+suppress its settings banner. Verify one video-only CRF 14/slow/grain encode, expected
+frame count/duration, and no script error. Keep the `audio-sync-*.json` recipe from
+`build_ld_synced.py` for AudioSkip/start-sample/target-sample evidence. After stream-copy
+remux, probe final output: HEVC Main 10, 10-bit, 24000/1001, correct raster/SAR/DAR,
+color tags, and FLAC LD stereo 44.1 kHz/16-bit. Fully decode/inspect before declaring
+complete.
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\encode_episode.ps1 -Episode <ep> -Pass validate
-# Record base-AVS video.frames/duration_s; build the picture map and avs_padfix (§6.4/§7).
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\encode_episode.ps1 -Episode <ep> -Pass validate
-# Build/validate sample-accurate ld_synced (ACTION 5.3), then make the one final video encode.
-python scripts\build_ld_synced.py --episode <ep> --dry-run
-python scripts\build_ld_synced.py --episode <ep>
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\encode_episode.ps1 -Episode <ep> -Pass final
-# macOS equivalent: python scripts/encode_episode_mac.py --episode <ep> --pass final
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\remux_padfixed.ps1 -Episode <ep>
-```
-
-**VERIFY** — inspect the matching `ffmpeg-command-*.json` sidecar for the exact arguments
-and workflow version (the quiet x265 log may suppress its settings banner). The final sidecar
-must show exactly one **video-only** x265 encode from `avs_padfix` at CRF 14 / slow / grain.
-The `audio-sync-*.json` separately records AudioSkip/start-sample/target-sample evidence.
-`remux_padfixed.ps1` attaches `ld_synced` by stream copy and verifies packet identity.
-
-**TRAP — never:** force 15 Mbps CBR, use `veryslow`, or use NVENC as the final. NVENC p7 15 Mbps is optional preview/reference only. Never denoise or discard genuine grain.
-
-**Reference:** quality target is grain-preserving HEVC Main 10, 23.976p, no bitrate ceiling. Emissary averaged ~10.35–10.82 Mbps, ~3.2–3.5 GB per part, ~9–10 fps. Results vary.
-
-### ACTION 6.2 — geometry
-
-- Native captured raster: **768x484**.
-- Maintain measured 4:3 display aspect, consistent SAR across parts.
-- Exact 4:3 SAR for 768x484 is `121:144`; the current Emissary mux reports `79:94` (close, not identical).
-
-**VERIFY** — inspect the **actual stream** and confirm displayed 4:3. Do not blindly copy stale SAR values.
-
-**VERIFY** — limited range and SMPTE 170M tags preserved.
-
-### ACTION 6.3 — validate, then final
-
-1. Run non-encoding validation on `avs_encode`; record its measured frame count/duration.
-2. Complete the source-AVS PAD audit and build `avs_padfix` (ACTION 6.4); run validation
-   again to test that version-stamped wrapper. Both validates use only a three-frame null
-   decode and perform no x265 encode.
-3. After building `ld_synced`, run the final video-only x265 encode once, stream-copy remux,
-   then probe the combined output.
-
-**VERIFY (probe)** — all of:
-
-- [ ] HEVC Main 10, 10-bit
-- [ ] 24000/1001
-- [ ] correct raster / SAR / DAR
-- [ ] color tags
-- [ ] After remux: FLAC LD stereo 44.1 kHz / 16-bit
-
-**VERIFY** — fully decode/inspect before declaring complete.
-
-### 6.4 Single-frame `PAD_1` repairs (post-IVTC; all episodes)
-
-Build the §7 DVD↔LD picture map before classifying any cut PAD. §7 can be run before the
-final encode because it uses the stack master, not the encoded file.
+### Source-derived single-frame `PAD_1` repairs (post-IVTC; before the sole final encode)
 
 #### Diagnosis and classification
 
-**ACTION D1** — scan the source-derived `avs_encode` output (post-IVTC, before HEVC) with:
-
-```
-blackdetect=d=0:pix_th=0.10:pic_th=0.98
-```
-
-Retain hits shorter than 0.2 s.
-
-**ACTION D2** — parse every `PAD_1` position from the current episode's `frame_map`; convert it to the post-`TDecimate` output frame and match within the audit's **±2-frame** tolerance. Only map-matched frames in `pad-repair-frames.txt` may be replaced; isolated black content without a map match is not a repair candidate.
-
-**TRAP** — do **not** infer pad positions from a ~30 s cadence alone.
-
-**ACTION D3** — confirm each candidate on the **full raster** (max/mean RGB or luma), not only a 48x36 descriptor.
-
-- A true pad is near-zero across almost the whole frame.
-- Check the source-derived post-IVTC frame before encoding; the delivered file receives a separate final black/PAD QC scan.
-- **Exclude dark real content.** Local E01's 1954.035 s hit (max 45/255) and E04's 33935/65240 hits (max 57/64) are **not** pads.
-- Check `.tbc.json` decode faults/sequence gaps and compare the aligned DVD at genuine-content blacks.
-
-**ACTION D4 — cut test.** For candidate at output frame `i`, compare `i-1` to `i+1`, and calibrate the metric against unambiguous cuts and normal-motion frames **for this episode**.
-
-**TRAP** — use the **two real flanks**, not either step to/from black. Black-to-frame differences are large by definition and make a pad look like a cut.
-
-**TRAP** — thresholds are **episode-specific**. In the E03 regression, the metric separated 382 cuts (min 29.9, p10 32.3) from pads (max 18.1) — those numbers are **not portable** to another metric or episode.
-
-**Luna fallback - trigger 6 (section 0.5):** only if full-raster/flank/PAD-map/DVD evidence still cannot classify a candidate.
-**STOP** — if you cannot cleanly separate pads from real dark content for this episode. Do not classify every dark one-frame event as a pad.
+1. Scan the source-derived `avs_encode` (Windows) or `.vpy` encode chain (macOS) after `TDecimate` and before any HEVC encode with `blackdetect=d=0:pix_th=0.10:pic_th=0.98`, retaining hits shorter than 0.2 s. Parse every `PAD_1` from the current episode's frame map; convert to post-`TDecimate` output frame and match within ±2 frames. Only map-matched frames in `pad-repair-frames.txt` may be replaced; isolated black content with no PAD-map match is not a repair candidate.
+2. Confirm each map-matched candidate on the **full source raster** (max/mean RGB or luma), not only a 48x36 descriptor. A true pad is near-zero across almost the whole frame. Exclude dark real content: local E01's 1954.035 s hit (max 45/255) and E04's 33935/65240 hits (max 57/64) are not pads. Check `.tbc.json` decode faults/sequence gaps and compare the aligned DVD at genuine-content blacks.
+3. **Cut test uses the two real flanks, not either step to/from black.** For the candidate at output frame `i`, compare `i-1` to `i+1` and calibrate the metric against unambiguous cuts and normal-motion frames for this episode. Black-to-frame differences are large by definition and make a pad look like a cut. In the E03 regression, the across-flank metric separated 382 cuts (min 29.9, p10 32.3) from pads (max 18.1); those numeric thresholds are E03-specific and are not portable to another metric/episode. E04 separately confirmed one cut PAD, frame 26160; do not classify every dark one-frame event as a pad.
 
 #### Fill policy
 
-| Classification | Action |
-|---|---|
-| **Non-cut PAD** | RIFE midpoint between the two adjacent real **output-domain** frames |
-| **PAD on a cut** | Never RIFE across two different shots — see below |
-
-**Non-cut PAD — tested best-quality command** (768x484 PNG pair; verify the model and backend on the current machine):
-
-```
-rife-ncnn-vulkan -0 prev.png -1 next.png -o pad.png -s 0.5 -g -1 -x -z -m <model-dir>
-```
-
-- `-x` spatial TTA, `-z` temporal TTA; CPU/fp32; UHD and de-duplication **off**.
-
-**TRAP** — constrain RIFE to **proven PADs only**. In the E03 regression, RIFE reduced high-frequency energy ~22% on one frame.
-
-**TRAP** — a tested CPU+TTA run tied numerically with GPU fp32+TTA; **GPU without TTA differed substantially**; NCNN Vulkan fp16 is the precision risk. Verify the local backend rather than assuming these results transfer.
-
-**TRAP** — the tested CPU PNG path is RGB24; converting to YUV420 10-bit preserves the output format but **cannot recreate source 10-bit precision**.
-
-**PAD on a cut:**
-
-1. Map the target time through the episode's independently verified DVD↔LD picture map (§7).
-2. IVTC/resample DVD to 23.976.
-3. Accept a DVD frame **only** if its scene and timing match uniquely.
-4. Crop/scale to the LD raster; color-match gently to the last good LD frame.
-5. **If no precise DVD frame exists**, hold the immediately previous native 10-bit LD frame (`src.Trim(i-1,i-1)`) for one output frame. This preserves the cut and is **preferable to a cross-shot morph**.
+- **Non-cut PAD:** use the upstream `rife-ncnn-vulkan` engine's RIFE midpoint between the two adjacent real **output-domain** frames. A tested best-quality command (768x484 PNG pair, model already installed) was `rife-ncnn-vulkan -0 prev.png -1 next.png -o pad.png -s 0.5 -g -1 -x -z -m <model-dir>` (`-x` spatial TTA, `-z` temporal TTA; CPU/fp32, UHD and de-duplication off). In the E03 identical-encode A/B at pad 22221, maintained-frame steps were 0.00 then 18.79; RIFE steps were 11.36 then 10.60. RIFE reduced high-frequency energy ~22% on that one frame, so constrain it to proven PADs. A tested CPU+TTA run was numerically tied with GPU fp32+TTA; GPU without TTA differed substantially, and NCNN Vulkan fp16 is the precision risk. Verify the installed engine, model, backend, and PNG color path on the current machine; none is implied by another host's setup. The tested RGB24 PNG path can be converted to YUV420 10-bit for output, but conversion cannot recreate source 10-bit precision.
+- **PAD on a cut with a DVD:** never RIFE across two shots. Map through the independently verified DVD↔LD picture map, sequentially decode/IVTC the DVD to 23.976, and accept only a uniquely matching frame. Crop/scale to the LD raster and color-match gently to the prior good LD frame.
+- **PAD on a cut without a DVD:** if the user selected shared cut-pad stills, use only the reviewed `Cut Pad Images/<episode>/DVD-HH-MM-SS.mmm-fNNNNNNNN.png` still whose scene/timestamp maps uniquely to this measured cut PAD; pass it as `--cut-pad-image <output-frame>=<PNG>`. The timestamp is a candidate locator, not proof of alignment. If no unique image match exists or the user declined stills, use `--hold-cut <output-frame>` to copy the immediately previous native 10-bit LD frame. Never cross-shot RIFE or guess a DVD-time mapping.
 
 #### Injection, encode, and validation
 
-**ACTION I1** — repair **after `TDecimate`**, never in the stack or before cadence selection. **Do not re-render the weighted master.**
+1. Repair **after `TDecimate`**, never in the stack or before cadence selection; do not re-render the weighted master. Windows uses `build_padfix_avs.py`/`ReplaceFramesSimple`; macOS uses `build_padfix_vpy.py`/`std.FrameEval`. Both consume the source-derived script and confirmed repair report, assert source/replacement/output frame counts equal measured `N`, and never read an encoded MKV as the repair source.
+2. Test several replacement identities across the episode. Output NCC against its **own** PNG should be ~1 and lower against other replacement images; verify both neighbors. The M5 color path reproduces AviSynth BT.601 limited-range 10-bit scaling at the source's own 4:2:0/4:2:2/4:4:4 subsampling. Do not rely on “not black” alone.
+3. Complete PAD repairs **before** the final encode. Windows uses `encode_episode.ps1 -Pass final`; macOS uses `encode_episode_mac.py --episode <code> --pass final`. Each writes the single video-only `padfixed_video` with the V5 x265 CRF 14 / slow / tune grain / Main 10 settings. The platform remux helper stream-copies available tracks and checks packet identity. The second-pass encoder is retired.
+4. Full-decode/black-scan the delivered MKV. Require zero PAD-aligned single-frame black hits, unchanged frame count/duration, expected streams/defaults, bit-exact copied audio/subtitle packet hashes, and the per-pad identity checks above. Genuine dark content/credits and cuts are not PADs and must remain untouched.
 
-1. Run `build_padfix_avs.py`; it imports the source-derived `avs_encode` and constructs a replacement clip with exactly the source's `N` output frames.
-2. Apply `ReplaceFramesSimple` only at confirmed repair-list indices.
-3. Use `ImageSource(..., start=0, end=0, fps=24000/1001)` explicitly.
-4. Convert to the source's 10-bit chroma format.
-5. `AssumeFPS(img, src)`.
+#### Cross-machine/tooling notes
 
-**TRAP** — a default one-image `ImageSource` can unexpectedly return 1001 frames; a prior bad layout produced 39 black and 43 wrong-content pads.
+- The E03 regression found 84 map pads, 83 zeroed master fills, and 82 in the delivered file after head trim; all six TBC JSONs were clean and there were no unexplained single-frame blacks. This proved a `PAD_1` fill defect, not an encoder/TBC failure.
+- Flowframes 1.42's command wrapper can silently no-op without elevation/dev mode; its model downloader may be GUI-only. Prefer a verified headless engine for automation and check engine/model/backend availability on the current machine. Do not assume another host's GPU enumeration, weights, or binary path transfers.
+- Large FFmpeg `select='eq(n,...) + ...'` lists can exceed expression limits (chunk ≤32 terms or seek/extract pairs); `-read_intervals` does not drive `-show_frames`, so use `showinfo` for PTS. Never make A/B copies as hardlinks then overwrite with `Copy-Item -Force` (it writes through the shared inode).
 
-**TRAP** — `Overlay(start=...,end=...)` is not supported by every AviSynth+ build; test the exact local version or use the documented replacement mechanism.
+#### Local E01/E04 audit/results
 
-**TRAP** — never use an encoded MKV as the repair source. The final encoder must read `avs_padfix`, not an HEVC decode.
+- E01 Part II: 77 L1 map pads; 76 rendered near-black blips, all repaired by RIFE. E01 Part I has no periodic PAD blips; the isolated dark non-map frame is excluded.
+- E04: 84 L1 map pads; 81 rendered near-black blips, all repaired: 80 by RIFE and cut PAD frame 26160 by aligned DVD progressive frame 26234 at 1094.191 s. That frame was scaled/cropped and color-matched to the preceding LD frame using stable-background pixels (245,358 pixels; RGB gains 0.941/0.982/0.974). The contact sheet is `Z:\work\probe\dvd-cut-pad-comparison-e04.png`.
+- Final outputs and QC evidence are recorded in §11 and under the configured `roots.probe`/`roots.out`. Reusable scripts and the FFMS2/RemapFrames plugins live in this folder's `scripts\` and `avsplugins\` directories. Old `padfix-tools` copies are historical evidence only.
 
-**ACTION I2 — assert inside AVS before encoding:**
-
-```
-src.FrameCount()==N  AND  replacement.FrameCount()==N
-```
-
-Load the machine's `RemapFrames` plugin.
-
-**VERIFY (identity test)** — test several pads spread across the episode:
-
-- [ ] Output NCC against its **own** replacement is approximately 1.
-- [ ] NCC is **lower** against other replacement images.
-- [ ] Both neighboring frames verified.
-
-**Reference:** local check on 11 pads gave own-image NCC 0.99940–0.99996, best unrelated-image NCC <=0.738 (`pad-identity-samples.tsv`).
-
-**TRAP** — do **not** rely on "not black" alone. A prior one-pad preview passed while 43 other pads silently used the wrong image.
-
-**ACTION I3** — complete PAD repair before encoding. Run `encode_episode.ps1 -Pass final` once with the normal x265 CRF 14 / slow / tune grain / Main 10 settings. Then stream-copy the existing audio/subtitle tracks with `remux_padfixed.ps1`.
-
-- The video-only output is `padfixed_video`; it is created directly from the source-derived repaired AVS.
-- Record the new video MD5.
-
-**STOP** — `encode_padfixed.ps1` is retired; it refuses to perform a second full-program encode.
-
-**VERIFY (I4)** — full-decode / black-scan the delivered MKV:
-
-- [ ] Zero PAD-aligned single-frame black hits
-- [ ] Unchanged frame count / duration
-- [ ] Expected streams / defaults
-- [ ] Bit-exact copied audio/subtitle packet hashes
-- [ ] Per-pad identity checks above pass
-
-**VERIFY** — genuine dark content, credits, and cuts are **untouched**.
-
-#### Cross-machine / tooling notes (TRAP)
-
-- The E03 regression found 84 map pads, 83 zeroed master fills, and 82 in the delivered file after head trim; all six TBC JSONs were clean. This proved a `PAD_1` **fill defect**, not an encoder/TBC failure.
-- Flowframes 1.42's command wrapper can silently no-op without elevation/dev mode; its model downloader may be GUI-only. Prefer a verified headless engine for automation. **Check model/backend availability on the current machine; do not assume another host's GPU enumeration, weights, or binary path transfers.**
-- Large FFmpeg `select='eq(n,...) + ...'` lists can exceed expression limits (chunk <=32 terms, or use seek/extract pairs).
-- `-read_intervals` does not drive `-show_frames`; use `showinfo` for PTS.
-- **Never** make A/B copies as hardlinks then overwrite with `Copy-Item -Force` (it writes through the shared inode).
-
----
 
 ## 7. DVD video alignment, audio/sub retiming, and final mux
 
-The DVD is used for **timing and optional streams only** — not as the picture master.
+The DVD is used for timing and optional streams, not as the picture master. Probe every DVD file; one Emissary regression reference was `roots.dvd_root/DS9S1D1/B1_t00.mkv` (MPEG-2, AC-3 5.1, separate AC-3 stereo, VobSub, SRT). Resolve the actual path from the local profile/manifest. Select streams by type/title, not copied indexes.
 
-### ACTION 7.1 — probe the DVD
+### Measure DVD↔LD video map per episode
 
-Probe every DVD file. Select streams **by type/title, not copied indexes**.
+Create both descriptor grids with `python scripts\extract_video_descriptors.py --episode <code> --source master` and the same command with `--source dvd`. The DVD decode must be sequential (never seek) and retain the validated FFmpeg default rawvideo output-sync behavior. A controlled E05 probe produced the exact 81,654-frame reference with default sync; adding `-fps_mode passthrough` alone produced 68,555, while `-vsync 0` failed. Do not add output-sync overrides, `setpts`, or an `fps` filter. Check output frame counts and 29.97-fps coverage against the source duration before alignment. Then run `python scripts\measure_dvd_alignment.py --episode <code>` and review its range-edge hits, confidence margins, transitions, reverse matches, and scene-cut checks. The Viterbi path is evidence, not an adjudicated cut schedule.
 
-**Reference:** one Emissary regression DVD was `roots.dvd_root/DS9S1D1/B1_t00.mkv` (MPEG-2, AC-3 5.1, separate AC-3 stereo, VobSub, SRT). Resolve the actual path from the local profile/manifest.
+1. Align native 29.97 LD ProRes frame descriptors to decoded DVD video descriptors (48x36 normalized luma is the established low-cost signature). Use a continuity-constrained/Viterbi search; single-frame greedy matches drift/hop on static shots. For video alignment, offsets use the recorded 29.97 descriptor-grid frame index (seconds = grid frames / 29.97); verify the decoded count/coverage before relying on it. When mapping to DVD audio or subtitle timestamps, separately respect those streams? actual time bases/PTS. **Sign convention that bit us on E04:** the state is `DVD index - master index` and it is NEGATIVE (the master runs ~1400 frames ahead from LD front matter); positive offsets index past the DVD's end at the tail - first a crash, and if clipped, silently garbage emissions. Cross-check every act-break step against black durations: `step = (DVD black - LD black) * 29.97` frames - E04's DP steps matched this to within threshold noise. But blackdetect durations are threshold-biased (LD analog fades vs DVD digital fades), so read final step values from the DP path at content-rich frames just OUTSIDE each black, not from raw black durations. **But even the DP medians can be fade-biased**: on E04 the dp window 0.15 s from break 8's black read -1466 while two independent 40-50 s content windows and the DVD black-start gave -1451/-1453. The authoritative edge measurement is a long content window (>=2 s clear of fades) matched over +/-40 offsets; use dp and the plateau fit as corroboration. Cache the descriptors (`desc-*.npy`); re-runs then take seconds instead of minutes.
+2. Plot DVD-vs-LD offset over time. Constant plateaus with jumps inside black = extra LD black. A slope = rate mismatch; fit a line separately on each plateau. Use `blackdetect` to find candidate boundaries and image matching to verify them.
+3. Use this map for both DVD audio and subtitles. A global `-itsoffset` is wrong if there are act-break steps or rate drift. For source DVD→LD mapping, if DVD time advances at ratio `r` per LD second, use `atempo=r` on that DVD audio segment (output duration becomes input/r) and insert silence for LD-only black extensions. Transform SRT cue times through the inverse affine map plus cumulative gaps.
+4. DVD 5.1 is a discrete remix; DVD stereo is a separate mix, not a downmix or substitute for the LD’s original Dolby Surround stereo. LD 2.0 must stay default.
 
-### ACTION 7.2 — measure the DVD↔LD video map
+For candidate break windows already entered in `retime.breaks[].ld_black`, run `python scripts\measure_break_edges.py --episode <code>`. It reports long-window content offsets, DP medians, score/runner-up margins, and differences from any recorded offsets. It does not decide which edge wins, whether a music-through black is merged, or edit the manifest. Resolve disagreements using the independent methods below; only then record `off_before`/`off_after`.
 
-**Step 1 — align descriptors.** Align native 29.97 LD ProRes frame descriptors to decoded DVD video descriptors (48x36 normalized luma is the established low-cost signature).
+Emissary-only regression map:
 
-Generate the arrays using the bundle helper:
+- Part I DVD frame-offset plateaus: −1418/−1438/−1482/−1502/−1530, steps 20/44/20/28 frames.
+- Part II first four plateaus: DVD/LD time ratio ~0.999; offset steps 44/34/43/37 frames; short final tail measured 1:1. Part II starts near DVD 2898.930 s.
+- Part II local LD black ends used for the tested map: 676.801, 1271.520, 1642.141, 2501.290 s. The generated E01 schedule is `Z:\work\probe\dvd-retime-map.tsv`.
+- The old `retime-dvd-assets.py` scripts are episode-specific history. For a new one-part episode, first measure/adjudicate all break edges and record `retime.breaks`, head/tail silence, tail offset, and source SRT in the manifest; then use `scripts\retime_dvd_assets.py --episode <code> --dry-run`, inspect every segment/gap/SRT count, and rerun without `--dry-run` only after it passes.
 
-```powershell
-python scripts\extract_video_descriptors.py --episode <ep> --source master
-python scripts\extract_video_descriptors.py --episode <ep> --source dvd
-python scripts\measure_dvd_alignment.py --episode <ep>
-```
+### Verify the DVD↔LD map against picture before retiming tracks (E03 regression lesson)
 
-The DVD decode is sequential. Keep FFmpeg's validated default rawvideo output-sync behavior: a controlled E05 probe produced the exact 81,654-frame reference with default sync; adding `-fps_mode passthrough` alone produced 68,555, while `-vsync 0` failed. Do **not** add output-sync overrides, `setpts`, or an `fps` filter. Check both descriptor counts and 29.97-fps coverage before using the candidate path; it is not an adjudicated edge map.
+An audio-envelope map can locate content but can absorb the LD's own A/V offset into the DVD↔LD map. Before muxing, independently compare final 23.976 LD video with the IVTC'd DVD in the same active-area geometry. Require unique high-motion/high-NCC matches, reverse round-trip agreement, and an independent scene-cut check; report median/IQR, per-act medians, and drift. If picture shows a constant offset `d`, remux only: adjust LD audio, retimed 5.1, and SRT together; do not re-encode video. Record build/effective skips in the segment manifest. In the E03 regression, picture matching found +72 ms; it was corrected with a stream-copy video remux and +72 ms shift to both audio tracks and all SRT times. Measure `d` independently for every episode; never copy that value.
 
-- Use a **continuity-constrained / Viterbi** search.
-- **TRAP** — single-frame greedy matches drift/hop on static shots.
-- Preserve actual DVD PTS where converting frame offsets to seconds.
-- Cache the descriptors (`desc-*.npy`); re-runs then take seconds instead of minutes.
+### Retimed DVD audio and English SRT
 
-> **TRAP — the sign convention that bit us on E04**
-> The state is `DVD index minus master index` and it is **NEGATIVE** (the master runs ~1400 frames ahead from LD front matter).
-> Positive offsets index past the DVD's end at the tail → first a crash, and if clipped, **silently garbage emissions**.
+- Keep original DVD AC-3 as an intermediate/reference. Split at the measured source boundaries; apply segment-specific `atempo`; insert 5.1 silence at measured LD-only black intervals. Use 24-bit FLAC for the retimed track to avoid another lossy encode after AC-3 decoding.
+- Retimed SRT should preserve all cue text, sorted times, and episode duration; cues spanning a boundary must remain visually sensible. VobSub is a backup unless its packet timestamps receive the same piecewise retiming. Do not mux it with a global offset.
+- After every cut/offset has been independently adjudicated and recorded, run `python scripts\retime_dvd_assets.py --episode <code> --dry-run`; require nonnegative gaps inside the measured black, plausible tempo (0.99..1.01), and all source SRT cues retained. Then rerun without `--dry-run` to create the graph, retimed 5.1 FLAC, retimed SRT, and segment map.
+- After both retimed assets pass validation, set `mux_tracks` and `deliverable_tracks` together to `['ld','51','srt']`; keep `ld_audio_source='ld_synced'`. V6's Windows/Mac remux maps `ld_synced`, `retimed_51`, and `retimed_srt` directly into the declared deliverable; a preassembled `pre_upscale` track container is not required. Without a DVD, leave retime fields unset and both track lists `['ld']`.
+- E01 template outputs: `Z:\work\audio\dvd-51-retimed.flac`, `Z:\work\subs\dvd-eng-retimed.srt`. Its filter graph is at `Z:\work\audio\dvd-51-retimed.filter`.
+- The bundled retime generator retains the graph as a review artifact and passes it with current FFmpeg `-filter_complex` (FFmpeg 9 does not accept the legacy `-filter_complex_script` option). It uses `asplit` when one DVD audio input feeds multiple trims; never seek the reference DVD with `-ss`.
 
-**Cross-check every act-break step against black durations:**
+### Per-episode retime construction (E04-proven)
 
-```
-step = (DVD black - LD black) * 29.97   frames
-```
+Cut construction (edge-anchored, zero DVD audio content dropped):
 
-E04's DP steps matched this to within threshold noise.
+- Cut exactly at DVD audio silence boundaries: the segment before a break ends at `silence_start`, the next begins at `silence_end`. The dropped span is silence by construction (no content lost or replayed); both cuts must satisfy the recorded detector threshold (no clicks).
+- Place each cut in output time: `dst = X - off_edge/FPS - DELTA`, where `off_edge` is the DVD-master offset at that break edge and `DELTA` = master time of output frame 0. On E04 `DELTA = 1485/FPS = 49.5495 s` (frame 1485 = first kept frame; AudioSkip `(1485-4)/FPS` gives the identical content timeline for the LD stereo; output-vs-master descriptor matching confirms within +/-1 frame).
+- Inserted gap = `silence_duration - step/FPS` (exact identity; print it both ways as a check). E04 gaps: 2.315/0.572/0.360/0.312/0.127/4.068/0.040 s, every one inside its LD black. If a step is longer than the silence the gap goes negative - do not force it: re-adjudicate the edge offsets first (on E04 the negative gap vanished once the fade-biased dp edge was replaced).
+- Segment `atempo` = src_span/dst_span of the two anchored ends (E04: -1448/-598/-1033/-1035/-1007/-1070/-1002/0 ppm - do NOT reuse one plateau's rate for all segments).
+- A break with no DVD audio silence (E04 break 2: music plays through the black, step ~0) = NO cut: merge the regions on both sides into a single segment; the DVD black passes through the plateau affine untouched.
+- Head segment starts at `DELTA` mapped back to DVD time (lands inside the DVD head silence); tail segment ends at `(TOTAL + DELTA) + TAIL_OFF/FPS` using a content-verified constant tail offset; `apad=whole_dur=TOTAL` with `TOTAL = frames*1001/24000` exactly (E04: 65,347 -> 2725.514458 s - use this exact value for `-t` and `apad`, never a rounded 2725.55).
 
-**TRAP** — `blackdetect` durations are **threshold-biased** (LD analog fades vs DVD digital fades). Read final step values from the DP path at content-rich frames just **OUTSIDE** each black, not from raw black durations.
+Adjudicate every break-edge offset three ways before trusting it:
 
-> **TRAP — even the DP medians can be fade-biased**
-> On E04 the dp window 0.15 s from break 8's black read **-1466**, while two independent 40–50 s content windows and the DVD black-start gave **-1451 / -1453**.
-> The **authoritative** edge measurement is a long content window (**>=2 s clear of fades**) matched over **+/-40 offsets**. Use dp and the plateau fit as corroboration only.
+1. Long-window content match: 40-50 s of master content just outside each black (>=2 s clear of fades) vs DVD descriptors over +/-40 offsets, mean cosine per offset (E04: corr 0.88-0.96, n~1400); drift-correct the window average to the edge using the plateau slope (windows span ~50 s, so ~1.5 frames of drift).
+2. Plateau LS fit of the npy path (E04: rms <= 1.4 f on A0/A2-A5).
+3. DP/npy median near the edge, and DVD `blackdetect` black STARTS as a fourth opinion (agree within 0-3 frames = LD fade lag; black DURATIONS stay threshold-biased).
 
-**Step 2 — plot.** Plot DVD-vs-LD offset over time.
+Two E04 disagreements that mattered: (a) dp at break 8 read -1466 vs true -1451 (fade bias) - trusting dp forced a cut into audio content and a negative gap; (b) the npy path trended +0.224 f/s through the end credits (+7484 ppm) while four content sub-windows read a constant -1424 - the trend was a Viterbi credits artifact and would have pushed the tail cut past the end of the audio. When fit, dp, and content disagree, content windows win.
 
-| Shape | Meaning |
-|---|---|
-| Constant plateaus with jumps inside black | extra LD black |
-| A slope | rate mismatch — fit a line **separately on each plateau** |
+Probe DVD stream reality before converting indices to seconds: E04's DVD MKV stream is ~24 fps (65,675 decoded frames) while the validated FFmpeg descriptor output is on a 29.97 grid (81,747 rows). The descriptor index divided by the verified output-grid FPS is the alignment timebase; it is not the native DVD stream frame index. Count decoded/output frames and verify duration coverage rather than assuming `r_frame_rate`, `avg_frame_rate`, or one PTS sample is sufficient.
 
-Use `blackdetect` to find candidate boundaries and image matching to verify them.
+Graph/mux gotchas: the generated graph ends in `[out]` - pass `-map '[out]'` or ffmpeg fails with "output unconnected". Strip newlines from the graph text before `-filter_complex`. Encode the retimed track to 24-bit FLAC (`-sample_fmt s32 -bits_per_raw_sample 24`, `anullsrc=r=48000:cl=5.1` for gaps).
 
-After recording candidate `retime.breaks[].ld_black` intervals, run `python scripts\measure_break_edges.py --episode <ep>`. Review content offsets, confidence margins, and DP comparisons; the helper reports evidence only and does not choose offsets or edit the manifest.
+Validation gates for the retime: record the `silencedetect` noise/duration parameters used to measure each source DVD-silence boundary, and use those same parameters when checking the retimed FLAC. A different threshold can move a fade boundary by hundreds of milliseconds and create a false retime failure (E06: -45 dB measurements checked at -40 dB); remeasure the schedule if the threshold changes, do not shift the schedule to hide the mismatch. With matching detector parameters, require planned gap positions within threshold timing (~70 ms) and durations exactly. The SRT must keep every cue, be monotonic, and remain inside `[0,TOTAL]`; `python scripts/sync_check.py --episode <code>` must show near-constant between-track offset within the drift gate. A constant offset BETWEEN the two audio tracks is expected (each has its own fade relationship to video); drift, not a fixed offset, is the defect.
 
-**Step 3 — use the map** for both DVD audio and subtitles.
+Operational gotchas: do not use the old episode-specific retime generators. Keep reviewed scripts under `scripts\`, use profile roots, and inspect `retime_dvd_assets.py` dry-run output. Use `scripts\sync_check.py --episode <code>` for the manifest-driven between-track check.
 
-**TRAP** — a global `-itsoffset` is **wrong** if there are act-break steps or rate drift.
-
-- Source DVD-to-LD mapping: if DVD time advances at ratio `r` per LD second, use `atempo=r` on that DVD audio segment (output duration becomes input/r).
-- Insert silence for LD-only black extensions.
-- Transform SRT cue times through the inverse affine map plus cumulative gaps.
-
-**Step 4 — stream roles.**
-
-- DVD 5.1 is a **discrete remix**.
-- DVD stereo is a **separate mix**, not a downmix or substitute for the LD's original Dolby Surround stereo.
-- **LD 2.0 must stay default.**
-
-**Luna fallback - trigger 7 (section 0.5):** only if edge methods still differ by >3 frames after the prescribed remeasurement; batch unresolved breaks.
-**STOP** — if the offset measurements disagree beyond tolerance, or the sign convention cannot be confirmed on this episode.
-
-### ACTION 7.3 — verify the map against picture **before** retiming tracks
-
-**TRAP (E03 regression lesson)** — an audio-envelope map can locate content but can absorb the LD's own A/V offset into the DVD-to-LD map.
-
-Before muxing, independently compare final 23.976 LD video with the IVTC'd DVD in the same active-area geometry.
-
-**VERIFY** — all of:
-
-- [ ] Unique high-motion / high-NCC matches
-- [ ] Reverse round-trip agreement
-- [ ] Independent scene-cut check
-- [ ] Report median/IQR, per-act medians, and drift
-
-**If picture shows a constant offset `d`:** remux only — adjust LD audio, retimed 5.1, and SRT **together**; do **not** re-encode video. Record build/effective skips in the segment manifest.
-
-**TRAP** — the E03 regression found +72 ms and corrected it with a stream-copy video remux and +72 ms shift to both audio tracks and all SRT times. **Measure `d` independently for every episode; never copy that value.**
-
-### ACTION 7.4 — retime construction (E04-proven)
-
-**Cut construction — edge-anchored, zero DVD audio content dropped:**
-
-- Cut exactly at DVD audio silence boundaries: segment before a break ends at `silence_start`, next begins at `silence_end`. The dropped span is silence by construction; both cuts must satisfy the recorded detector threshold (no clicks).
-- Place each cut in output time:
-
-```
-dst = X - off_edge/FPS - DELTA
-```
-
-  where `off_edge` = DVD-master offset at that break edge, and `DELTA` = master time of output frame 0.
-  (E04: `DELTA = 1485/FPS = 49.5495 s`; AudioSkip `(1485-4)/FPS` gives the identical content timeline for the LD stereo.)
-
-- Inserted gap:
-
-```
-gap = silence_duration - step/FPS
-```
-
-  Print it **both ways** as an identity check.
-
-  **TRAP** — if a step is longer than the silence, the gap goes **negative**. **Do not force it.** Re-adjudicate the edge offsets first. (On E04 the negative gap vanished once the fade-biased dp edge was replaced.)
-
-**Luna fallback - trigger 8 (section 0.5):** only if the gap remains negative after verifying signs and silence boundaries.
-**STOP** - if the gap remains negative after the source boundaries/signs have been checked and the applicable fallback has been used once.
-
-- Segment `atempo` = `src_span / dst_span` of the two anchored ends.
-
-  **TRAP** — do **NOT** reuse one plateau's rate for all segments.
-
-- A break with **no** DVD audio silence (E04 break 2: music plays through the black, step ~0) = **NO cut**: merge the regions on both sides into a single segment; the DVD black passes through the plateau affine untouched.
-- Head segment starts at `DELTA` mapped back to DVD time (lands inside the DVD head silence).
-- Tail segment ends at `(TOTAL + DELTA) + TAIL_OFF/FPS` using a content-verified constant tail offset.
-- `apad=whole_dur=TOTAL` with `TOTAL = frames*1001/24000` **exactly**.
-
-  **TRAP** — E04: 65,347 → `2725.514458 s`. Use this **exact** value for `-t` and `apad`, **never** a rounded 2725.55.
-
-#### Adjudicate every break-edge offset three ways before trusting it
-
-| # | Method | Reference result (E04) |
-|---|---|---|
-| 1 | **Long-window content match**: 40–50 s of master content just outside each black (>=2 s clear of fades) vs DVD descriptors over +/-40 offsets, mean cosine per offset; drift-correct the window average to the edge using the plateau slope | corr 0.88–0.96, n~1400; windows span ~50 s so ~1.5 frames of drift |
-| 2 | **Plateau LS fit** of the npy path | rms <= 1.4 f on A0/A2–A5 |
-| 3 | **DP/npy median** near the edge + DVD `blackdetect` black **STARTS** as a fourth opinion | agree within 0–3 frames = LD fade lag; black **DURATIONS** stay threshold-biased |
-
-**When fit, dp, and content disagree, CONTENT WINDOWS WIN.**
-
-**Two E04 disagreements that mattered:**
-
-- (a) dp at break 8 read -1466 vs true -1451 (fade bias) — trusting dp forced a cut into audio content and a negative gap.
-- (b) the npy path trended +0.224 f/s through the end credits (+7484 ppm) while four content sub-windows read a constant -1424 — the trend was a **Viterbi credits artifact** and would have pushed the tail cut past the end of the audio.
-
-**Luna fallback - trigger 9 (section 0.5):** only if independent tail windows still disagree after remeasurement.
-
-#### Probe DVD stream reality before converting indices to seconds
-
-**TRAP** — E04's DVD MKV video is ~24 fps (65,675 frames) while the cached descriptor array is 29.97-regridded (81,747 rows = duration x 29.97). Descriptor index/FPS = content time, and **that** is what the npy offsets use.
-
-**ACTION** — count frames (`ffprobe -count_frames` or a null decode). **Do not** trust `r_frame_rate` or a quick PTS sample.
-
-### ACTION 7.5 - generate the retimed DVD 5.1 and English SRT
-
-Before running the helper, the manifest must contain the measured DVD/LD picture map,
-adjudicated `retime.breaks`, `tail_off`, `head_sil_end`, `tail_sil_start`, and the
-verified `files.srt_source`. Keep the original DVD AC-3 as the source/reference.
-
-1. Run `python scripts\retime_dvd_assets.py --episode <ep> --dry-run`.
-2. **VERIFY** the selected DVD 6-channel stream, each source/output segment, each gap,
-   each tempo (0.99..1.01), and input/output SRT cue counts.
-3. If and only if the dry run is sensible, rerun without `--dry-run`. The helper writes
-   the 24-bit FLAC, retimed SRT, segment map, and filtergraph; it refuses to overwrite.
-4. Do not drop cues, move cuts outside measured silence, or use a global offset.
-   VobSub is a backup unless its packet timestamps receive the same piecewise retime.
-
-**TRAP** — preserve the detector parameters used to measure source DVD-silence boundaries.
-When validating the retimed FLAC, use the same `silencedetect` threshold/duration; E06's
--45 dB measurements checked at -40 dB appeared hundreds of milliseconds early. If changing
-thresholds, remeasure the source boundaries instead of shifting the retime schedule.
-
-**TRAP** - FFmpeg 9 does not accept legacy `-filter_complex_script`; the bundled helper
-passes its reviewed graph through `-filter_complex` inline. Do not hand-edit/rebuild a
-per-episode `retime-dvd-assets-s01e05.py` or `*-e04.py` script.
-
-### ACTION 7.6 — retime validation gates (all must pass)
-
-- [ ] With the same recorded detector parameters used for the source boundaries,
-      `silencedetect` on the retimed FLAC reproduces planned gap positions within threshold
-      timing (~70 ms) and durations **exactly**.
-- [ ] SRT keeps every cue, monotonic, inside `[0, TOTAL]`.
-- [ ] Envelope cross-correlation of retimed 5.1 vs LD stereo at 5–7 points (`scripts/sync_check.py --episode <code>`, 5 ms hops, parabolic peak) gives a **near-constant** offset.
-
-**Reference (E04):** 5.1 leads LD by 76 +/- 13 ms with slope +12.8 +/- 7.3 ppm; subtracting the LD stereo's own validated +0.05..+0.10 s fade lag vs video puts the 5.1 within 0..-35 ms of video across the episode (inside ITU +/-45 ms) — accept rather than re-chase envelope noise.
-
-**TRAP** — a constant offset **between** the two audio tracks is expected (each has its own fade relationship to video). **Only drift vs video is a defect.**
-
-**STOP** — if gaps do not reproduce, SRT is out of range, or the offset drifts.
-
-### ACTION 7.7 — mux
-
-Input 0 = LD master, input 1 = retimed 5.1, input 2 = retimed SRT:
+Mux pattern, where input 0 is the LD master, input 1 is retimed 5.1, input 2 is retimed SRT:
 
 ```powershell
 $out = "$work\out\<ep>-<title>-23.976-pre-upscale.mkv"
@@ -1031,170 +468,65 @@ $out = "$work\out\<ep>-<title>-23.976-pre-upscale.mkv"
   -t <VIDEO_DURATION> -y $out
 ```
 
-**VERIFY** — LD 2.0 is default; DVD 5.1 and SRT are selectable and non-default.
+If Topaz drops streams, remux tracks from this pre-upscale MKV afterward without applying the map again.
 
-**TRAP** — if Topaz drops streams, remux tracks from this pre-upscale MKV afterward **without** applying the map again.
+## 8. One-part vs. two-part output
 
----
+S01E01 Emissary only: encode Part I and Part II separately, then concatenate **those two episode parts** by stream-copy video. Join LD audio at sample/PCM level into one FLAC before mux; verify frame counts and the join. Then map DVD audio/subtitles across the combined timeline.
 
-## 8. One-part vs two-part output
-
-**Emissary (S01E01) only — two-part:**
-
-1. Encode Part I and Part II **separately**.
-2. Concatenate **those two episode parts** by stream-copy video.
-3. Join LD audio at sample/PCM level into **one FLAC** before mux; verify frame counts and the join.
-4. Then map DVD audio/subtitles across the combined timeline.
-
-**Every other episode — one-part:**
-
-1. Process one complete part.
-2. Produce one MKV.
-
-**TRAP — never:** concatenate capture files, concatenate separate episodes, or perform an automatic Topaz handoff.
-
----
+Every other episode: process one complete part and produce one MKV. Never concatenate capture files or concatenate separate episodes. No automatic Topaz handoff.
 
 ## 9. Objective DVD quality comparison
 
-**RULE** — only compare matched frames **after** cadence/time alignment and **identical** active-area geometry. PSNR/SSIM on mismatched frames is meaningless.
-
-Compare **separately**, not as one score:
-
-- [ ] luma spectrum by spatial-frequency band
-- [ ] edge / sharpness
-- [ ] grain / noise
-- [ ] MPEG blocking
-- [ ] combing
-- [ ] levels
-
-**Reference:** E01 showed similar low-frequency power but more LD high-frequency detail/grain. **That is not a reason to denoise.**
-
-**TRAP** — there is **no** evidence for a seamless episode-wide DVD/LD blend.
-
-The useful hybrid is **selective**: DVD can supply a **verified exact frame** at an LD defect/cut PAD, after 23.976 cadence normalization, active-area crop/scale, and a restrained match to the last good LD frame (see §6).
-
-**TRAP** — do not paste DVD frames globally, and do not trust nearest-time matches without picture confirmation.
-
----
+Only compare matched frames after cadence/time alignment and identical active-area geometry; PSNR/SSIM on mismatched frames is meaningless. Compare luma spectrum by spatial-frequency band, edge/sharpness, grain/noise, MPEG blocking, combing, and levels separately. E01 showed similar low-frequency power but more LD high-frequency detail/grain; that is not a reason to denoise. There is no evidence for a seamless episode-wide DVD/LD blend. The useful hybrid is selective: DVD can supply a **verified exact frame** at an LD defect/cut PAD, after 23.976 cadence normalization, active-area crop/scale, and a restrained match to the last good LD frame. Local E04's single cut-PAD test uses that method; its comparison is `Z:\work\probe\dvd-cut-pad-comparison-e04.png`. Do not paste DVD frames globally or trust nearest-time matches without picture confirmation.
 
 ## 10. Final QC checklist
 
-### Video
+Video: Main 10 HEVC, `yuv420p10le`, 24000/1001 progressive, native raster, 4:3 DAR, SMPTE170M/limited, expected frame count and duration. Inspect head, several evenly spaced points, every act break, seam if two-part, and tail. Also scan `blackdetect=d=0:pix_th=0.10:pic_th=0.98`, keep `black_duration < 0.2`: every hit must be either a genuine content fade that exists on the DVD or a confirmed PAD blip to repair using §6. No confirmed PAD_1 black blink may remain in a delivered file; an unexplained one-frame near-black frame is a defect.
 
-- [ ] Main 10 HEVC, `yuv420p10le`
-- [ ] 24000/1001 progressive
-- [ ] native raster
-- [ ] 4:3 DAR
-- [ ] SMPTE170M / limited range
-- [ ] expected frame count and duration
+Audio/subtitles: LD 2ch 44.1/16 FLAC is audio stream 0 and default; DVD 6ch 5.1(side) is selectable and non-default; English SDH SRT is selectable/non-default. Check sync at head, dialogue points, after each timing step, and end - the acceptance criterion is fade-in offsets CONSTANT across all act breaks (a changing offset = residual rate error, go back to the audio fit) and ~0, within +/-0.1 s on clean breaks; one noisy break (silence flickering on fading music) is not a failure. Check subtitle timestamps are sorted and within duration. Compare audio duration with video; pad a few milliseconds at the end if necessary, not by altering the episode timing map. Objective cross-checks: `silencedetect` on the retimed 5.1 must reproduce the planned act-break gap positions/durations, and an envelope cross-correlation of the two audio tracks (`sync-check-*.py`) must be drift-free vs video (constant inter-track offset is expected).
 
-**Inspect visually:** head, several evenly spaced points, every act break, seam (if two-part), and tail.
+Before reporting: include final path/size; stream list and dispositions; encode command/settings; measured trims/rate map; frame count/duration; audio-sync results at multiple points; subtitle count/range; any unresolved issue. Do not clean intermediates unless asked; if asked, keep the audio-fixed master, enriched pre-upscale master, and designated references.
 
-**Black scan:**
+## 11. Emissary current regression outputs
 
-```
-blackdetect=d=0:pix_th=0.10:pic_th=0.98     keep black_duration < 0.2
-```
+The `Z:\` paths in this section are historical locations on the original workstation.
+Use `machine.json` and the per-episode manifest for current paths; the numeric values
+below are reference measurements, never defaults for a new episode.
 
-Every hit must be **either**:
+- DVD: Emissary regression file under the historical `roots.dvd_root` (`DS9S1D1/B1_t00.mkv`)
+- Audio-fixed LD-only master: `Z:\work\out\S01E01-Emissary-23.976.mkv`
+- **PAD-fixed:** `Z:\work\out\S01E01-Emissary-23.976-padfixed.mkv` (7,237,820,859 bytes / 6.741 GiB; 130,766 frames / 5454.034 s; Main 10, 768x484, SAR 79:94, SMPTE170M; original 44.1 kHz/16-bit FLAC audio packet MD5 `1453a146c418b0b562f8c8eb3008576f`, unchanged).
+- PAD fix: 76 E01 Part II black pads replaced with RIFE 4.26 CPU TTA midpoint frames (`-s 0.5 -g -1 -x -z`); original source left intact. Video packet MD5 `b10fec0a94db5c520528416772252110`. Full video decode/blackdetect passed; **0/76 PAD-aligned single-black hits remain** (`Z:\work\probe\blackscan-padfixed-E01.txt`). The remaining 1-frame near-black events at 1954.035, 2898.854/2898.938, and 5071.567/5071.692 s are dark/seam content, not mapped PADs.
+- Enriched pre-upscale master: `Z:\DS9 LD to Upscale\S01E01-Emissary-23.976-pre-upscale.mkv` (moved from `work\out`; confirm the actual path before use).
+- Enriched file: 9.05 GiB, 5454.034 s, HEVC Main 10/23.976, LD stereo FLAC default, retimed DVD 5.1 FLAC 24-bit non-default, retimed English SDH SRT non-default.
+- PAD-fixed enriched master (stream-copy mux; originals retained): `Z:\DS9 LD to Upscale\S01E01-Emissary-23.976-pre-upscale-padfixed.mkv` (9,760,194,990 bytes / 9.09 GiB; 130,766 frames / 5454.034 s; HEVC Main 10 768x484 SAR 79:94; LD stereo default, DVD 5.1 24-bit selectable/non-default, English SDH selectable/non-default). Full decode passed. Packet hashes match sources: video `b10fec0a94db5c520528416772252110`, LD `1453a146c418b0b562f8c8eb3008576f`, DVD 5.1 `7ec670de64ac1f47d26ef1d40f2d5c9a`, SDH `f638c0c380146b78c8b24173828c7c91`. QC: `Z:\work\logs\qc-E01-padfixed-alltracks-session.log`.
+- E01 retime data: `Z:\work\probe\dvd-retime-map.tsv`, `Z:\work\audio\dvd-51-retimed.filter`, `Z:\work\subs\dvd-eng-retimed.srt`.
 
-- a genuine content fade that exists on the DVD, **or**
-- a confirmed PAD blip already repaired per §6.
-
-**Luna fallback - trigger 10 (section 0.5):** only if the PAD-map/full-raster/DVD checks leave a hit unclassified.
-**STOP** — if any confirmed `PAD_1` black blink remains. An unexplained one-frame near-black frame is a defect.
-
-### Audio / subtitles
-
-- [ ] LD 2ch 44.1/16 FLAC is **stream 0 and default**
-- [ ] DVD 6ch 5.1 is selectable and **non-default**
-- [ ] English SDH SRT is selectable and **non-default**
-- [ ] subtitle timestamps sorted and within duration
-- [ ] audio duration compared with video (pad a few ms at the end if needed — **never** by altering the episode timing map)
-
-**Sync checks** at head, dialogue points, after each timing step, and end.
-
-**Acceptance criterion:** fade-in offsets **CONSTANT** across all act breaks and ~0, within +/-0.1 s on clean breaks.
-
-**TRAP** — a **changing** offset = residual rate error → go back to the audio fit (§5, Gate 4).
-
-**TRAP** — one noisy break (silence flickering on fading music) is **not** a failure.
-
-**Objective cross-checks:**
-
-- [ ] `silencedetect` on the retimed 5.1 reproduces planned act-break gap positions/durations
-- [ ] envelope cross-correlation of the two audio tracks (`scripts/sync_check.py --episode <code>`) is drift-free vs video (constant inter-track offset is expected)
-
-### Before reporting, include
-
-1. final path / size
-2. stream list and dispositions
-3. encode command / settings
-4. measured trims / rate map
-5. frame count / duration
-6. audio-sync results at multiple points
-7. subtitle count / range
-8. any unresolved issue
-
-**TRAP** — do not clean intermediates unless asked. If asked, keep the audio-fixed master, the enriched pre-upscale master, and designated references.
-
----
-
-## 11. Reference data — **DO NOT COPY**
-
-> Everything in this section is **historical record for past episodes**. It exists so you can recognise whether a result is plausible.
-> **Never** paste any value here into a new episode. Every number in §1–§10 marked **MEASURE** must be obtained fresh.
-
-### Emissary (S01E01) regression
-
-- Output `Trim(1167,70718)`; 69,552 frames / 2900.90 s; head trim 48.631917 s (Part I).
-- Part II: `.Trim(20,0)` alignment, 61,214 output frames / 2553.134 s after its measured tail cut.
-- DVD frame-offset plateaus: -1418/-1438/-1482/-1502/-1530; steps 20/44/20/28 frames.
-- Part II DVD/LD time ratio ~0.999; offset steps 44/34/43/37 frames; short final tail measured 1:1; starts near DVD 2898.930 s.
-- Part II local LD black ends used: 676.801, 1271.520, 1642.141, 2501.290 s. Schedule: `Z:\work\probe\dvd-retime-map.tsv`.
-- `Z:\work\probe\retime-dvd-assets.py` is **hard-coded for E01** — do not run unchanged for another episode.
-- E01 Part II: 77 L1 map pads; 76 rendered near-black blips, all repaired by RIFE. E01 Part I has no periodic PAD blips.
-- Final: `Z:\work\out\S01E01-Emissary-23.976-padfixed.mkv` — 7,237,820,859 bytes; 130,766 frames / 5454.034 s; Main 10, 768x484, SAR 79:94; LD audio packet MD5 `1453a146c418b0b562f8c8eb3008576f`; video packet MD5 `b10fec0a94db5c520528416772252110`; **0/76** PAD-aligned hits remain.
-
-### A Man Alone (S01E04) regression
+A Man Alone (S01E04) outputs:
 
 - DVD: `roots.dvd_root/Deep Space 9 - S01E04 - A Man Alone.mkv` (historical E04 regression)
-- Download: `Z:\DS9 S01E04 LaserDisc\` (16 verified files, 453.69 GiB)
+- Download folder + manifest: `Z:\DS9 S01E04 LaserDisc\` (16 verified files, 453.69 GiB)
 - Stack master: `Z:\work\prores\S01E04-stack6-master.mov` (83,170 frames, L2-referenced, alignment `1+0,2+3,3+1,4+176,5+32,6+24`)
 - Cadence: 93.17 % period-5, 0 unmatched, 5 inserts, repair set 3.07 %, VERDICT uniform 3:2
 - Rate-corrected audio: `Z:\work\audio\S01E04-L1-44056.wav` (fit -992.8 +/- 53 ppm)
-- DVD alignment: `Z:\work\probe\dvd-align-s01e04.npy` (state DVD-minus-master is negative, base about -1426; DP content-edge steps +2/0/+27/+43/+43/+27/-85/+37; use `dvd-retime-map-s01e04.tsv`)
-- Head trim: output `.Trim(1186, 0)` (fade-up = output 1189), AudioSkip 49.416033 s, 65,347 frames / 2725.514458 s
-- DVD retime: schedule `Z:\work\probe\dvd-retime-map-s01e04.tsv`, graph `Z:\work\audio\dvd-51-retimed-s01e04.filter`, retimed 5.1 `Z:\work\audio\dvd-51-retimed-s01e04.flac`, retimed SRT `Z:\work\subs\dvd-eng-retimed-s01e04.srt` (867/867 cues), edge data `Z:\work\probe\edges-longwin-s01e04.npy`
-- Pre-upscale: `Z:\work\out\S01E04-23.976-pre-upscale.mkv` — 4,663,902,131 bytes; container 2725.554 s; envelope sync 5.1 vs LD 76 +/- 13 ms
-- PAD-fixed pre-upscale: `Z:\work\out\S01E04-23.976-pre-upscale-padfixed.mkv` — 4,694,688,433 bytes; 65,347 frames / 2725.514458 s; 80 non-cut PADs by RIFE 4.26 CPU TTA; cut PAD frame 26160 by matched DVD progressive frame 26234 at 1094.191 s; **0/81** PAD-aligned hits remain. Audio MD5s: LD `4aab3478a270854433adf303efc712c4`, DVD 5.1 `ac7f8c4db605397ebf032bf65d58ae8c`, SRT `03192babaddd52b4db340cf9571ef77d`; video `22606cdbe6d42b755110e197072998a8`.
-- E04 dark-content hits at output 1415.372 s (max 57/255) and 2721.052 s (max 64/255) are **non-PAD content**, left untouched.
+- DVD alignment: `Z:\work\probe\dvd-align-s01e04.npy` (state DVD-master is negative; base about -1426. DP content-edge steps: +2/0/+27/+43/+43/+27/-85/+37. Use the adjudicated silence-edge schedule in `dvd-retime-map-s01e04.tsv`, not early greedy/black-duration estimates; see §7.)
+- Head trim: output `.Trim(1186, 0)` (fade-up = output 1189), AudioSkip 49.416033 s, 65,347 frames / 2725.514458 s (= frames x 1001/24000; use this exact value for `-t`/`apad`)
+- DVD retime: schedule `Z:\work\probe\dvd-retime-map-s01e04.tsv`, graph `Z:\work\audio\dvd-51-retimed-s01e04.filter`, retimed 5.1 `Z:\work\audio\dvd-51-retimed-s01e04.flac` (s32/24-bit 48k 6ch, 2725.514458 s), retimed SRT `Z:\work\subs\dvd-eng-retimed-s01e04.srt` (867/867 cues), edge data `Z:\work\probe\edges-longwin-s01e04.npy`
+- **Pre-upscale:** `Z:\work\out\S01E04-23.976-pre-upscale.mkv` - 4,663,902,131 bytes (4.34 GiB), container 2725.554 s; HEVC Main 10 768x484 SAR 79:94 tv/smpte170m; FLAC 44.1/16 stereo DEFAULT; FLAC 48k/24 5.1 non-default; subrip non-default; all eng with titles; envelope sync 5.1 vs LD 76 +/- 13 ms (5.1 vs video 0..-35 ms)
+- **PAD-fixed pre-upscale:** `Z:\work\out\S01E04-23.976-pre-upscale-padfixed.mkv` (4,694,688,433 bytes / 4.372 GiB; 65,347 frames / 2725.514458 s; same stream order/dispositions/titles/color tags as source). 80 non-cut PADs use RIFE 4.26 CPU TTA; cut PAD frame 26160 uses the matched DVD progressive frame 26234 at 1094.191 s, cropped/scaled and stable-background color-matched to LD frame 26159; E04 dark-content hits 33935 and 65240 were not pads and were left untouched. Original audio/subtitle packet MD5s are unchanged: LD `4aab3478a270854433adf303efc712c4`, DVD 5.1 `ac7f8c4db605397ebf032bf65d58ae8c`, SRT `03192babaddd52b4db340cf9571ef77d`. Video packet MD5 `22606cdbe6d42b755110e197072998a8`. Full video decode/blackdetect passed; **0/81 PAD-aligned single-black hits remain** (`Z:\work\probe\blackscan-padfixed-E04.txt`). The remaining dark hits at output 1415.372 s (max 57/255) and 2721.052 s (max 64/255) are non-PAD content.
 
-### Standing rule
+E01's completed audio tracks were user-confirmed correctly timed. For every new episode, retain the rule: remeasure the absolute A/V offset and rate; never infer another episode's correction from E01/E03/E04.
 
-**E01's completed audio tracks were user-confirmed correctly timed. For every new episode: remeasure the absolute A/V offset and rate. Never infer another episode's correction from E01/E03/E04.**
+### Babel (S01E05) outputs
 
----
-
-
-## Quick reference - fallback vs STOP
-
-For an ambiguity-only case, consult the single trigger list in section 0.5. Qwen3.5 4B
-must finish local checks first; use one `/deep` request to `opencode-go/gpt-6-luna`
-only for a listed unresolved case, and apply the response only if VERIFY passes.
-Never escalate a command, path lookup, checksum, arithmetic operation, or explicit
-numeric gate.
-
-**STOP and ask the user** for factual failures that reasoning cannot fix:
-
-1. Source file/hash/size mismatch or missing required raw EFM.
-2. Command/tool failure after the documented recovery.
-3. Frame-count mismatch, invalid stack inputs, or unrecoverable Orc samples.
-4. Preflight, free-space, or output-preservation gate failure.
-5. E01's two-part workflow is required; generic one-part stages reject it.
-6. GPT-6 is unavailable, returns an unusable answer, or fails VERIFY.
-7. A QC hard gate fails; no model may waive it.
-
-**Stop report:** section/step; commands and inputs; actual vs expected result; artifact
-and log paths; known facts and unresolved question. Do not claim delivery.
+- DVD: `roots.dvd_root/Deep Space 9 - S01E05 - Babel.mkv` (historical E05 regression; MPEG-2 29.97, 2724.544 s; AC3 5.1 + AC3 stereo, 819-cue English SRT).
+- Download folder: `Z:\DS9 S01E05 LaserDisc\` - **12 verified files, 305.82 GiB**: four captures L1/M1/P1/P2, each with TBC + paired JSON + raw EFM (MD5 manifest `download-manifest.csv`). All four JSONs: zero decode faults, no sequence gaps. Archive `.pcm`/`.log` intentionally not downloaded.
+- Stack: project `Z:\work\stack\stack-full-s01e05.orcprj`, **M1 is the reference**, alignment `1+0, 2+2, 3+35, 4+29` (a first L1-reference run was saved but discarded: re-order inputs so the recommended reference is first). Master `Z:\work\prores\S01E05-stack4-master.mov` - **83,230 frames / 23.91 GiB / 2777.1077 s**, 768x484 ProRes HQ 10-bit, SAR 121:144. Two pressing groups {M1,L1} and {P1,P2}; `fitTrusted=true`, `fellBackToMean=false`, all four contributing (shares 18/19/27/36 %); predicted stack noise 1.49 codes vs 2.38 for the best single capture.
+- Audio: all four raw EFMs decoded by EFMSink (`Z:\work\audio\S01E05-Babel-*-efm.wav`, all valid contiguous Q timecodes, no uncorrectable sections). **P1 chosen** (post-C2 loss 0.0118 %, concealment 0.0005 % - best of the four). Rate measured, never assumed: fade-midpoint fit **-1006.7 +/- 79 ppm**; independently confirmed by the picture map (-1321 ppm) and the corrected-envelope check (-1321 ppm). Applied `asetrate=44056,aresample=44100` -> `S01E05-Babel-P1-44056.wav`, 2775.938118 s (matches the IVTC duration to 1.7 ms, which also proves WAV0 = master frame 35). Native decodes kept.
+- Cadence: uniform 3:2 across the side (VERDICT), 92.19 % period-5, **0 unmatched**, 892 combed at mic>80, **6 interlaced inserts** (135-255 frames), repair set **2,855 frames / 3.43 %**; targeted QTGMC only, `FPSDivisor=2`. Evidence: `cadence-summary-s01e05.txt`, `di-map-s01e05.txt`, `full-cadence-s01e05.txt`.
+- Head trim: output `.Trim(1161, 0)` (fade-up = output 1164 = master 1490); `DELTA` = 49.616044 s (raw master frame 1487 of output frame 0, descriptor-verified); `AudioSkip` = **48.448400 s** (content-geometric). 65,395 frames / 2727.516458 s exact.
+- PAD_1: M1 map has 84 pads -> 1 removed by the head trim, 1 sits inside the act-break black, 1 never rendered (only one source padded it, so the stacker rejected the lone black as an outlier) => **81 isolated blinks, all repaired by RIFE 4.26 CPU TTA**. Full-raster RGB on all 81: `rgb_max<=2`, `rgb_mean<=0.0004`. Cut test: no cut pads (max flank 1-NCC 0.3705 vs this episode's cut range >=0.73; top candidate visually confirmed same-shot). Two single-frame blacks are **content, not pads** (frames 55735 and 65264 - a dark space shot and a cut into a dark Paramount-logo fade, both corroborated on the DVD) and were left untouched.
+- DVD retime: **all 7 act breaks agree across all three adjudication methods** (long-window content, DP median, plateau fit). Three further long video blacks (LD 339-351, 2291, 2647) have no DVD audio silence - music plays through - and measured +1/-1/-2 frames of step, so they are merged, not cut. Gaps 1.885/0.619/2.238/1.531/1.735/1.914/1.672 s, all >=0 and inside the LD black (break 3 exceeds by 36 ms, within fade tolerance). SRT `Z:\work\subs\S01E05-Babel-dvd-eng-retimed.srt`: **819/819 cues**, monotonic, in range. Retime graph `Z:\work\audio\dvd-51-retimed-s01e05.filter`, schedule `dvd-retime-map-s01e05.tsv`, edges `adjudicated-edges-s01e05.tsv`.
+- **Delivered:** `Z:\work\out\S01E05-Babel-23.976-pre-upscale.mkv` - 4,583,968,064 bytes (4.27 GiB), 65,395 frames / 2727.516458 s, HEVC Main 10 768x484 SAR 79:94 tv/smpte170m. Streams: HEVC default; FLAC 44.1/16 **LD stereo default**; FLAC 48k/24 **5.1(side) non-default**; subrip **819 cues non-default**, all eng with titles. Packet MD5s (bit-exact vs sources): video `ebf9fed0af692f1e3285d61327dea430` (identical in padfixed-video, padfixed and pre-upscale), LD `1d39dfbeb07aedb1cc30a856fb68d227`, 5.1 `21549d9c1c7721678ec6f3d16165ccdb`, SRT `267a9c8b2d1b925dead635034dda549f`.
+- QC: full decode 0 error lines; **0/81 PAD-aligned single-black hits** (`blackscan-padfixed-E05.txt`); replacement-image identity own NCC 0.99892-0.99991 vs best-unrelated <=0.66 (`pad-identity-samples.tsv`); bundled QC remeasurement of the delivered file: absolute A/V **-10.3 ms constant, -11.0 ppm, rms 15.9 ms** (range -53.3..-0.3 ms; `S01E05-av-check-S01E05-Babel-23.976-pre-upscale.tsv`); between-track 5.1-vs-LD **+7.8 ms constant, +13.7 ppm, rms 12.6 ms** (range +4..+46 ms; `S01E05-sync-check-S01E05-Babel-23.976-pre-upscale.tsv`). These are measured outputs of the current checker, not defaults.
