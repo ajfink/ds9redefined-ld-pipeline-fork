@@ -18,7 +18,7 @@ import shared_workspace  # noqa: E402
 from ldcommon import (PipelineError, assert_writable_path, episode_manifest_path,
                       shared_instance_root)  # noqa: E402
 from shared_workspace import (LockError, configure_shared_profile,
-                              resolve_instance_workspace)  # noqa: E402
+                              initialize_workspace, resolve_instance_workspace)  # noqa: E402
 
 
 class SharedWorkspaceTests(unittest.TestCase):
@@ -76,6 +76,60 @@ class SharedWorkspaceTests(unittest.TestCase):
                     profile=profile, profile_path=profile_path)),
                     validated / "manifest" / "S01E09.json")
 
+    def test_legacy_shared_workspace_mode_is_inferred_without_rewriting_provenance(self):
+        with tempfile.TemporaryDirectory() as temp:
+            bundle = Path(temp) / "ld-pipeline"
+            (bundle / "devices").mkdir(parents=True)
+            (bundle / "WORKFLOW_VERSION").write_text("9\n", encoding="ascii")
+            profile_path = Path(temp) / "local-profile.json"
+            profile_path.write_text("{}\n", encoding="utf-8")
+            profile = {"machine": "DEVICE-C", "shared": {
+                "enabled": True, "release_root": str(bundle), "device_name": "DEVICE-C"}}
+            with patch.object(shared_workspace, "ROOT", bundle):
+                created = shared_workspace.create_workspace(profile_path, profile, "S01E09")
+                root = Path(created["instance_root"])
+                metadata_path = root / "workspace.json"
+                saved = json.loads(metadata_path.read_text(encoding="utf-8"))
+                saved["workflow_version"] = "7"
+                saved.pop("storage_mode")
+                metadata_path.write_text(json.dumps(saved), encoding="utf-8")
+
+                resolved, warning = resolve_instance_workspace(
+                    profile_path, profile, "S01E09", create=True)
+
+            self.assertIsNone(warning)
+            self.assertEqual(resolved["storage_mode"], "shared-release")
+            unchanged = json.loads(metadata_path.read_text(encoding="utf-8"))
+            self.assertNotIn("storage_mode", unchanged)
+            self.assertEqual(unchanged["workflow_version"], "7")
+
+    def test_legacy_local_fallback_mode_is_inferred_without_rewriting_workspace(self):
+        with tempfile.TemporaryDirectory() as temp:
+            bundle = Path(temp) / "ld-pipeline"
+            bundle.mkdir()
+            (bundle / "WORKFLOW_VERSION").write_text("9\n", encoding="ascii")
+            profile_path = Path(temp) / "local-profile.json"
+            profile_path.write_text("{}\n", encoding="utf-8")
+            local_logs = Path(temp) / "local" / "logs"
+            profile = {"machine": "DEVICE-D", "roots": {"logs": str(local_logs)},
+                       "shared": {"enabled": True, "release_root": str(bundle),
+                                  "device_name": "DEVICE-D"}}
+            with patch.object(shared_workspace, "ROOT", bundle):
+                created = shared_workspace.create_local_fallback(
+                    profile_path, profile, "S01E09")
+                root = Path(created["instance_root"])
+                metadata_path = root / "workspace.json"
+                saved = json.loads(metadata_path.read_text(encoding="utf-8"))
+                saved.pop("storage_mode")
+                metadata_path.write_text(json.dumps(saved), encoding="utf-8")
+
+                resolved, warning = resolve_instance_workspace(
+                    profile_path, profile, "S01E09", create=True)
+
+            self.assertEqual(resolved["storage_mode"], "local-fallback")
+            self.assertIsNotNone(warning)
+            self.assertNotIn("storage_mode", json.loads(metadata_path.read_text(encoding="utf-8")))
+
     def test_shared_profile_configuration_is_external_and_no_overwrite(self):
         with tempfile.TemporaryDirectory() as temp:
             bundle = Path(temp) / "ld-pipeline"
@@ -122,6 +176,23 @@ class SharedWorkspaceTests(unittest.TestCase):
                 self.assertNotIn(str(profile_path), saved)
                 self.assertNotIn(str(bundle.resolve()), saved)
                 self.assertEqual(result["instance_root"], str(instance))
+
+    def test_repeated_init_refuses_to_create_a_sibling_workspace(self):
+        with tempfile.TemporaryDirectory() as temp:
+            bundle = Path(temp) / "ld-pipeline"
+            (bundle / "devices").mkdir(parents=True)
+            (bundle / "WORKFLOW_VERSION").write_text("9\n", encoding="ascii")
+            profile_path = Path(temp) / "local-profile.json"
+            profile_path.write_text("{}\n", encoding="utf-8")
+            profile = {"machine": "DEVICE-E", "shared": {
+                "enabled": True, "release_root": str(bundle), "device_name": "DEVICE-E"}}
+            with patch.object(shared_workspace, "ROOT", bundle):
+                first = initialize_workspace(profile_path, profile, "S01E09")
+                with self.assertRaisesRegex(LockError, "use 'ensure'"):
+                    initialize_workspace(profile_path, profile, "S01E09")
+                folders = list((bundle / "devices").glob("DEVICE-E-*/episodes/S01E09"))
+            self.assertEqual(len(folders), 1)
+            self.assertEqual(Path(first["instance_root"]), folders[0])
 
     def test_shared_manifest_resolves_inside_current_instance_and_rejects_release_writes(self):
         with tempfile.TemporaryDirectory() as temp:

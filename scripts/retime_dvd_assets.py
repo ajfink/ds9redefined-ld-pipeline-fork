@@ -17,14 +17,18 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
+import os
 import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from ldcommon import Ld, PipelineError, assert_writable_path, load_episode  # noqa: E402
+from ldcommon import (Ld, PipelineError, assert_writable_path, device_workspace_enabled,
+                      load_episode, redact_shared_text)  # noqa: E402
 from av_check_output import build_offset_model  # noqa: E402
 
 FPS = 30000.0 / 1001.0
@@ -46,6 +50,105 @@ def fmt_srt(value: float) -> str:
     m, ms = divmod(ms, 60_000)
     sec, ms = divmod(ms, 1000)
     return f"{h:02d}:{m:02d}:{sec:02d},{ms:03d}"
+
+
+def coalesce_silence_intervals(intervals: list[tuple[float, float]],
+                               epsilon_s: float = 1e-6) -> list[tuple[float, float]]:
+    """Merge only overlapping or touching detector intervals, never nearby pauses."""
+    if epsilon_s < 0:
+        raise PipelineError("silence coalescing epsilon must be nonnegative")
+    ordered = sorted((float(start), float(end)) for start, end in intervals)
+    merged: list[list[float]] = []
+    for start, end in ordered:
+        if not (math.isfinite(start) and math.isfinite(end)) or end < start:
+            raise PipelineError(f"invalid silence interval: {start}..{end}")
+        if merged and start <= merged[-1][1] + epsilon_s:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return [(start, end) for start, end in merged]
+
+
+def parse_silence_intervals(stderr: str) -> list[tuple[float, float]]:
+    """Parse FFmpeg silencedetect output; ignore open-ended EOF silence."""
+    start_re = re.compile(r"silence_start:\s*(-?\d+(?:\.\d+)?)")
+    end_re = re.compile(r"silence_end:\s*(-?\d+(?:\.\d+)?)")
+    pending: float | None = None
+    intervals: list[tuple[float, float]] = []
+    for line in stderr.splitlines():
+        start_match = start_re.search(line)
+        end_match = end_re.search(line)
+        if start_match:
+            start = float(start_match.group(1))
+            if pending is not None:
+                intervals.append((pending, start))
+            pending = start
+        if end_match:
+            end = float(end_match.group(1))
+            if pending is not None:
+                intervals.append((pending, end))
+                pending = None
+    return coalesce_silence_intervals(intervals)
+
+
+def verify_expected_gaps(expected_gaps: list[dict], detected: list[tuple[float, float]],
+                         *, tolerance_s: float = 0.070,
+                         minimum_confident_gap_s: float = 0.050) -> dict:
+    """Compare planned output gaps with observed silence; short gaps remain LIMITs."""
+    if tolerance_s < 0 or minimum_confident_gap_s < 0:
+        raise PipelineError("gap verification tolerances must be nonnegative")
+    intervals = coalesce_silence_intervals(detected)
+    rows = []
+    matched_intervals: set[int] = set()
+    for expected in expected_gaps:
+        start = float(expected["start_s"])
+        end = float(expected["end_s"])
+        duration = float(expected.get("duration_s", end - start))
+        if not all(math.isfinite(v) for v in (start, end, duration)) or end < start or duration < 0:
+            raise PipelineError(f"invalid expected gap record: {expected!r}")
+        row = {"label": str(expected.get("label", "gap")), "expected_start_s": start,
+               "expected_end_s": end, "expected_duration_s": duration}
+        if duration < minimum_confident_gap_s:
+            row.update({"status": "LIMIT", "detail": "gap is below confident position-check resolution"})
+            rows.append(row)
+            continue
+        candidates = []
+        for interval_index, (obs_start, obs_end) in enumerate(intervals):
+            if interval_index in matched_intervals:
+                continue
+            overlap = max(0.0, min(end + tolerance_s, obs_end) - max(start - tolerance_s, obs_start))
+            if overlap > 0:
+                candidates.append((overlap, interval_index, obs_start, obs_end))
+        if not candidates:
+            row.update({"status": "FAIL", "detail": "no detected output silence near the planned gap"})
+            rows.append(row)
+            continue
+        _, interval_index, obs_start, obs_end = max(candidates, key=lambda item: item[0])
+        matched_intervals.add(interval_index)
+        position_delta = obs_start - start
+        duration_delta = (obs_end - obs_start) - duration
+        row.update({"detected_start_s": obs_start, "detected_end_s": obs_end,
+                    "detected_duration_s": obs_end - obs_start,
+                    "position_delta_s": position_delta, "duration_delta_s": duration_delta})
+        if abs(position_delta) <= tolerance_s and abs(duration_delta) <= tolerance_s:
+            row.update({"status": "PASS", "detail": "detected silence agrees within tolerance"})
+        else:
+            row.update({"status": "FAIL", "detail": "detected silence differs from planned gap beyond tolerance"})
+        rows.append(row)
+    statuses = [row["status"] for row in rows]
+    overall = "FAIL" if "FAIL" in statuses else "LIMIT" if "LIMIT" in statuses else "PASS"
+    return {"status": overall, "tolerance_s": tolerance_s,
+            "minimum_confident_gap_s": minimum_confident_gap_s,
+            "gaps": rows, "detected_interval_count": len(intervals)}
+
+
+def scan_retimed_gaps(ld: Ld, audio_path: Path, expected_gaps: list[dict]) -> dict:
+    cmd = [ld.ffmpeg(), "-hide_banner", "-nostats", "-i", str(audio_path), "-map", "0:a:0",
+           "-af", "silencedetect=noise=-40dB:d=0.015", "-f", "null", "-"]
+    proc = run(cmd)
+    if proc.returncode:
+        raise PipelineError(f"FFmpeg output-silence verification failed (exit {proc.returncode}): {proc.stderr[-800:]}")
+    return verify_expected_gaps(expected_gaps, parse_silence_intervals(proc.stderr or ""))
 
 
 def get_dvd_streams(ld: Ld, dvd: Path) -> tuple[str, float, str]:
@@ -88,6 +191,7 @@ def main() -> int:
     ap.add_argument("--audio-out")
     ap.add_argument("--srt-out")
     ap.add_argument("--map-out")
+    ap.add_argument("--verify-out", help="new JSON output-gap verification report path")
     args = ap.parse_args()
 
     import numpy as np
@@ -179,7 +283,10 @@ def main() -> int:
     audio_out = Path(args.audio_out) if args.audio_out else ep.path("retimed_51")
     srt_out = Path(args.srt_out) if args.srt_out else ep.path("retimed_srt")
     map_out = Path(args.map_out) if args.map_out else ep.path("retime_map")
-    outputs = [graph_out, audio_out, srt_out, map_out]
+    default_verify_dir = ld.root("logs") if device_workspace_enabled(ld.profile) else ld.probe()
+    verify_out = (Path(args.verify_out) if args.verify_out else
+                  default_verify_dir / f"{ep.code}-retime-audio-verification.json")
+    outputs = [graph_out, audio_out, srt_out, map_out, verify_out]
     for output in outputs:
         assert_writable_path(output, ld)
     if not args.dry_run:
@@ -234,6 +341,11 @@ def main() -> int:
         print(f"  A{i}: DVD {seg[0]:.3f}-{seg[1]:.3f} -> out {seg[2]:.3f}-{seg[3]:.3f}, tempo={seg[4]:.9f}, gap={gaps[i] if i < len(gaps) else 0:.3f}")
     print(f"subtitle cues: {len(cues)} input -> {len(retimed)} output, skipped={skipped}")
     print("FFmpeg:", " ".join(ffmpeg_cmd))
+    expected_gaps = [
+        {"label": label, "start_s": dst_end, "end_s": dst_start, "duration_s": gap}
+        for _src0, _src1, dst_end, dst_start, gap, label in cuts if gap > 0
+    ]
+    print(f"post-write output-silence verification: {len(expected_gaps)} gaps; report={verify_out}")
     if args.dry_run:
         print("DRY RUN - no retime artifacts written")
         return 0
@@ -253,7 +365,37 @@ def main() -> int:
         raise PipelineError(f"FFmpeg DVD 5.1 retime failed (exit {p.returncode}): {p.stderr[-1000:]}")
     if not audio_out.exists():
         raise PipelineError(f"FFmpeg returned success but retimed audio is missing: {audio_out}")
-    print(f"created retimed 5.1: {audio_out}; SRT {len(retimed)} cues: {srt_out}; map: {map_out}")
+    verification = scan_retimed_gaps(ld, audio_out, expected_gaps)
+    verification.update({
+        "schema": "ld-pipeline-retime-audio-verification-v1",
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "workflow_version": (Path(__file__).resolve().parent.parent / "WORKFLOW_VERSION").read_text(encoding="ascii").strip(),
+        "episode": ep.code,
+        "audio": str(audio_out),
+        "map": str(map_out),
+        "method": "FFmpeg silencedetect on generated 5.1 output; -40 dB, 15 ms minimum; only touching intervals coalesced",
+        "manifest_updated": False,
+    })
+    if verification["status"] == "LIMIT":
+        verification["caveat"] = "One or more gaps are below confident position-check resolution; review independently and do not claim a full gap-verification pass."
+    report_text = json.dumps(verification, indent=2, ensure_ascii=False) + "\n"
+    instance_root = Path(os.environ["LDP_INSTANCE_ROOT"]).resolve() if os.environ.get("LDP_INSTANCE_ROOT") else None
+    if instance_root is not None and (ld.profile.get("shared") or {}).get("enabled") is True:
+        try:
+            verify_out.resolve().relative_to(instance_root)
+            report_text = redact_shared_text(report_text, ld)
+        except ValueError:
+            pass
+    verify_out.parent.mkdir(parents=True, exist_ok=True)
+    with verify_out.open("x", encoding="utf-8", newline="\n") as report_file:
+        report_file.write(report_text)
+    for item in verification["gaps"]:
+        print(f"gap verification {item['label']}: {item['status']} - {item['detail']}")
+    if verification["status"] == "FAIL":
+        raise PipelineError(f"retimed audio gap verification failed; inspect {verify_out}; outputs are preserved")
+    if verification["status"] == "LIMIT":
+        print("LIMIT: sub-resolution gap(s) remain unverified; do not report an ordinary full gap-verification pass")
+    print(f"created retimed 5.1: {audio_out}; SRT {len(retimed)} cues: {srt_out}; map: {map_out}; verification: {verify_out}")
     return 0
 
 

@@ -4,6 +4,7 @@
 !/machine-macos.example.json
 !/machine-linux-x86_64.example.json
 /machine-authoring-profile.original.json
+/CONFIGURE HERE FIRST.json
 
 # Measured episode state and offline archival/reference material are not part of
 # the public source-only export. Keep the generic schema/template.

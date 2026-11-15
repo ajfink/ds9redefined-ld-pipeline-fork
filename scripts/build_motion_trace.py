@@ -20,7 +20,7 @@ Contract expected by `build_map.ps1`
 Usage
 -----
   python scripts/build_motion_trace.py --source <stack-master.mov> --out <motion.txt>
-  python scripts/build_motion_trace.py --episode S01E10          # resolves via manifest
+  python scripts/build_motion_trace.py --episode S01E10          # resolves source/output/pad from manifest
 
 Exit codes: 0 written, 2 refused (missing source / measured value / overwrite).
 """
@@ -40,8 +40,8 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--source", help="stack master (.mov)")
     ap.add_argument("--episode", help="resolve --source from the episode manifest")
-    ap.add_argument("--out", required=True, help="motion trace file to write")
-    ap.add_argument("--trim-head", type=int, default=0,
+    ap.add_argument("--out", help="motion trace file to write (episode manifest default when --episode is used)")
+    ap.add_argument("--trim-head", type=int,
                     help="audio alignment offset to drop first, so the trace runs on the "
                          "audio-aligned clip like the TFM log (audio.pad_frames)")
     ap.add_argument("--dry-run", action="store_true", help="print stats, do not write")
@@ -51,15 +51,20 @@ def main() -> int:
     if args.episode:
         ep = load_episode(args.episode, ld)
         source = str(ep.path("stack_master"))
+        trim_head = ep.pad_trim if args.trim_head is None else args.trim_head
+        out = Path(args.out) if args.out else ep.path("motion")
     elif args.source:
         source = str(Path(args.source).resolve())
+        trim_head = 0 if args.trim_head is None else args.trim_head
+        if not args.out:
+            raise PipelineError("supply --out when using --source without --episode")
+        out = Path(args.out)
     else:
         raise PipelineError("supply --source or --episode")
 
     src_path = Path(source)
     if not src_path.is_file():
         raise PipelineError(f"source not found: {src_path}")
-    out = Path(args.out)
     assert_writable_path(out, ld)
     if out.exists():
         raise PipelineError(f"refusing to overwrite existing file: {out}")
@@ -72,9 +77,11 @@ def main() -> int:
     src = core.bs.VideoSource(source)
     # Run on the AUDIO-ALIGNED clip (runbook §4: "run the TFM log on the audio-aligned
     # clip, .Trim(pad,0)") so the trace and the cadence log share one frame domain.
-    if args.trim_head:
-        src = core.std.Trim(src, args.trim_head, None)
-        print(f"aligned: dropped first {args.trim_head} frame(s) (audio.pad_frames)")
+    if trim_head:
+        if trim_head < 0:
+            raise PipelineError("--trim-head/audio.pad_frames must be nonnegative")
+        src = core.std.Trim(src, trim_head, None)
+        print(f"aligned: dropped first {trim_head} frame(s) (audio.pad_frames)")
     total = src.num_frames
     if total < 2:
         raise PipelineError(f"source has only {total} frame(s); need at least 2")

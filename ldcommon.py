@@ -71,8 +71,8 @@ class Ld:
         if not p and shared_devices.is_dir():
             raise PipelineError(
                 f"{BUNDLE} is configured as a shared release tree; do not use a bundle-local profile. "
-                "Set LDP_PROFILE to a local machine.json and initialize a unique workspace with "
-                "scripts/shared_workspace.py.")
+                "Set LDP_PROFILE to a local machine.json and create/reuse the episode workspace with "
+                "scripts/shared_workspace.py ensure.")
         if p and shared_devices.is_dir():
             candidate = Path(os.path.expandvars(os.path.expanduser(str(p)))).resolve()
             try:

@@ -89,8 +89,11 @@ def build_ranges(args) -> list[tuple[int, int]]:
     if args.episode:
         ep = load_episode(args.episode)
         p = ep.optional_path("di_map")
-        if p and p.is_file():
-            return parse_ranges(p.read_text(encoding="utf-8", errors="replace"))
+        if not p or not p.is_file():
+            raise PipelineError(
+                f"measured deinterlace map is missing for {ep.code}; run the cadence-analysis stage first"
+            )
+        return parse_ranges(p.read_text(encoding="utf-8", errors="replace"))
     return []
 
 
@@ -230,7 +233,7 @@ def main() -> int:
                     help="measured head trim (video.head_trim, output frames)")
     ap.add_argument("--trim-end", type=int, default=None,
                     help="measured tail trim (video.tail_trim, 0 if none)")
-    ap.add_argument("--out", required=True, help=".vpy to write")
+    ap.add_argument("--out", help=".vpy to write (defaults to manifest files.avs_encode with --episode)")
     ap.add_argument("--repair", choices=REPAIR_CHOICES, default="none",
                     help="what to do when a repair set exists: 'qtgmc' (mapped "
                          "from Swap Folder/plugins/QTGMC.avsi), 'pp2' "
@@ -259,7 +262,12 @@ def main() -> int:
 
     text = render(source, int(pad), int(t0), int(t1), ranges, args.repair)
 
-    out = Path(args.out)
+    if args.out:
+        out = Path(args.out)
+    elif args.episode:
+        out = load_episode(args.episode, ld).path("avs_encode")
+    else:
+        raise PipelineError("supply --out when --episode is not provided")
     assert_writable_path(out, ld)
     print(f"source      : {source}")
     print(f"pad/trim    : pad={pad} head={t0} tail={t1}")

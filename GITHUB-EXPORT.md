@@ -1,7 +1,7 @@
 # GitHub source-only export
 
 This public repository contains workflow source, documentation, tests, and portable
-templates, V8 doctor/stage-runner/stage-timing tools, and platform Python locks. It intentionally does
+templates, V10 doctor/stage/workflow, measurement, and timing tools, and platform Python locks. It intentionally does
 **not** contain:
 
 - `machine.json` or machine-specific profiles;

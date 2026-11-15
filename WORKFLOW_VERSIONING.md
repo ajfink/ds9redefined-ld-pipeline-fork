@@ -1,7 +1,9 @@
 # Workflow versioning
 
-**Authoritative workflow version: 8** (`WORKFLOW_VERSION` is the machine-readable
-counter). The authoritative bundle is `Z:\ld-pipeline` on the authoring machine.
+**Mainline workflow version: 10** (`Z:\ld-pipeline`). This application fork also reports
+V10, while retaining the fork-only V9 orchestrator, supervised canary adapters, and local
+adaptations described in `V10-RELEASE.md`. Matching version numbers do not make the fork an
+authoritative copy or authorize syncing its files back into the main project.
 
 ## What requires a version change
 
@@ -30,9 +32,15 @@ and work data.
 
 Use `templates/device-workflow-change.template.md` for a consistent device-log entry.
 
-`V8-RELEASE.md` records the current V8 additions and platform-validation boundaries.
-`V7-RELEASE.md` preserves the V7 baseline and validation record. The historical V6 queue was retired and removed in the shared-release follow-up;
+`V10-RELEASE.md` records the fork's V10 adoption and adaptation boundaries.
+`V9-RELEASE.md` records the fork-only ordered orchestrator baseline; it does not make the
+fork's canary or platform behavior a mainline support claim. `V8-RELEASE.md` and
+`V7-RELEASE.md` preserve earlier release records.
+The historical V6 queue was retired and removed in the shared-release follow-up;
 its former proposals are not workflow instructions or permission to bypass an accepted gate.
+`V9-QUEUE.md` preserves historical V9 planning. `V10-QUEUE.md` records mainline V10 scope;
+it does not claim that the new diagnostics or retime verifier have been run on production
+media in this fork.
 
 ## Version history
 
@@ -46,6 +54,8 @@ its former proposals are not workflow instructions or permission to bypass an ac
 | 6 | `LENOVO-LEGION-5`, 2026-11-14; from Version 5 | Added the explicit optional no-DVD route using the E07-validated duration/PAD rate, capture-pad geometry, exact output sample budget, and a distinct QC result that does not claim external absolute A/V cross-correlation. Made DVD input optional at initialization; added timestamped shared cut-PAD stills and no-cross-shot-RIFE handling. Integrated the M5 VapourSynth/macOS helper set, Mac profile example, preflight/tests, direct-source optional-track remux, and fresh-Mac setup instructions. Removed the hard-coded WinGet FFmpeg path from `motion-probe.ps1`; added the low-cost-model design goal and retrospective `changelog.txt`. | E07 candidate and final-format test are documented in `Z:\work\logs\S01E07-v5-rerun.md`; the official V5 E07 manifest/deliverable remain unchanged. V6 unit tests, Python compilation, PowerShell parsing, and a profile-resolved FFmpeg smoke check passed. Mac-only tests were skipped on Windows; M5 stage evidence is cited, but no fresh-Mac V6 end-to-end delivery is claimed. Linux and ARM64 remain untested. |
 | 7 | `LENOVO-LEGION-5`, 2026-11-14; from Version 6 | Added the unified read-only `scripts/doctor.py` readiness report, platform-specific direct-Python version locks and explicit `bootstrap_deps.py --install`, an allowlisted dry-run-first `run_stage.py` dispatcher with preflight/manifest gates and unique logs, deterministic Qwen runbook generation, README-relative per-device/instance/episode workspaces with a non-gating local fallback and per-workspace logging guidance, mandatory indexed-seek audio QC, and an early-download path that skips the full doctor while retaining downloader-specific verification/space gates. Both platform remuxers set the M5-verified Matroska `-max_interleave_delta 0` fix; absolute A/V QC reports are uniquely named for reruns. Shared-mode JSON path redaction is safe for escaped Windows drive roots in both report implementations. Shared mode redirects manifests/logs and restricts app writes to each active instance's manifest/logs/references/cut-PAD paths; ACLs remain administrator-managed. Added a Linux x86_64 dependency/environment candidate without claiming workflow support. | Follow-up suite: **60 passed, 7 Mac/VapourSynth-only skipped**; Python compilation, PowerShell parsing, direct-lock check, Windows doctor, runbook generation, and stage dry-run passed. The M5 Mac completed S01E10 end to end, including final remux; post-fix seek windows and all packet-identity checks passed. Fresh-Mac installation, Linux x86_64 workflow, Linux ARM64, and Windows ARM64 remain unvalidated. The W release root still grants the connected account Full Control; no ACL change was made, so shared-mode doctor/stages remain blocked pending administrator ACL enforcement. |
 | 8 | `LENOVO-LEGION-5`, 2026-11-15; from Version 7 | Added active elapsed-time fields to every `run_stage.py` log/report, split into automatic gate, action, and post-action time; waits between invocations are excluded. Added `scripts/stage_clock.py` pause/resume/stop records for manual stages, so human gate waits can be paused and excluded. Extended the README-relative device workspace contract, non-gating README-folder creation/local fallback, per-instance log evidence guide, and owner-only device subtree ACL guidance across the canonical/Qwen/ASCII docs. Fixed the local fallback candidate resolver defect found in the Lenovo Legion device log. | **63 passed, 7 Mac/VapourSynth-only skipped**; Python compilation, PowerShell parsing, generated-runbook checks, stage timing tests, and early-download dry-run passed. `WORKFLOW_VERSION` is 8. W tracked files will be synchronized without touching `devices/`; the connected W account still has release-root Full Control and must be ACL-restricted before shared processing. |
+| 9 | `Z:\ld-pipeline-app-fork`, 2026-11-15; local prototype from Version 8 | Added ordered allowlisted workflow plans, atomic job-state/logging, advisory job locking, file fingerprints, safe completed-step skipping, explicit downloader-only retry, deterministic helper registrations, and mandatory review pauses for stack/cadence. Added Orc render verification and Windows/macOS TFM/cadence adapters. This is a fork-only candidate, not an authoritative release. | At the initial V9 snapshot: **92 passed, 7 VapourSynth-only skipped**; Python compilation, generated-runbook check, diff check, and motion-probe PowerShell parse passed. A later supervised S01E08 canary is recorded under V10; see `V10-RELEASE.md`. |
+| 10 | `Z:\ld-pipeline` V10 adapted in `Z:\ld-pipeline-app-fork`, 2026-11-15; from fork V9 | Ported retime-output silence verification, report-only PAD/LD-black diagnostics, episode-scoped EFM path planning, alignment-range and break-window safeguards, legacy workspace compatibility, and the one-off analysis checklist. Preserved the fork's V9 ordered workflow, config-driven intake, Windows/Mac cadence adapters, and human review gates. Added an optional FromStunToKill desktop cockpit over the unchanged CLI plan contract. | **123 passed, 7 VapourSynth-only skipped**; static checks and GUI plan-model tests passed. The window still needs interactive acceptance. New V10 diagnostics and retime verification remain unit-tested only in this fork; the supervised S01E08 stack/cadence canary predates the V10 port and does not validate V10 retime/audio helpers. No encode/remux or mainline media/config changes are claimed. |
 
 Version records are in `W:\ld-pipeline-execution-log.md`: Version 1 §16, Version 2 §17,
 Version 3 §§18–19, Version 4 §21, Version 5 §§22–23, Version 6 §27, Version 7 §§28–31,

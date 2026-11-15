@@ -193,6 +193,15 @@ procedure. `scripts\retime_dvd_assets.py` applies only the measured manifest sch
 if alignment/edge measurements cannot be validated, stop rather than using an E04/E05
 script.
 
+**One-off measurement-script check:** before trusting scratch analysis or recording its value
+in the manifest, state the input units and sign/scale convention; print representative raw
+rows before aggregate statistics; verify one row against a known episode anchor; and compare
+the result with an independently derived measurement. For correlations, say explicitly
+whether a value is similarity (`NCC`) or distance (`1-NCC`); for offsets, define the direction
+and subtraction order. Empty output, implausible magnitudes, or disagreement means STOP and
+reconcile the analysis. These checks supplement the bundled helper gates; they do not turn
+an unreviewed scratch script into an authoritative measurement.
+
 ## 2. Archive pages and input inventory
 
 Known Internet Archive item pages:
@@ -339,9 +348,20 @@ Emissary regression only:
 Decode raw EFM with EFMSink; it does not auto-find the sidecar and needs `decode_mode=audio`:
 
 ```powershell
-& $orc --source "tbc_source=input_path='$source\<capture>.tbc':efm_path='$source\<capture>.efm'" `
-  --sink "EFMSink=output_path='$work\audio\<capture>-efm.wav':decode_mode=audio:report=true"
+$capture = '<capture label from the verified Archive inventory>'
+$efmPlan = python scripts\efm_paths.py --episode $ep --work-root $work --capture $capture --check | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) { throw 'EFM output path check failed; preserve existing decode/report files' }
+$efmDir = Split-Path -Parent $efmPlan.output_wav
+New-Item -ItemType Directory -Path $efmDir -Force | Out-Null
+$efmOut = $efmPlan.output_wav
+& $orc --source "tbc_source=input_path='$source\$capture.tbc':efm_path='$source\$capture.efm'" `
+  --sink "EFMSink=output_path='$efmOut':decode_mode=audio:report=true"
 ```
+
+Decode each capture to `roots.work/audio/<episode>/<capture>-efm.wav`; the matching report
+is `<capture>-efm.wav.txt`. Never use a shared flat `audio/<capture>` destination across
+episodes. Keep the exact capture label from the verified inventory and refuse existing WAV
+or report paths rather than overwriting a prior decode.
 
 If needed, unpack `.efm.7z` first. Keep the report and original WAV. Never assume an archive `.pcm` is valid: Emissary’s uploader `L1.pcm` disagreed with fresh EFMSink audio and was not safe to use.
 
@@ -352,6 +372,11 @@ report evidence; do not select solely from capture label or the summary word `PO
 label can be triggered by missing sections even when data-loss percentages are small).
 Preserve all native WAVs and reports. EFMSink report timestamps are `MM:SS:FF` (minutes,
 seconds, frames), not `HH:MM:SS`.
+
+After recording the selected capture and `audio.pad_frames`, the report-only
+`python scripts\measure_pad_audio.py --episode <code>` compares audio energy in frame-map
+PAD_1 windows with nearby controls. It can help resolve whether the PAD frames carry audio;
+it does **not** select or recommend `asetrate`, approve a rate, or edit the manifest.
 
 After recording `audio.capture`, set `audio.pad_frames` to that capture's offset in the
 measured Orc `alignment_map`. Map the alignment-map index using the **final Orc input order**
@@ -365,7 +390,7 @@ examples, not defaults.
 ### V6 audio decision — matching DVD or explicit LD-only mode
 
 1. Preserve every native EFMSink WAV/report; compare all available captures. Record the selected capture's Orc input-order `audio.pad_frames`, a **leading capture-alignment offset**, not the total number of frame-map PAD inserts.
-2. Once output frame count, trims, and `video.delta_s` are measured, run `python scripts\audio_timing_diagnostic.py --episode <code>`. It reads native PCM, the stack project, and frame map only—not the DVD or DVD picture-alignment path. Record exact EFM samples/rate/duration, stack duration, full/projected PAD counts, structural trim, and fractional endpoint residual.
+2. Once output frame count, trims, and `video.delta_s` are measured, run `python scripts\audio_timing_diagnostic.py --episode <code>`. It reads native PCM, the stack project, and frame map only—not the DVD or DVD picture-alignment path. Record exact EFM samples/rate/duration, stack duration, full/projected PAD counts, structural trim, and fractional endpoint residual. If PAD coverage is ambiguous, also run the report-only `measure_pad_audio.py`; do not treat its energy comparison as a sample-rate recommendation.
 3. **If a matching DVD is available**, use the DVD-reference path: build the DVD↔LD descriptor map before final encode, run raw-provisional/robust diagnostics, compare duration/PAD with picture-map and pad-corrected fade evidence, then approve a measured `ld_corrected` and `ld_synced`. Preserve the existing gates and do not use a DVD rate fit as a default.
 4. **If the user explicitly chose no-DVD mode**, run `python scripts\audio_timing_diagnostic.py --episode <code> --promote-dvd-free --report-out <new-unique.json>` after all required LD measurements exist. Use a new report path because the tool never overwrites prior evidence. It runs a stage-specific audio-volume space gate based on the native WAV size, applies the accepted duration/PAD candidate rate and capture-pad geometry, writes a full corrected FLAC plus exact-sample-count `ld_synced`, records hashes/recipe/endpoints, and updates the manifest with a backup. It refuses missing measurements, overwrites, DVD-track selections, and projected endpoint residuals beyond ±1 frame. The E07 A/B result passed at all seven windows (maximum difference 1 µs); that is the regression basis, not a claim that every future no-DVD episode has been externally cross-correlated.
 5. No-DVD QC runs `ld_only_sync_check.py`: it verifies the approved report/source hashes, measured capture-pad skip, exact audio sample budget, and delivered packet identity. It must separately report that absolute lip-sync offset was **not** cross-correlated against an external reference. If PAD/endpoint reconciliation or capture-origin evidence is ambiguous, STOP rather than force a rate or offset.
@@ -442,12 +467,14 @@ The DVD is used for timing and optional streams, not as the picture master. Prob
 
 Create both descriptor grids with `python scripts\extract_video_descriptors.py --episode <code> --source master` and the same command with `--source dvd`. The DVD decode must be sequential (never seek) and retain the validated FFmpeg default rawvideo output-sync behavior. A controlled E05 probe produced the exact 81,654-frame reference with default sync; adding `-fps_mode passthrough` alone produced 68,555, while `-vsync 0` failed. Do not add output-sync overrides, `setpts`, or an `fps` filter. Check output frame counts and 29.97-fps coverage against the source duration before alignment. Then run `python scripts\measure_dvd_alignment.py --episode <code>` and review its range-edge hits, confidence margins, transitions, reverse matches, and scene-cut checks. The Viterbi path is evidence, not an adjudicated cut schedule.
 
-1. Align native 29.97 LD ProRes frame descriptors to decoded DVD video descriptors (48x36 normalized luma is the established low-cost signature). Use a continuity-constrained/Viterbi search; single-frame greedy matches drift/hop on static shots. For video alignment, offsets use the recorded 29.97 descriptor-grid frame index (seconds = grid frames / 29.97); verify the decoded count/coverage before relying on it. When mapping to DVD audio or subtitle timestamps, separately respect those streams? actual time bases/PTS. **Sign convention that bit us on E04:** the state is `DVD index - master index` and it is NEGATIVE (the master runs ~1400 frames ahead from LD front matter); positive offsets index past the DVD's end at the tail - first a crash, and if clipped, silently garbage emissions. Cross-check every act-break step against black durations: `step = (DVD black - LD black) * 29.97` frames - E04's DP steps matched this to within threshold noise. But blackdetect durations are threshold-biased (LD analog fades vs DVD digital fades), so read final step values from the DP path at content-rich frames just OUTSIDE each black, not from raw black durations. **But even the DP medians can be fade-biased**: on E04 the dp window 0.15 s from break 8's black read -1466 while two independent 40-50 s content windows and the DVD black-start gave -1451/-1453. The authoritative edge measurement is a long content window (>=2 s clear of fades) matched over +/-40 offsets; use dp and the plateau fit as corroboration. Cache the descriptors (`desc-*.npy`); re-runs then take seconds instead of minutes.
+1. Align native 29.97 LD ProRes frame descriptors to decoded DVD video descriptors (48x36 normalized luma is the established low-cost signature). Use a continuity-constrained/Viterbi search; single-frame greedy matches drift/hop on static shots. For video alignment, offsets use the recorded 29.97 descriptor-grid frame index (seconds = grid frames / 29.97); verify the decoded count/coverage before relying on it. The report's sampled master-frame range is authoritative: never extrapolate a head/tail offset outside that range. If the needed anchor is earlier/later, rerun with `--first-master-frame` covering it or obtain an independent local descriptor/content match before setting trims. When mapping to DVD audio or subtitle timestamps, separately respect those streams' actual time bases/PTS. **Sign convention that bit us on E04:** the state is `DVD index - master index` and it is NEGATIVE (the master runs ~1400 frames ahead from LD front matter); positive offsets index past the DVD's end at the tail - first a crash, and if clipped, silently garbage emissions. Cross-check every act-break step against black durations: `step = (DVD black - LD black) * 29.97` frames - E04's DP steps matched this to within threshold noise. But blackdetect durations are threshold-biased (LD analog fades vs DVD digital fades), so read final step values from the DP path at content-rich frames just OUTSIDE each black, not from raw black durations. **But even the DP medians can be fade-biased**: on E04 the dp window 0.15 s from break 8's black read -1466 while two independent 40-50 s content windows and the DVD black-start gave -1451/-1453. The authoritative edge measurement is a long content window (>=2 s clear of fades) matched over +/-40 offsets; use dp and the plateau fit as corroboration. Cache the descriptors (`desc-*.npy`); re-runs then take seconds instead of minutes.
 2. Plot DVD-vs-LD offset over time. Constant plateaus with jumps inside black = extra LD black. A slope = rate mismatch; fit a line separately on each plateau. Use `blackdetect` to find candidate boundaries and image matching to verify them.
 3. Use this map for both DVD audio and subtitles. A global `-itsoffset` is wrong if there are act-break steps or rate drift. For source DVD→LD mapping, if DVD time advances at ratio `r` per LD second, use `atempo=r` on that DVD audio segment (output duration becomes input/r) and insert silence for LD-only black extensions. Transform SRT cue times through the inverse affine map plus cumulative gaps.
 4. DVD 5.1 is a discrete remix; DVD stereo is a separate mix, not a downmix or substitute for the LD’s original Dolby Surround stereo. LD 2.0 must stay default.
 
-For candidate break windows already entered in `retime.breaks[].ld_black`, run `python scripts\measure_break_edges.py --episode <code>`. It reports long-window content offsets, DP medians, score/runner-up margins, and differences from any recorded offsets. It does not decide which edge wins, whether a music-through black is merged, or edit the manifest. Resolve disagreements using the independent methods below; only then record `off_before`/`off_after`.
+Before recording candidate `retime.breaks[].ld_black` intervals, run `python scripts\measure_ld_black.py --episode <code>`. It reports descriptor-luma dark runs at several thresholds and their sensitivity; it chooses no threshold and edits no manifest. Compare with the frame-level picture and `blackdetect` evidence, then record the adjudicated interval.
+
+For candidate break windows in the manifest, run `python scripts\measure_break_edges.py --episode <code>`. It reports long-window content offsets, DP medians, score/runner-up margins, and differences from any recorded offsets. Before/after content windows are clipped clear of adjacent recorded black intervals; if too little textured content remains, the result is `insufficient-texture`, not a measurement. The helper does not decide which edge wins, whether a music-through black is merged, or edit the manifest. Resolve disagreements using the independent methods below; only then record `off_before`/`off_after`.
 
 Emissary-only regression map:
 
@@ -464,7 +491,7 @@ An audio-envelope map can locate content but can absorb the LD's own A/V offset 
 
 - Keep original DVD AC-3 as an intermediate/reference. Split at the measured source boundaries; apply segment-specific `atempo`; insert 5.1 silence at measured LD-only black intervals. Use 24-bit FLAC for the retimed track to avoid another lossy encode after AC-3 decoding.
 - Retimed SRT should preserve all cue text, sorted times, and episode duration; cues spanning a boundary must remain visually sensible. VobSub is a backup unless its packet timestamps receive the same piecewise retiming. Do not mux it with a global offset.
-- After every cut/offset has been independently adjudicated and recorded, run `python scripts\retime_dvd_assets.py --episode <code> --dry-run`; require nonnegative gaps inside the measured black, plausible tempo (0.99..1.01), and all source SRT cues retained. Then rerun without `--dry-run` to create the graph, retimed 5.1 FLAC, retimed SRT, and segment map.
+- After every cut/offset has been independently adjudicated and recorded, run `python scripts\retime_dvd_assets.py --episode <code> --dry-run`; require nonnegative gaps inside the measured black, plausible tempo (0.99..1.01), and all source SRT cues retained. Then rerun without `--dry-run` to create the graph, retimed 5.1 FLAC, retimed SRT, segment map, and output-gap verification JSON. The helper scans the generated 5.1 output at the recorded threshold, coalesces only touching silence detections, and stops on a mismatch. Sub-50 ms gaps are `LIMIT`/unverified, not a confident pass; final QC reports that limitation as a warning.
 - After both retimed assets pass validation, set `mux_tracks` and `deliverable_tracks` together to `['ld','51','srt']`; keep `ld_audio_source='ld_synced'`. V6's Windows/Mac remux maps `ld_synced`, `retimed_51`, and `retimed_srt` directly into the declared deliverable; a preassembled `pre_upscale` track container is not required. Without a DVD, leave retime fields unset and both track lists `['ld']`.
 - E01 template outputs: `Z:\work\audio\dvd-51-retimed.flac`, `Z:\work\subs\dvd-eng-retimed.srt`. Its filter graph is at `Z:\work\audio\dvd-51-retimed.filter`.
 - The bundled retime generator retains the graph as a review artifact and passes it with current FFmpeg `-filter_complex` (FFmpeg 9 does not accept the legacy `-filter_complex_script` option). It uses `asplit` when one DVD audio input feeds multiple trims; never seek the reference DVD with `-ss`.

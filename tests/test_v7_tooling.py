@@ -91,6 +91,39 @@ class StageRunnerTests(unittest.TestCase):
             make_action("encode-final", "S01E99", profile, [], None)
         self.assertTrue(validate_command("S01E99", profile, "encode")[1].endswith("validate_episode.py"))
 
+    def test_deterministic_analysis_and_audio_helpers_are_allowlisted(self):
+        profile = {"os": "windows", "python": {"interpreter": sys.executable},
+                   "tools": {"pwsh": sys.executable}}
+        self.assertIn("build-ld-synced", STAGES)
+        self.assertIn("retime-assets", STAGES)
+        self.assertIn("measure-pad-audio", STAGES)
+        self.assertIn("measure-ld-black", STAGES)
+        master = make_action("master-descriptors", "S01E99", profile, ["--input-fps", "30000/1001"], None)
+        self.assertEqual(master[1].endswith("extract_video_descriptors.py"), True)
+        self.assertEqual(master[master.index("--source") + 1], "master")
+        self.assertEqual(master[-2:], ["--input-fps", "30000/1001"])
+        tfm = make_action("tfm-log", "S01E99", profile, [], None)
+        self.assertTrue(tfm[1].endswith("generate_tfm_log.py"))
+        self.assertTrue(STAGES["render-stack"]["review_gate"])
+        self.assertTrue(STAGES["cadence-analysis"]["review_gate"])
+        self.assertEqual(STAGES["measure-pad-audio"]["gate"], "stack")
+        self.assertEqual(STAGES["measure-ld-black"]["gate"], "stack")
+
+    def test_pad_review_helpers_do_not_have_circular_padfix_prerequisites(self):
+        self.assertEqual(STAGES["fullres-check"]["gate"], "cadence")
+        self.assertEqual(STAGES["rife-replacements"]["gate"], "cadence")
+
+    def test_motion_trace_dispatch_uses_the_platform_adapter(self):
+        windows = {"os": "windows", "python": {"interpreter": sys.executable},
+                   "tools": {"pwsh": sys.executable}}
+        win_cmd = make_action("motion-trace", "S01E99", windows, [], None)
+        self.assertIn("motion-probe.ps1", win_cmd[win_cmd.index("-File") + 1])
+        self.assertIn("-Episode", win_cmd)
+
+        mac = {"os": "darwin", "python": {"interpreter": sys.executable}}
+        mac_cmd = make_action("motion-trace", "S01E99", mac, [], None)
+        self.assertTrue(mac_cmd[1].endswith("build_motion_trace.py"))
+
 
 class RunbookGeneratorTests(unittest.TestCase):
     def test_both_generated_variants_include_canonical_source_and_model_policy(self):
@@ -102,6 +135,10 @@ class RunbookGeneratorTests(unittest.TestCase):
             self.assertIn("Model operating contract", output)
             self.assertNotIn("{{CANONICAL_RUNBOOK}}", output)
         self.assertIn("fallback", generated_text("DS9 LaserDisc OpenCode Runbook - Qwen4B-Luna.md").casefold())
+        canonical = (ROOT / "DS9 LaserDisc OpenCode Runbook.md").read_text(encoding="utf-8")
+        self.assertIn("audio/<episode>/<capture>-efm.wav", canonical)
+        self.assertIn("efm_paths.py", canonical)
+        self.assertIn("sign/scale convention", canonical)
 
     def test_windows_preflight_parser_extracts_gate_rows(self):
         rows = parse_windows_preflight("  [PASS] ffmpeg  path ok\n  [WARN] dvd_root  unset\n  [FAIL] python  import failed")

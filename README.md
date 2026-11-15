@@ -1,7 +1,11 @@
-# DS9 LaserDisc OpenCode Operator Pack
+# FromStunToKill – LaserDisc Workflow
 
-**Workflow version: 7** — check `WORKFLOW_VERSION` and follow the core-change/device-log
-rules in `WORKFLOW_VERSIONING.md` before editing or syncing workflow files.
+**Fork workflow version: 10** — adopts mainline V10 safeguards while retaining the fork's
+V9 orchestration and supervised canary adapters. This remains a separate application
+candidate; see `V10-RELEASE.md` and `WORKFLOW_VERSIONING.md` before syncing any files.
+
+**Intended GitHub project:** <https://github.com/ajfink/ds9redefined-ld-pipeline-fork>.
+This working copy has not been published or connected to a new remote by this change.
 
 **Design goal:** make the workflow clear and reliable enough for capable free or low-cost
 models to run with its bounded steps, explicit ACTION/VERIFY/STOP gates, and deterministic
@@ -11,6 +15,11 @@ that every model/version has been tested. Model convenience never lowers QC or s
 **GitHub source-only note:** this repository intentionally omits machine profiles, measured
 episode data, reference archives, media/caches, and third-party AviSynth DLLs. See
 `GITHUB-EXPORT.md` before treating a GitHub clone as a complete runnable bundle.
+
+> **FIRST: use the local intake configuration.** The cockpit opens `CONFIGURE HERE FIRST.json`
+> when present, otherwise it uses `CONFIGURE HERE FIRST.example.json`. You may copy the example
+> to the ignored local filename and edit only `_operator_inputs_EDIT`; never commit local
+> profiles, DVD paths, or download paths.
 
 **Start here.** An OpenCode instance given this folder and the three job inputs
 below should read this README, then follow `DS9 LaserDisc OpenCode Runbook.md`.
@@ -266,12 +275,12 @@ or parity-clip run before cadence. The historical test result is informational i
 
 ### Important current limitation
 
-The portable folder contains a verified Archive downloader, Orc stack-project
-generator, cadence-map builder, first-encode helper, manifest-driven DVD retime
+The portable folder contains a verified Archive downloader, Orc stack-project/render
+helpers, TFM-log and cadence-map tools, first-encode helper, manifest-driven DVD retime
 generator, PAD repair, remux, and QC helpers. **The full workflow is still
-measurement-led, not one-click.** Orc refresh/render are verified with the installed
-Orc tool; audio-rate fitting and DVD picture-map/edge adjudication still require the
-detailed runbook and episode-specific analysis. The retime generator only applies
+measurement-led, not one-click.** The new render/cadence adapters have synthetic tests but
+still need a supervised real-device pilot. Audio-rate fitting and DVD picture-map/edge
+adjudication still require the detailed runbook and episode-specific analysis. The retime generator only applies
 adjudicated values already in the manifest; it does not infer them. Never reuse an
 E04/E05 alignment or edge script. No README can make a missing measurement safe by
 pretending it is automated.
@@ -505,12 +514,21 @@ permission.
 | `scripts/doctor.py` | Unified read-only profile/dependency/platform report; Linux x86_64 remains explicitly not episode-ready |
 | `scripts/bootstrap_deps.py` / `dependencies/` | Direct Python version locks for Windows x64, Mac arm64, and candidate Linux x86_64; check-only by default, `--install` is explicit |
 | `scripts/run_stage.py` | Allowlisted stage dispatcher; dry-run plan by default, explicit `--execute`, downloader-specific checks for the early download stage, full doctor/manifest gates before other write stages, and unique logs/reports |
+| `scripts/run_workflow.py` | Fork orchestration: ordered JSON plans over allowlisted stages, durable status/logging, fingerprint-checked resume, review gates, and downloader-only automatic retry |
+| `scripts/workflow_app.py` | Optional local Tk desktop cockpit for intake forms, new-plan generation, dry-run preview, execution, resume, and explicit review approval |
+| `scripts/render_stack.py` | Orc weighted-stack render adapter; checks measured space, capture-load/StackerStage/unrecoverable/frame-count evidence, and writes a report before the mandatory human review gate |
+| `scripts/generate_tfm_log.py` | Full-side TFM decision-log generator for Windows AviSynth or macOS VapourSynth; requires measured capture PAD and exact frame-count coverage |
+| `scripts/cadence_analysis_mac.py` | macOS cadence adapter: runs the shared PowerShell TFM-log parser into a temporary AVS, then builds the VapourSynth chain from the measured map |
 | `scripts/stage_clock.py` | Pause/resume timer for manual stages; separates active work from human gate waits and writes a timestamped record in the device workspace |
 | `scripts/shared_workspace.py` | Ensure a collision-resistant per-device/instance/episode folder beside the selected README, with local fallback; publish no-overwrite references and provenance-checked cut-PAD stills |
 | `scripts/generate_runbooks.py` / `templates/runbooks/` | Regenerate model variants from the canonical runbook plus model-policy templates; `--check` detects drift |
 | `WORKFLOW_VERSION` / `WORKFLOW_VERSIONING.md` | Authoritative workflow version and core-change/device-log rules |
 | `V7-RELEASE.md` | V7 tooling overview and platform validation boundaries |
 | `V8-RELEASE.md` | V8 stage timing and README-relative device workspace changes |
+| `V9-RELEASE.md` | Historical fork orchestration baseline and validation limits |
+| `V10-RELEASE.md` | Mainline V10 safeguards adapted to the fork; includes fork-specific limits |
+| `V9-QUEUE.md` | Historical V9 proposals and carry-overs |
+| `V10-QUEUE.md` | Mainline V10 scope and implementation record; not a production-media validation claim |
 | `changelog.txt` | Short release history; retrospective V1–V5 notes and accepted V6 changes |
 | `Cut Pad Images/<episode>/` | Curated single-frame DVD cut-PAD repair stills, named by verified DVD timestamp/frame; not a DVD reference substitute |
 | `scripts/download_archive.ps1` | Metadata-verified, resumable source download; checks profile curl (>=7.71.0), and ListOnly prints inventory, integrity metadata, aggregate bytes, and projected free space |
@@ -519,10 +537,12 @@ permission.
 | `scripts/validate_episode.py` | Stage-specific manifest/artifact prerequisites; optional expensive source MD5 recheck |
 | `scripts/select_stack_reference.py` | Orc refresh loop that chooses/stabilizes the reference and writes a refreshed project; never renders |
 | `scripts/build_stack_project.py` | Manifest-driven Orc graph skeleton; scratch `--reference-override` does not edit the manifest |
+| `scripts/efm_paths.py` | Plan episode-scoped EFMSink WAV/report paths and refuse existing outputs |
 | `scripts/extract_video_descriptors.py` | Sequential master/DVD descriptor extraction on the validated FFmpeg rawvideo grid |
-| `scripts/measure_dvd_alignment.py` | Continuity-constrained DVD-minus-master Viterbi candidate path and confidence report |
-| `scripts/measure_break_edges.py` | Long-window content offsets, DP comparison, score/runner-up for each candidate break |
+| `scripts/measure_dvd_alignment.py` | Continuity-constrained DVD-minus-master Viterbi candidate path with sampled-range reporting |
+| `scripts/measure_break_edges.py` | Long-window content offsets; excludes neighboring recorded blacks and reports clipped windows |
 | `scripts/measure_audio_rate.py` | Multi-window audio-vs-picture-map diagnostic with OLS and robust checks; never auto-selects a correction |
+| `scripts/measure_pad_audio.py` / `scripts/measure_ld_black.py` | Report-only PAD occupancy and descriptor-luma black/fade evidence; no manifest/rate/threshold changes |
 | `scripts/audio_timing_diagnostic.py` | DVD-free duration/PAD report; candidate-only by default, or `--promote-dvd-free` for the user's explicit no-DVD selection |
 | `scripts/build_ld_synced.py` | Sample-accurate AudioSkip + exact target sample count into FLAC; audio-only, refuses overwrites and records recipe/hashes |
 | `scripts/build_map.ps1` | TFM log + optional motion trace to cadence report, deinterlace map, AVS |
@@ -531,7 +551,7 @@ permission.
 | `scripts/build_padfix_vpy.py` / `scripts/encode_episode_mac.py` | macOS source-derived PAD replacement and non-encoding validation/single video-only final x265 pass via `vspipe` |
 | `scripts/remux_padfixed_mac.py` / `scripts/vspipe_util.py` | macOS stream-copy remux with packet identity; shared safe VapourSynth→FFmpeg transport |
 | `scripts/encode_episode.ps1` | Windows non-encoding AVS validation and the single final video-only x265 encode from the source-derived PAD-repaired AVS |
-| `scripts/retime_dvd_assets.py` | Measured manifest break schedule -> DVD 5.1 FLAC, retimed SRT, and retime map |
+| `scripts/retime_dvd_assets.py` | Measured break schedule -> DVD 5.1 FLAC/SRT/map plus output-silence gap verification; short gaps remain LIMIT |
 | `scripts/pad_audit.py` / `fullres_check.py` | Detect map-matched PADs in the source-derived post-IVTC `.avs`/`.vpy` and confirm them at full raster |
 | `scripts/rife_padframes.py` / `build_padfix_avs.py` | Generate replacements only for confirmed PADs and wrap the source-derived AVS without changing frame count |
 | `scripts/encode_padfixed.ps1` / `remux_padfixed.ps1` | Former second-pass encoder is retired; remux stream-copies tracks with packet-identity checks |
@@ -540,7 +560,7 @@ permission.
 | `scripts/qc_report.py` | Final delivery report; skipped/unverified required checks fail closed |
 | `scripts/regen_plain_text.py` | Rebuild the ASCII companion from the main Markdown runbook |
 
-### V8 entry points
+### V10 entry points
 
 ```text
 python scripts/bootstrap_deps.py --print --json
@@ -551,6 +571,22 @@ python scripts/run_stage.py --episode S01E07 --stage encode-final --execute
 python scripts/generate_runbooks.py --check
 ```
 
+### Optional local workflow app (prototype)
+
+Launch the local desktop cockpit with `python scripts/workflow_app.py`. It loads the
+existing intake JSON by default, but **never edits that file**: `Save new plan…` writes a
+separate no-overwrite plan. The form includes Archive URL, profile, download folder, exact
+DVD selection or explicit no-DVD mode, the no-DVD cut-PAD choice, and a new manifest path.
+DVD-backed plans pass the selected file to `init_episode.py`; no-DVD plans retain the
+explicit `--no-dvd` choice. Preview runs the existing read-only `run_workflow.py` plan path.
+Run, resume, and review approval call the same allowlisted CLI; approvals are never
+automatic, and plans containing final encode/remux receive an extra confirmation prompt.
+
+This UI is an optional layer over the existing V9/V10 plan and runner contracts. It does
+not replace the CLI or alter the workflow version, so saved V10 plans can continue to run
+and resume while the cockpit is iterated. Use `Save new plan…` for every new intake; do not
+reuse a completed plan for a different episode.
+
 The stage runner dispatches one allowlisted action at a time; it is not an unattended
 whole-project pipeline. `download` requires `--execute` and the downloader's own
 profile/curl, Archive integrity, sidecar, and free-space checks, but intentionally skips
@@ -558,6 +594,73 @@ the full doctor so the transfer can start early. Every other write-capable stage
 `--execute`, a doctor pass, and its declared manifest gates. It never runs arbitrary shell
 text, performs cleanup, or replaces helper-level refusal/QC checks. Linux x86_64 can check its candidate dependency lock but
 production stage execution is blocked until the complete Linux workflow is validated.
+
+### Fork orchestration: V9 ordered workflow retained in V10
+
+`scripts/run_workflow.py` executes an ordered JSON plan composed only of `run_stage.py`
+allowlisted stages. It does not execute arbitrary shell commands, choose measurements,
+install tools, or bypass the individual stage gates. `CONFIGURE HERE FIRST.example.json`
+shows the intake path with separate `_instructions_DO_NOT_EDIT` and
+`_operator_inputs_EDIT` sections. Edit only `_operator_inputs_EDIT`; the execution plan
+references each setting's `value`; its adjacent `_comment` explains that value and is not
+an input. The runner creates the job ID from the episode code, confirmed title, and UTC
+start time; no job ID is requested. It refuses to load the example while `REPLACE_` or `YOUR_ACCOUNT`
+placeholders remain. This sample is specifically a no-DVD intake. For shared mode, resolve
+the episode workspace first and set `manifest_path` to that workspace's manifest. The
+`decisions` array records choices; it does not apply them, so make sure the stage arguments
+express the same choices. The runner records `approved_by` from the current local account
+and `approved_at_utc` from the run start; neither is an operator input.
+
+The local GUI provides a structured intake path. It is also acceptable to provide the archive
+URL, DVD path/selection, and settings in an OpenCode or other AI prompt. In either case,
+persist confirmed values in the designated local configuration or newly saved plan (not just
+the chat), validate paths and settings, and retain the existing human decision/review gates.
+Do not overwrite machine-local or episode data outside the selected configuration scope.
+
+```text
+python scripts/run_workflow.py --plan <job.json>                 # plan only
+python scripts/run_workflow.py --plan <job.json> --execute
+python scripts/run_workflow.py --plan <same-job.json> --execute --resume
+python scripts/run_workflow.py --plan <same-job.json> --execute --resume --approve review-stack
+```
+
+Each plan step names its stage, argument vector, and input/output files or directories.
+The runner stores atomic job state and a live combined log under the selected `roots.logs`
+or device workspace `logs/`; it locks the job against concurrent runs. Resume requires the
+exact same plan, profile, and workflow version. Completed steps are skipped only if their
+declared fingerprints still match. `fingerprint_policy: "balanced"` uses full SHA-256 for
+files up to 64 MiB and size/mtime plus first/last-block SHA-256 for larger media; choose
+`"full"` when a full read is warranted, accepting the extra I/O. The Archive downloader
+alone may be retried after interruption, and only when the plan explicitly sets
+`resume_policy: "download"`. Other failed/interrupted steps stop for inspection; do not
+assume their partial artifacts are reusable.
+
+`render-stack`, Windows `build-map`, and macOS `cadence-analysis` are review-gated. A plan using
+one must put a `{"kind":"review","for_stage":"...","prompt":"...","inputs":[...],"outputs":[]}`
+step immediately after it. The runner pauses after producing the evidence; resume with
+`--approve <review-step-id>` only after a person reviews it. Stack quality and cadence
+ambiguity are not auto-approved.
+
+The next processing plans can use `render-stack` after `stack-reference`; it requires a
+measured `stack.frames`, a defensible `--planned-gib`, and a new report path. The helper
+checks `Loaded` captures, StackerStage evidence, unrecoverable samples, written/decoded frame
+counts, and any pair count against recorded pressing groups. It still requires a human stack
+quality/alignment review. For cadence, run `tfm-log` after measured `audio.pad_frames`, then
+`motion-trace`; Windows uses `build-map`, while macOS runs `cadence-analysis`, reviews the
+measured map/report, then uses `cadence-vpy` with an explicit repair choice if needed.
+`cadence-analysis` requires an explicit `--report-out`; add its review step before building
+the VapourSynth chain or proceeding to PAD/encode work. The fork includes the Mac cadence
+dispatch adapter, but real Mac execution remains unvalidated.
+
+The plan's `decisions` array is an audit annotation for the user's explicit choices (such as
+DVD/no-DVD mode); it is not inferred or validated against the media. The intake template
+does not remove the title/identity review. For later steps, list only deterministic actions
+and stop the plan at any unresolved measurement or approval gate. `run_stage.py --list`
+includes deterministic descriptor/alignment/audio helpers, the V10 report-only diagnostics,
+and verified DVD retiming. New V10 measurement/retime behavior remains unit-tested only in
+this fork.
+Linux processing remains blocked pending full end-to-end validation. This is a V10 fork
+adaptation, not an authoritative replacement for `Z:\\ld-pipeline`.
 
 ### Per-device episode workspaces (every README location)
 

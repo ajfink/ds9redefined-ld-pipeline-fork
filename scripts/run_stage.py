@@ -43,12 +43,26 @@ STAGES = {
     "validate-padfix": {"kind": "validate", "manifest_stage": "padfix", "write": False},
     "validate-deliverable": {"kind": "validate", "manifest_stage": "deliverable", "write": False},
     "stack-reference": {"kind": "python", "script": "select_stack_reference.py", "gate": "inputs", "write": True},
-    "build-map": {"kind": "map", "gate": "stack", "write": True},
+    "render-stack": {"kind": "python", "script": "render_stack.py", "gate": "inputs", "review_gate": True, "write": True},
+    "tfm-log": {"kind": "python", "script": "generate_tfm_log.py", "gate": "stack", "write": True},
+    "cadence-analysis": {"kind": "python", "script": "cadence_analysis_mac.py", "gate": "stack", "review_gate": True, "write": True},
+    "cadence-vpy": {"kind": "python", "script": "build_map_vpy.py", "gate": "stack", "write": True},
+    "build-map": {"kind": "map", "gate": "stack", "review_gate": True, "write": True},
+    "motion-trace": {"kind": "motion", "script": "build_motion_trace.py", "gate": "stack", "write": True},
+    "master-descriptors": {"kind": "python", "script": "extract_video_descriptors.py", "fixed_args": ["--source", "master"], "gate": "stack", "write": True},
+    "dvd-descriptors": {"kind": "python", "script": "extract_video_descriptors.py", "fixed_args": ["--source", "dvd"], "gate": "stack", "write": True},
+    "measure-dvd-alignment": {"kind": "python", "script": "measure_dvd_alignment.py", "gate": "stack", "write": True},
+    "measure-break-edges": {"kind": "python", "script": "measure_break_edges.py", "gate": "stack", "write": True},
+    "measure-audio-rate": {"kind": "python", "script": "measure_audio_rate.py", "write": True},
+    "measure-pad-audio": {"kind": "python", "script": "measure_pad_audio.py", "gate": "stack", "write": True},
+    "measure-ld-black": {"kind": "python", "script": "measure_ld_black.py", "gate": "stack", "write": True},
+    "build-ld-synced": {"kind": "python", "script": "build_ld_synced.py", "write": True},
+    "retime-assets": {"kind": "python", "script": "retime_dvd_assets.py", "gate": "retime", "write": True},
     "audio-diagnostic": {"kind": "python", "script": "audio_timing_diagnostic.py", "gate": "stack", "write": True},
     "audio-promote-no-dvd": {"kind": "no-dvd", "gate": "stack", "write": True},
     "pad-audit": {"kind": "python", "script": "pad_audit.py", "gate": "cadence", "write": True},
-    "fullres-check": {"kind": "python", "script": "fullres_check.py", "gate": "padfix", "write": True},
-    "rife-replacements": {"kind": "python", "script": "rife_padframes.py", "gate": "padfix", "write": True},
+    "fullres-check": {"kind": "python", "script": "fullres_check.py", "gate": "cadence", "write": True},
+    "rife-replacements": {"kind": "python", "script": "rife_padframes.py", "gate": "cadence", "write": True},
     "build-padfix": {"kind": "padfix", "gate": "cadence", "write": True},
     "encode-validate": {"kind": "encode", "pass": "validate", "gate": "encode", "write": False},
     "encode-final": {"kind": "encode", "pass": "final", "gate": "encode", "write": True},
@@ -109,11 +123,16 @@ def make_action(stage: str, episode: str, profile: dict, extra: list[str], repor
     spec = STAGES[stage]
     os_name = profile_platform(profile)
     kind = spec["kind"]
+    if stage == "cadence-analysis" and os_name != "macos":
+        raise LockError("cadence-analysis is the macOS PowerShell evidence adapter; use build-map on Windows")
+    if stage == "cadence-vpy" and os_name != "macos":
+        raise LockError("cadence-vpy is the macOS VapourSynth chain builder")
     if kind == "validate":
         return [py(profile), str(SCRIPTS / "validate_episode.py"), "--episode", episode,
                 "--stage", spec["manifest_stage"]]
     if kind == "python":
-        return python_command(profile, spec["script"], episode, extra)
+        return python_command(profile, spec["script"], episode,
+                              [*spec.get("fixed_args", []), *extra])
     if kind == "init":
         return [py(profile), str(SCRIPTS / "init_episode.py"), *extra]
     if kind == "download":
@@ -129,8 +148,15 @@ def make_action(stage: str, episode: str, profile: dict, extra: list[str], repor
             return [powershell(profile), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                     str(SCRIPTS / "build_map.ps1"), "-Episode", episode, *extra]
         if os_name == "macos":
-            return python_command(profile, "build_map_vpy.py", episode, extra)
+            raise LockError("on macOS run cadence-analysis, review its report, then use cadence-vpy after selecting any required repair path")
         raise LockError("Linux cadence/build-map execution is not enabled: the full Linux workflow is unvalidated")
+    if kind == "motion":
+        if os_name == "windows":
+            return [powershell(profile), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                    str(SCRIPTS / "motion-probe.ps1"), "-Episode", episode, *extra]
+        if os_name == "macos":
+            return python_command(profile, spec["script"], episode, extra)
+        raise LockError("Linux motion-trace execution is not enabled: the full Linux workflow is unvalidated")
     if kind == "padfix":
         if os_name == "windows":
             return python_command(profile, "build_padfix_avs.py", episode, extra)
@@ -174,6 +200,17 @@ def display(command: list[str]) -> str:
     return subprocess.list2cmdline(command) if os.name == "nt" else shlex.join(command)
 
 
+def configure_console() -> None:
+    """Replace characters that the active Windows console code page cannot encode."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
 def run_captured(command: list[str], env: dict[str, str], log_path: Path,
                  redactions: list[tuple[str, str]] | None = None) -> subprocess.CompletedProcess:
     proc = subprocess.run(command, capture_output=True, text=True, encoding="utf-8",
@@ -196,9 +233,11 @@ def run_logged(command: list[str], env: dict[str, str], log_path: Path,
     with log_path.open("a", encoding="utf-8", newline="\n") as log:
         log.write("COMMAND: " + redact_shared_text(display(command), redactions or []) + "\n\n")
         log.flush()
+        child_env = env.copy()
+        child_env.setdefault("PYTHONIOENCODING", "utf-8:replace")
         proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, encoding="utf-8", errors="replace",
-                                bufsize=1, env=env)
+                                bufsize=1, env=child_env)
         assert proc.stdout is not None
         for line in proc.stdout:
             sys.stdout.write(line)
@@ -232,6 +271,7 @@ def write_stage_report(path: Path, profile_path: Path, episode: str, stage: str,
 
 
 def main() -> int:
+    configure_console()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--episode", help="episode code (not needed with --list)")
     ap.add_argument("--stage", choices=sorted(STAGES))

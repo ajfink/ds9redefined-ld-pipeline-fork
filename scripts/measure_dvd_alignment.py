@@ -149,6 +149,7 @@ def main() -> int:
         margin.append(float(selected[row]-alternatives.max()) if alternatives.size else 0.0)
     edge=(offset_path==args.min_offset)|(offset_path==args.max_offset)
     print(f"master descriptors={len(master)} DVD descriptors={len(dvd)} samples={len(idxs)} states={states}")
+    print(f"sampled master-frame range={int(idxs[0])}..{int(idxs[-1])}; downstream anchors outside this range must not be extrapolated")
     print(f"state=DVD-master; path range={int(offset_path.min())}..{int(offset_path.max())}; range-edge samples={int(edge.sum())}/{len(edge)}")
     changes=np.flatnonzero(np.diff(offset_path)!=0)+1
     print(f"offset transitions >={args.transition_threshold} frames (full path is in TSV):")

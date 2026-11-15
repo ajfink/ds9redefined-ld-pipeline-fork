@@ -100,3 +100,42 @@ FROM Version 7 -> Version 8
 - Validation: 63 passed, 7 Mac/VapourSynth-only skipped; Python compilation, PowerShell
   parsing, runbook generation, and timing/fallback tests passed. See `V8-RELEASE.md` and the
   V8 entry in the device execution log.
+
+Version 9 (2026-11-15; application fork prototype only)
+FROM Version 8 -> Version 9 (fork-local)
+- Added a JSON-plan workflow executor around allowlisted `run_stage.py` actions, with a
+  durable state/log, advisory single-job lock, input/output fingerprints, and conservative
+  resume rules. Only Archive downloads may be retried automatically after interruption.
+- Registered deterministic descriptor, picture-alignment, break-edge, audio-sync, and
+  retime helpers; fixed circular PAD-review runner prerequisites.
+- Added an intake-plan example and tests for allowlisting, state, changed artifacts, and
+  safe download retry. This is not yet a full unattended episode workflow or GUI.
+- Split the intake template into explicit read-only instructions and a single editable input
+  section, with inline JSON `_comment` explanations. Approval user/time are captured at run
+  start instead of requested as inputs.
+- Added a fixture-backed, no-network intake integration test covering download interruption,
+  resume, initialization, input validation, and verified completed-step skipping.
+- Prepared the next stage pair: Orc stack rendering with artifact checks, cross-platform TFM
+  log generation, and a macOS cadence adapter. Stack and cadence stages require explicit
+  workflow review gates before downstream processing.
+- Validation at the initial V9 snapshot: see `V9-RELEASE.md`. A later supervised S01E08
+  canary is recorded in the V10 fork-adoption release; no full delivery is claimed.
+
+Version 10 (2026-11-15; mainline safeguards adapted to the application fork)
+FROM fork Version 9 -> fork Version 10
+- Ported V10 output-silence verification for DVD retiming, including explicit sub-resolution
+  LIMIT reporting and QC visibility. Added report-only PAD audio occupancy and LD luma-black
+  diagnostics, episode-scoped EFM output planning, alignment-range refusal, break-window
+  clipping, legacy workspace compatibility, and one-off analysis safeguards.
+- Preserved V9 ordered orchestration, prompt/config intake, review gates, and cadence adapters;
+  added the new analysis helpers to the allowlisted stage runner and preflight inventories.
+- Added the optional FromStunToKill Tk cockpit prototype over the same saved-plan/CLI
+  contract. It supports intake, exact DVD/no-DVD plan generation, preview, execution, resume,
+  and explicit human review approval; the CLI remains supported.
+- Interim intake policy: AI-prompted URLs, DVD selections/paths, and settings are acceptable
+  inputs, but confirmed values must also be persisted and validated in the designated config
+  or plan, not left only in chat.
+- Validation: **123 passed, 7 VapourSynth-only skipped**; Python compilation, generated-runbook
+  check, whitespace check, warning-as-error import, PowerShell parsing, and stage-list check
+  passed. See `V10-RELEASE.md`. The existing S01E08 canary predates this port and does not
+  validate new V10 retime/measurement behavior.

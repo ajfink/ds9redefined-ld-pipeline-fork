@@ -449,12 +449,14 @@ def main() -> int:
         "select_stack_reference.py", "extract_video_descriptors.py",
         "measure_dvd_alignment.py", "measure_break_edges.py",
         "measure_audio_rate.py", "audio_timing_diagnostic.py", "build_ld_synced.py",
+        "measure_pad_audio.py", "measure_ld_black.py", "efm_paths.py",
         "retime_dvd_assets.py", "av_check_output.py", "ld_only_sync_check.py",
         "pad_audit.py", "fullres_check.py", "rife_padframes.py",
         "build_padfix_vpy.py", "encode_episode_mac.py", "remux_padfixed_mac.py",
         "vspipe_util.py", "build_motion_trace.py", "qc_report.py",
         "verify_pad_identities.py", "check_space_budget.py", "doctor.py",
-        "bootstrap_deps.py", "dependency_lock.py", "run_stage.py", "shared_workspace.py",
+        "bootstrap_deps.py", "dependency_lock.py", "run_stage.py", "run_workflow.py",
+        "shared_workspace.py",
         "stage_clock.py",
         "generate_runbooks.py",
     )
@@ -477,7 +479,7 @@ def main() -> int:
         manifest_dir_value = os.environ.get("LDP_MANIFEST_DIR")
         if (profile.get("shared") or {}).get("enabled") is True and not manifest_dir_value:
             results.add("episode:manifest", "FAIL",
-                        "shared mode requires LDP_INSTANCE_ROOT; run scripts/shared_workspace.py init")
+                        "shared mode requires LDP_INSTANCE_ROOT; run scripts/shared_workspace.py ensure")
             episode_path = None
         else:
             episode_path = (resolve_path(manifest_dir_value) if manifest_dir_value else

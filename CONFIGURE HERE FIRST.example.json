@@ -1,0 +1,115 @@
+{
+  "_instructions_DO_NOT_EDIT": [
+    "START HERE. This portable example is safe to copy; do not put machine-local values in the checked-in example.",
+    "Edit only value members inside _operator_inputs_EDIT in your local copy. The adjacent _comment members explain each value and must not be edited. The workflow creates the job ID from episode and confirmed_title; do not supply one.",
+    "Confirm the Archive item, episode/title, DVD mode, and cut-PAD choice for your job; do not reuse these sample decisions blindly.",
+    "DVD mode choices: use a DVD-backed plan with --dvd <exact matching DVD path>, or choose --no-dvd explicitly. No-DVD mode has no DVD-derived 5.1/SRT and cannot pass external absolute A/V correlation; it uses the separate LD-only duration/PAD timing route.",
+    "The workflow app generates an initialize command that matches the selected DVD mode; always preview the generated plan before execution.",
+    "For no-DVD jobs, cut_pad_images choices are use or skip when shared stills are available. use permits a uniquely verified still only for a confirmed cut-PAD frame; skip forbids those stills, so later cut-PAD repair must use the documented hold-cut method. Neither choice permits cross-shot RIFE.",
+    "The intake ends after input validation. Review the initialized manifest's title/identity before creating a processing plan.",
+    "For shared mode, resolve the device episode workspace first and set manifest_path to that workspace's manifest/SxxExx.json.",
+    "The runner fills approved_by from the current local account and approved_at_utc from the workflow start time; do not enter either value."
+  ],
+  "_operator_inputs_EDIT": {
+    "episode": {
+      "value": "S01E07",
+      "_comment": "Required. SxxExx code confirmed against the selected Archive item."
+    },
+    "profile": {
+      "value": "C:\\REPLACE_ME\\machine.json",
+      "_comment": "Required. Absolute path to this machine's external device-local machine profile."
+    },
+    "archive_url": {
+      "value": "https://archive.org/details/REPLACE_ITEM_ID",
+      "_comment": "Required. Confirmed Archive item URL; its episode identity must match episode above."
+    },
+    "downloads_dir": {
+      "value": "D:\\REPLACE_ME\\LaserDisc downloads",
+      "_comment": "Required. Exact intended download folder on a volume with sufficient free space."
+    },
+    "confirmed_title": {
+      "value": "REPLACE_TITLE",
+      "_comment": "Required audit choice. Confirm from the DVD/capture evidence; after initialization, verify the manifest title matches."
+    },
+    "dvd_mode": {
+      "value": "no-dvd",
+      "_comment": "Required choice: DVD-backed (requires the exact matching DVD path) or no-dvd (must be explicit). No-DVD means LD-only timing, no DVD 5.1/SRT, and no external absolute A/V correlation."
+    },
+    "cut_pad_images": {
+      "value": "skip",
+      "_comment": "No-DVD choice when shared cut-PAD stills are available: use allows a curated, uniquely matched still only for a confirmed cut-PAD; skip forbids stills and uses hold-cut. Stills never replace a DVD reference or other video/audio."
+    },
+    "manifest_path": {
+      "value": "C:\\REPLACE_ME\\workspaces\\S01E07\\manifest\\S01E07.json",
+      "_comment": "Required. Absolute expected manifest path. In shared mode, resolve the device episode workspace and use its manifest folder."
+    }
+  },
+  "schema": "ld-pipeline-workflow-plan-v1",
+  "episode": "${input:episode}",
+  "episode_title": "${input:confirmed_title}",
+  "profile": "${input:profile}",
+  "fingerprint_policy": "balanced",
+  "decisions": [
+    {
+      "id": "archive-item-confirmed",
+      "value": "${input:archive_url}"
+    },
+    {
+      "id": "dvd-mode",
+      "value": "${input:dvd_mode}"
+    },
+    {
+      "id": "cut-pad-images",
+      "value": "${input:cut_pad_images}"
+    },
+    {
+      "id": "episode-title-confirmed",
+      "value": "${input:confirmed_title}"
+    }
+  ],
+  "steps": [
+    {
+      "id": "download-source",
+      "stage": "download",
+      "resume_policy": "download",
+      "args": [
+        "-Url",
+        "${input:archive_url}",
+        "-Destination",
+        "${input:downloads_dir}"
+      ],
+      "inputs": [],
+      "outputs": [
+        "${input:downloads_dir}"
+      ]
+    },
+    {
+      "id": "initialize-episode",
+      "stage": "init-episode",
+      "args": [
+        "--url",
+        "${input:archive_url}",
+        "--downloads",
+        "${input:downloads_dir}",
+        "--no-dvd",
+        "--cut-pad-images",
+        "${input:cut_pad_images}"
+      ],
+      "inputs": [
+        "${input:downloads_dir}"
+      ],
+      "outputs": [
+        "${input:manifest_path}"
+      ]
+    },
+    {
+      "id": "validate-inputs",
+      "stage": "validate-inputs",
+      "inputs": [
+        "${input:downloads_dir}",
+        "${input:manifest_path}"
+      ],
+      "outputs": []
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Absolute A/V gate for a delivered episode: LD stereo vs the DVD, referenced
+r"""Absolute A/V gate for a delivered episode: LD stereo vs the DVD, referenced
 through the episode's own picture map.
 
 For an output window at time t:
@@ -114,6 +114,16 @@ def fit_windows(ep) -> list[tuple[float, float]]:
     return kept
 
 
+def require_alignment_sample_coverage(sampled_start: float, sampled_end: float,
+                                      master_time: float) -> None:
+    """Prevent a head/tail or QC query from silently extrapolating an alignment path."""
+    if not sampled_start <= master_time <= sampled_end:
+        raise PipelineError(
+            f"requested master time {master_time:.3f}s is outside the sampled alignment range "
+            f"{sampled_start:.3f}..{sampled_end:.3f}s; rerun measure_dvd_alignment.py "
+            "with --first-master-frame covering this anchor or obtain an independent local match")
+
+
 def build_offset_model(ep, align_path: Path):
     import numpy as np
     if not align_path.exists():
@@ -122,6 +132,7 @@ def build_offset_model(ep, align_path: Path):
             "extract_video_descriptors.py and measure_dvd_alignment.py first")
     a = np.load(align_path)
     t, o = a[:, 0] / FPS, a[:, 1].astype(float)
+    sampled_start, sampled_end = float(t.min()), float(t.max())
     o_s = o.copy()
     for k in range(2, len(o_s) - 2):
         o_s[k] = np.median(o[k - 2:k + 3])
@@ -136,6 +147,7 @@ def build_offset_model(ep, align_path: Path):
     if not fits:
         raise PipelineError("no content window had enough samples to fit an offset model")
     print("offset model (content-only windows):")
+    print(f"  sampled alignment master range: {sampled_start:.3f}..{sampled_end:.3f}s")
     for lo, hi, sl, ic in fits:
         print(f"  {lo:8.1f}-{hi:8.1f}s  rate {sl/FPS*1e6:+7.1f} ppm  "
               f"offset({lo:.0f})={sl*lo+ic:+.1f}")
@@ -147,6 +159,8 @@ def build_offset_model(ep, align_path: Path):
         between windows; using the last fit for everything past the first gap
         once produced a 1 s A/V error, so distance decides.
         """
+        require_alignment_sample_coverage(sampled_start, sampled_end, m)
+
         def dist(f):
             lo, hi, _, _ = f
             if lo <= m <= hi:
