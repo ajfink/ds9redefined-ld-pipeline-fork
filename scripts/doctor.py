@@ -222,7 +222,7 @@ def main() -> int:
                                           instance / "cut-pad-images")
                 missing_dirs = [str(path) for path in required_instance_dirs if not path.is_dir()]
                 if missing_dirs:
-                    raise LockError("shared instance is incomplete; run shared_workspace.py init: " +
+                    raise LockError("shared instance is incomplete; run shared_workspace.py ensure: " +
                                     ", ".join(missing_dirs))
             else:
                 manifest_dir = None
@@ -276,7 +276,7 @@ def main() -> int:
             platform_report = linux_preflight(profile, profile_file, interpreter, lock_report, args.episode)
 
         workflow_status = {
-            "windows": "V9 Windows x86_64 reference workflow",
+            "windows": "V10 Windows x86_64 reference workflow",
             "macos": "macOS arm64 end-to-end workflow demonstrated on M5 (S01E10); fresh-device setup is not independently certified",
             "linux": "UNTESTED: x86_64 dependency/capability candidate only; do not process a delivery",
         }[target_os]

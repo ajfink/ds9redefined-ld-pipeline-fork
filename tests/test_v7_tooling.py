@@ -96,6 +96,8 @@ class StageRunnerTests(unittest.TestCase):
                    "tools": {"pwsh": sys.executable}}
         self.assertIn("build-ld-synced", STAGES)
         self.assertIn("retime-assets", STAGES)
+        self.assertIn("measure-pad-audio", STAGES)
+        self.assertIn("measure-ld-black", STAGES)
         master = make_action("master-descriptors", "S01E99", profile,
                              ["--input-fps", "30000/1001"], None)
         self.assertEqual(master[1].endswith("extract_video_descriptors.py"), True)
@@ -108,6 +110,8 @@ class StageRunnerTests(unittest.TestCase):
             make_action("master-descriptors", "S01E99", profile, ["--source", "dvd"], None)
         self.assertEqual(STAGES["fullres-check"]["gate"], "cadence")
         self.assertEqual(STAGES["rife-replacements"]["gate"], "cadence")
+        self.assertEqual(STAGES["measure-pad-audio"]["gate"], "stack")
+        self.assertEqual(STAGES["measure-ld-black"]["gate"], "stack")
 
 
 class RunbookGeneratorTests(unittest.TestCase):
@@ -120,6 +124,10 @@ class RunbookGeneratorTests(unittest.TestCase):
             self.assertIn("Model operating contract", output)
             self.assertNotIn("{{CANONICAL_RUNBOOK}}", output)
         self.assertIn("fallback", generated_text("DS9 LaserDisc OpenCode Runbook - Qwen4B-Luna.md").casefold())
+        canonical = (ROOT / "DS9 LaserDisc OpenCode Runbook.md").read_text(encoding="utf-8")
+        self.assertIn("audio/<episode>/<capture>-efm.wav", canonical)
+        self.assertIn("efm_paths.py", canonical)
+        self.assertIn("sign/scale convention", canonical)
 
     def test_windows_preflight_parser_extracts_gate_rows(self):
         rows = parse_windows_preflight("  [PASS] ffmpeg  path ok\n  [WARN] dvd_root  unset\n  [FAIL] python  import failed")

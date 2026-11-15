@@ -50,6 +50,8 @@ STAGES = {
     "measure-dvd-alignment": {"kind": "python", "script": "measure_dvd_alignment.py", "gate": "stack", "write": True},
     "measure-break-edges": {"kind": "python", "script": "measure_break_edges.py", "gate": "stack", "write": True},
     "measure-audio-rate": {"kind": "python", "script": "measure_audio_rate.py", "write": True},
+    "measure-pad-audio": {"kind": "python", "script": "measure_pad_audio.py", "gate": "stack", "write": True},
+    "measure-ld-black": {"kind": "python", "script": "measure_ld_black.py", "gate": "stack", "write": True},
     "build-ld-synced": {"kind": "python", "script": "build_ld_synced.py", "write": True},
     "retime-assets": {"kind": "python", "script": "retime_dvd_assets.py", "gate": "retime", "write": True},
     "audio-diagnostic": {"kind": "python", "script": "audio_timing_diagnostic.py", "gate": "stack", "write": True},

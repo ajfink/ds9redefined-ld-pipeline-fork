@@ -156,6 +156,51 @@ def ensure_workspace_dirs(root: Path) -> None:
     ensure_logging_guide(root / "logs")
 
 
+def workspace_storage_mode(root: Path, profile: dict, metadata: dict) -> str:
+    """Return the validated storage mode, inferring it for V7-era metadata.
+
+    Legacy workspace records are not rewritten: their ``workflow_version`` remains
+    the version at creation. The resolved mode is added only to the in-memory record
+    returned to callers such as ``stage_clock.py``.
+    """
+    mode = metadata.get("storage_mode")
+    if mode in ("shared-release", "readme-workspace", "local-fallback"):
+        return mode
+    if mode not in (None, ""):
+        raise LockError(f"unsupported workspace storage_mode: {mode!r}")
+
+    devices = workspace_release_root(profile) / "devices"
+    try:
+        root.resolve().relative_to(devices.resolve())
+    except ValueError:
+        key = metadata.get("local_root_key")
+        if key in ("logs", "work", "probe"):
+            return "local-fallback"
+        raise LockError("legacy workspace has no storage_mode or valid local_root_key")
+    shared = profile.get("shared") or {}
+    return "shared-release" if shared.get("enabled") is True else "readme-workspace"
+
+
+def normalize_workspace_record(root: Path, profile: dict, metadata: dict) -> dict:
+    """Normalize legacy metadata in memory without changing its saved provenance."""
+    if not metadata.get("storage_mode"):
+        metadata["storage_mode"] = workspace_storage_mode(root, profile, metadata)
+    return metadata
+
+
+def initialize_workspace(profile_path: Path, profile: dict, episode: str) -> dict:
+    """Create a new workspace only when no matching workspace already exists."""
+    existing, warning = resolve_instance_workspace(
+        profile_path, profile, episode, create=False)
+    if existing:
+        raise LockError(
+            "a matching workspace already exists; use 'ensure' or pass its explicit "
+            "--instance-root instead of creating a duplicate")
+    if warning and "workspaces for this device/episode" in warning:
+        raise LockError(warning + "; use 'ensure' with an explicit --instance-root")
+    return create_workspace(profile_path, profile, episode)
+
+
 def _shell_exports(profile_path: Path, root: Path, mode: str) -> dict[str, str]:
     return {
         "LDP_PROFILE": str(profile_path),
@@ -319,7 +364,8 @@ def resolve_instance_workspace(profile_path: Path, profile: dict, episode: str,
         try:
             root = validate_instance(requested_root, profile_path, profile)
             ensure_workspace_dirs(root)
-            meta = json.loads((root / "workspace.json").read_text(encoding="utf-8"))
+            meta = normalize_workspace_record(
+                root, profile, json.loads((root / "workspace.json").read_text(encoding="utf-8")))
             meta["instance_root"] = str(root)
             meta["shell_exports"] = _shell_exports(profile_path, root,
                                                    meta.get("storage_mode", "shared-release"))
@@ -346,7 +392,8 @@ def resolve_instance_workspace(profile_path: Path, profile: dict, episode: str,
             notes.append(f"existing README-folder workspace is not writable ({exc})")
             candidates = []
         else:
-            meta = json.loads((root / "workspace.json").read_text(encoding="utf-8"))
+            meta = normalize_workspace_record(
+                root, profile, json.loads((root / "workspace.json").read_text(encoding="utf-8")))
             meta["instance_root"] = str(root)
             meta["shell_exports"] = _shell_exports(profile_path, root,
                                                    meta.get("storage_mode", "shared-release"))
@@ -360,7 +407,8 @@ def resolve_instance_workspace(profile_path: Path, profile: dict, episode: str,
             try:
                 root = validate_instance(str(local_root), profile_path, profile)
                 ensure_workspace_dirs(root)
-                meta = json.loads((root / "workspace.json").read_text(encoding="utf-8"))
+                meta = normalize_workspace_record(
+                    root, profile, json.loads((root / "workspace.json").read_text(encoding="utf-8")))
                 meta["instance_root"] = str(root)
                 meta["shell_exports"] = _shell_exports(profile_path, root, "local-fallback")
                 return meta, "; ".join(notes) if notes else "reusing existing device-local fallback workspace"
@@ -386,7 +434,7 @@ def validate_instance(root_value: str, profile_path: Path, profile: dict) -> Pat
         raise LockError(f"invalid/missing workspace.json at {root}: {exc}") from exc
     device = safe_component(str(profile.get("shared", {}).get("device_name") or
                                 profile.get("machine") or "device"))
-    mode = metadata.get("storage_mode", "shared-release")
+    mode = workspace_storage_mode(root, profile, metadata)
     if mode == "local-fallback":
         key = metadata.get("local_root_key")
         if key not in ("logs", "work", "probe"):
@@ -400,7 +448,7 @@ def validate_instance(root_value: str, profile_path: Path, profile: dict) -> Pat
                 str(metadata.get("episode", "")).casefold() != root.name.casefold()):
             raise LockError("device-local fallback workspace does not match the selected profile/episode")
     else:
-        devices = Path(profile["shared"]["release_root"]).resolve() / "devices"
+        devices = workspace_release_root(profile) / "devices"
         try:
             relative = root.relative_to(devices.resolve())
         except ValueError as exc:
@@ -518,7 +566,7 @@ def publish_cut_pad(source: Path, instance: Path, output_frame: int,
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="command", required=True)
-    init = sub.add_parser("init", help="create one unique device-instance/episode workspace")
+    init = sub.add_parser("init", help="create a new workspace only if no matching one exists; otherwise use ensure")
     init.add_argument("--profile", required=True)
     init.add_argument("--episode", required=True)
     ref = sub.add_parser("publish-reference", help="copy one useful report into this instance's references folder")
@@ -559,7 +607,7 @@ def main() -> int:
             print(json.dumps({"workspace": result, "warning": warning}, indent=2))
             return 0
         if args.command == "init":
-            result = create_workspace(profile_path, profile, args.episode)
+            result = initialize_workspace(profile_path, profile, args.episode)
             print(json.dumps(result, indent=2))
         else:
             instance = validate_instance(args.instance_root, profile_path, profile)

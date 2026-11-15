@@ -15,7 +15,8 @@ Gates, each with an explicit threshold (runbook section 10):
   7. between-track drift within +/-30 ppm, rms<=40 ms   sync_check.py
   8. retimed SRT: count, monotonic, inside the timeline
   9. input- and output-seek audio windows decode fully for every master audio track
- 10. measured values agree with what the manifest recorded (warnings, not failures)
+  10. generated DVD retime gaps agree with output silence (sub-resolution gaps stay LIMIT)
+  11. measured values agree with what the manifest recorded (warnings, not failures)
 
 Writes <code>-qc-report.md. Exit 0 only if every hard gate passes.
 """
@@ -32,7 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from ldcommon import (BUNDLE, Ld, PipelineError, assert_writable_path,
-                      load_episode)  # noqa: E402
+                      device_workspace_enabled, load_episode)  # noqa: E402
 
 SCRIPTS = Path(__file__).resolve().parent
 
@@ -48,6 +49,7 @@ STANDING_WARNINGS = [
     "measure every episode: never copy another episode's AudioSkip, DELTA, rate or trim",
     "DVD-free deliveries can verify the capture-origin/duration/PAD model and exact audio/video endpoint, "
     "but cannot claim an external absolute A/V cross-correlation",
+    "retime output gaps below the verifier's position-resolution limit remain WARN/LIMIT, not a confident PASS",
     "if input-seek audio is truncated while output-seek control succeeds, remux Matroska with "
     "-max_interleave_delta 0; this prevents audio-less clusters caused by the default 10 s interleave flush",
 ]
@@ -70,6 +72,27 @@ def run_gate(script: str, args: list[str], skip: bool) -> tuple[str, str]:
     if p.returncode == 1:
         return "FAIL", tail.replace("\n", " | ") or (p.stderr or "")[-300:]
     return "ERROR", ((p.stderr or "") + (p.stdout or ""))[-400:]
+
+
+def retime_gap_verification_status(report: dict | None, has_fiveone: bool) -> tuple[str, str]:
+    """Keep sub-resolution/legacy gap evidence visibly non-PASS in delivery QC."""
+    if not has_fiveone:
+        return "SKIP", "no retimed DVD 5.1 track in this deliverable"
+    if report is None:
+        return "WARN", "retime output-gap verification report is missing; gap positions are unverified"
+    status = report.get("status")
+    gaps = report.get("gaps")
+    if not isinstance(gaps, list):
+        return "ERROR", "retime output-gap verification report has no gap-results array"
+    if status == "PASS" and all(row.get("status") == "PASS" for row in gaps):
+        return "PASS", f"{len(gaps)} inserted gaps independently matched output silence"
+    if status == "LIMIT" or any(row.get("status") == "LIMIT" for row in gaps):
+        limited = sum(row.get("status") == "LIMIT" for row in gaps)
+        return "WARN", f"{limited} sub-resolution gap(s) remain LIMIT/unverified; see verification report"
+    if status == "FAIL" or any(row.get("status") == "FAIL" for row in gaps):
+        failed = sum(row.get("status") == "FAIL" for row in gaps)
+        return "FAIL", f"{failed} retime output gap(s) disagree with the plan"
+    return "ERROR", f"unsupported retime output-gap verification status: {status!r}"
 
 
 def ffprobe_json(ld: Ld, path: Path, count_frames: bool = False) -> dict:
@@ -217,11 +240,11 @@ def main() -> int:
     print(f"=== {ep.code} {ep.title} QC ===\n{deliverable}\n", flush=True)
 
     # ---- heavy gates (they decode the deliverable) ----
-    print("[1/10] full decode + PAD black gate ...", flush=True)
+    print("[1/11] full decode + PAD black gate ...", flush=True)
     add("full-decode + PAD black", *run_gate("scan_padfixed_black.py",
                                              ["--episode", ep.code, "--encode", str(deliverable), "--rescan"],
                                              args.skip_heavy))
-    print("[2/10] replacement identity ...", flush=True)
+    print("[2/11] replacement identity ...", flush=True)
     add("replacement identity", *run_gate("verify_pad_identities.py",
                                           ["--episode", ep.code, "--encode", str(deliverable)],
                                           args.skip_heavy))
@@ -229,7 +252,7 @@ def main() -> int:
     if dvd_available is None:  # existing V1-V5 manifests carry files.dvd instead
         dvd_available = bool((ep.data.get("files") or {}).get("dvd"))
     if dvd_available:
-        print("[3/10] absolute A/V ...", flush=True)
+        print("[3/11] absolute A/V ...", flush=True)
         av_report = probe / f"{ep.code}-av-check-qc-{qc_run_id}.tsv"
         assert_writable_path(av_report, ld)
         add("absolute A/V", *run_gate("av_check_output.py",
@@ -237,21 +260,21 @@ def main() -> int:
                                         "--out", str(av_report)],
                                        args.skip_heavy))
     else:
-        print("[3/10] DVD-free timeline sync ...", flush=True)
+        print("[3/11] DVD-free timeline sync ...", flush=True)
         add("absolute A/V", "SKIP",
             "no DVD reference supplied; external absolute A/V cross-correlation is unavailable")
         add("DVD-free sync", *run_gate("ld_only_sync_check.py",
                                         ["--episode", ep.code, "--video", str(deliverable)],
                                         args.skip_heavy))
     if "51" in list(ep.data.get("deliverable_tracks") or ["ld"]):
-        print("[4/10] between-track sync ...", flush=True)
+        print("[4/11] between-track sync ...", flush=True)
         add("between-track sync", *run_gate("sync_check.py",
                                             ["--episode", ep.code], args.skip_heavy))
     else:
         add("between-track sync", "SKIP", "no DVD 5.1 track in deliverable_tracks")
 
     # ---- container / stream inventory ----
-    print("[5/10] stream inventory ...", flush=True)
+    print("[5/11] stream inventory ...", flush=True)
     info = ffprobe_json(ld, deliverable, count_frames=False)
     streams = info.get("streams", [])
     fmt = info.get("format", {})
@@ -321,7 +344,7 @@ def main() -> int:
         f"{dur:.6f}s, {fmt.get('size')} bytes")
 
     # ---- indexed audio seeking (players seek by container index, unlike the full decode above) ----
-    print("[6/10] audio seekability ...", flush=True)
+    print("[6/11] audio seekability ...", flush=True)
     try:
         seek_status, seek_detail = check_seekability(ld, deliverable, dur, len(aud))
         add("audio seekability", seek_status, seek_detail)
@@ -329,7 +352,7 @@ def main() -> int:
         add("audio seekability", "ERROR", str(e))
 
     # ---- frame count (from the full decode log to avoid a second decode) ----
-    print("[7/10] frame count ...", flush=True)
+    print("[7/11] frame count ...", flush=True)
     scan_log = probe / f"{ep.code}-blackscan-{deliverable.stem}.txt"
     frames = None
     if scan_log.exists():
@@ -350,7 +373,7 @@ def main() -> int:
         add("frame count", "FAIL", f"{frames} != manifest {ep.frame_count}")
 
     # ---- packet hashes ----
-    print("[8/10] packet hashes ...", flush=True)
+    print("[8/11] packet hashes ...", flush=True)
     try:
         vh = packet_hash(ld, deliverable, "0:v:0")
         recorded = (ep.data.get("qc") or {}).get("video_md5")
@@ -395,7 +418,7 @@ def main() -> int:
         add("packet hashes", "ERROR", str(e))
 
     # ---- subtitles ----
-    print("[9/10] subtitle timeline ...", flush=True)
+    print("[9/11] subtitle timeline ...", flush=True)
     srt_path = ep.path("retimed_srt") if ep.data.get("files", {}).get("retimed_srt") else None
     if "srt" not in tracks:
         add("subtitle timeline", "SKIP", "no subtitle track in deliverable_tracks")
@@ -413,8 +436,28 @@ def main() -> int:
         else:
             add("subtitle timeline", "PASS", detail)
 
+    # ---- generated retime-gap check: LIMIT is a warning, never a PASS ----
+    print("[10/11] retime output-gap verification ...", flush=True)
+    if "51" not in tracks:
+        retime_status, retime_detail = retime_gap_verification_status(None, False)
+    else:
+        gap_report_dir = ld.root("logs") if device_workspace_enabled(ld.profile) else probe
+        gap_report = gap_report_dir / f"{ep.code}-retime-audio-verification.json"
+        if not gap_report.is_file():
+            retime_status, retime_detail = retime_gap_verification_status(None, True)
+        else:
+            try:
+                verification = json.loads(gap_report.read_text(encoding="utf-8"))
+                if verification.get("episode") != ep.code:
+                    retime_status, retime_detail = "ERROR", "retime gap report episode identity mismatch"
+                else:
+                    retime_status, retime_detail = retime_gap_verification_status(verification, True)
+            except (OSError, json.JSONDecodeError) as exc:
+                retime_status, retime_detail = "ERROR", f"cannot read retime gap report: {exc}"
+    add("retime output gaps", retime_status, retime_detail)
+
     # ---- manifest cross-check (informational) ----
-    print("[10/10] manifest cross-check ...", flush=True)
+    print("[11/11] manifest cross-check ...", flush=True)
     notes = []
     recorded_bytes = (ep.data.get("qc") or {}).get("delivered_bytes")
     if recorded_bytes and int(fmt.get("size") or 0) != recorded_bytes:
@@ -443,6 +486,8 @@ def main() -> int:
         allowed_skips.add("between-track sync")
     if "srt" not in tracks:
         allowed_skips.add("subtitle timeline")
+    if "51" not in tracks:
+        allowed_skips.add("retime output gaps")
     unverified = [r for r in results if r[1] == "SKIP" and r[0] not in allowed_skips]
     n_fail = sum(1 for r in results if r[1] in ("FAIL", "ERROR")) + len(unverified)
     print(f"\n  {n_pass} pass, {n_warn} warn, {n_skip} skip, {n_fail} fail/unverified")

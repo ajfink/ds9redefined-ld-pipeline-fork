@@ -116,4 +116,20 @@ FROM Version 8 -> Version 9
 - Added fake-runner orchestration tests and a local-fixture intake integration test; it makes
   no network requests. Linux production remains blocked; the Mac cadence-dispatch integration
   issue remains open. No full end-to-end or new macOS support claim is made.
-- Validation: see `V9-RELEASE.md` and authoring-device execution-log §35.
+- Validation: see `V9-RELEASE.md` and authoring-device execution-log section 37.
+
+Version 10 (2026-11-15)
+FROM Version 9 -> Version 10
+- Added output-level silence verification to DVD retime generation. Touching detector spans
+  are coalesced; mismatched gaps fail; sub-resolution gaps remain explicitly LIMIT and are
+  reported as warnings, not ordinary passes.
+- Namespaced EFM WAV/report paths by episode with no-overwrite checks. Added report-only PAD
+  audio-occupancy and descriptor-luma black/fade diagnostics; neither chooses measurements or
+  edits the manifest.
+- Prevented A/V offset queries outside sampled alignment coverage, clipped break-edge content
+  windows away from neighboring blacks, added safe legacy workspace-mode inference and a
+  repeated-init guard, and documented cross-check rules for ad-hoc measurement scripts.
+- Validation: **105 passed, 7 VapourSynth-only skipped**; Python compilation, runbook
+  generation, whitespace, warning-as-error import, and PowerShell parsing passed. See
+  `V10-RELEASE.md` and authoring-device execution-log section 39. No real retime/media
+  processing, full episode, or new macOS/Linux support claim is made.

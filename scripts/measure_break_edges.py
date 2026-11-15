@@ -83,6 +83,46 @@ def match_window(master,dvd_norm,lo_s:float,hi_s:float,guess:float,search:int,te
             "margin":float(scores[k]-runner),"n":int(keep.sum())}
 
 
+def content_window_bounds(breaks, index: int, window_s: float,
+                          fade_clear_s: float) -> dict[str, object]:
+    """Clip before/after match windows away from neighboring black intervals."""
+    if not 0 <= index < len(breaks):
+        raise PipelineError(f"break index {index} is outside the adjudication list")
+    own = breaks[index].get("ld_black")
+    if not own or len(own) != 2:
+        raise PipelineError(f"break {breaks[index].get('label', index + 1)} needs ld_black=[start,end]")
+    b0, b1 = map(float, own)
+    if window_s <= 0 or fade_clear_s < 0 or b1 <= b0:
+        raise PipelineError("content window, fade clearance, or black interval is invalid")
+
+    before = [max(0.0, b0 - window_s - fade_clear_s), b0 - fade_clear_s]
+    after = [b1 + fade_clear_s, b1 + window_s + fade_clear_s]
+    clipped_before = clipped_after = False
+    previous = []
+    following = []
+    for j, row in enumerate(breaks):
+        if j == index or not row.get("ld_black") or len(row["ld_black"]) != 2:
+            continue
+        start, end = map(float, row["ld_black"])
+        if end <= b0:
+            previous.append((start, end))
+        elif start >= b1:
+            following.append((start, end))
+        elif start < b1 and end > b0:
+            raise PipelineError("recorded LD black intervals overlap; adjudicate before measuring break edges")
+
+    overlapping_previous = [row for row in previous if row[1] > before[0] and row[0] < before[1]]
+    if overlapping_previous:
+        before[0] = max(before[0], max(row[1] for row in overlapping_previous) + fade_clear_s)
+        clipped_before = True
+    overlapping_next = [row for row in following if row[0] < after[1] and row[1] > after[0]]
+    if overlapping_next:
+        after[1] = min(after[1], min(row[0] for row in overlapping_next) - fade_clear_s)
+        clipped_after = True
+    return {"before": tuple(before), "after": tuple(after),
+            "before_clipped": clipped_before, "after_clipped": clipped_after}
+
+
 def main()->int:
     ap=argparse.ArgumentParser(description=__doc__,formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--episode',required=True)
@@ -115,22 +155,38 @@ def main()->int:
         black=b.get('ld_black')
         if not black or len(black)!=2: raise PipelineError(f"break {b.get('label',i)} needs measured ld_black=[start,end]")
         b0,b1=map(float,black)
+        windows=content_window_bounds(breaks,i-1,args.window,args.fade_clear)
+        before_lo,before_hi=windows['before']
+        after_lo,after_hi=windows['after']
         dpb=dp_median(align,b0-45,b0-args.fade_clear-1/FPS)
         dpa=dp_median(align,b1+args.fade_clear+1/FPS,b1+45)
         if dpb is None or dpa is None:
-            rows.append({"label":b.get('label',f"B{i}"),"status":"no-DP-samples","ld_black_start":b0,"ld_black_end":b1})
+            rows.append({"label":b.get('label',f"B{i}"),"status":"no-DP-samples","ld_black_start":b0,"ld_black_end":b1,
+                         "window_before_start":before_lo,"window_before_end":before_hi,
+                         "window_after_start":after_lo,"window_after_end":after_hi,
+                         "before_window_clipped":windows['before_clipped'],
+                         "after_window_clipped":windows['after_clipped']})
             continue
-        before=match_window(master,dvd,b0-args.window-args.fade_clear,b0-args.fade_clear,dpb,args.search_frames,args.texture_std,args.min_frames)
-        after=match_window(master,dvd,b1+args.fade_clear,b1+args.window+args.fade_clear,dpa,args.search_frames,args.texture_std,args.min_frames)
+        before=match_window(master,dvd,before_lo,before_hi,dpb,args.search_frames,args.texture_std,args.min_frames)
+        after=match_window(master,dvd,after_lo,after_hi,dpa,args.search_frames,args.texture_std,args.min_frames)
         if before["offset"] is None or after["offset"] is None:
-            rows.append({"label":b.get('label',f"B{i}"),"status":"insufficient-texture","ld_black_start":b0,"ld_black_end":b1,"dp_before":dpb,"dp_after":dpa,"n_before":before['n'],"n_after":after['n']})
+            rows.append({"label":b.get('label',f"B{i}"),"status":"insufficient-texture","ld_black_start":b0,"ld_black_end":b1,
+                         "dp_before":dpb,"dp_after":dpa,"n_before":before['n'],"n_after":after['n'],
+                         "window_before_start":before_lo,"window_before_end":before_hi,
+                         "window_after_start":after_lo,"window_after_end":after_hi,
+                         "before_window_clipped":windows['before_clipped'],
+                         "after_window_clipped":windows['after_clipped']})
             continue
         step=after["offset"]-before["offset"]
         row={"label":b.get('label',f"B{i}"),"status":"measured","ld_black_start":b0,"ld_black_end":b1,
              "dvd_silence_start":(b.get('dvd_silence') or [None,None])[0],"dvd_silence_end":(b.get('dvd_silence') or [None,None])[1],
              "dp_before":dpb,"content_before":before['offset'],"ncc_before":before['score'],"runner_before":before['runner'],"margin_before":before['margin'],"n_before":before['n'],
              "dp_after":dpa,"content_after":after['offset'],"ncc_after":after['score'],"runner_after":after['runner'],"margin_after":after['margin'],"n_after":after['n'],"measured_step":step,
-             "manifest_off_before":b.get('off_before'),"manifest_off_after":b.get('off_after'),
+              "manifest_off_before":b.get('off_before'),"manifest_off_after":b.get('off_after'),
+              "window_before_start":before_lo,"window_before_end":before_hi,
+              "window_after_start":after_lo,"window_after_end":after_hi,
+              "before_window_clipped":windows['before_clipped'],
+              "after_window_clipped":windows['after_clipped'],
              "delta_before":(before['offset']-float(b['off_before'])) if b.get('off_before') is not None else None,
              "delta_after":(after['offset']-float(b['off_after'])) if b.get('off_after') is not None else None}
         rows.append(row)

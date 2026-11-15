@@ -1,6 +1,6 @@
 # DS9 LaserDisc OpenCode Operator Pack
 
-**Workflow version: 9** — check `WORKFLOW_VERSION` and follow the core-change/device-log
+**Workflow version: 10** — check `WORKFLOW_VERSION` and follow the core-change/device-log
 rules in `WORKFLOW_VERSIONING.md` before editing or syncing workflow files.
 
 **Design goal:** make the workflow clear and reliable enough for capable free or low-cost
@@ -520,7 +520,9 @@ permission.
 | `V7-RELEASE.md` | V7 tooling overview and platform validation boundaries |
 | `V8-RELEASE.md` | V8 stage timing and README-relative device workspace changes |
 | `V9-RELEASE.md` | V9 ordered workflow orchestration and intake configuration |
-| `V9-QUEUE.md` | Proposed follow-ups and audited carry-overs; planning only, not current workflow instructions |
+| `V10-RELEASE.md` | V10 retime verification, measurement diagnostics, workspace compatibility, and analysis safeguards |
+| `V9-QUEUE.md` | V9 device-log review and inherited carry-overs |
+| `V10-QUEUE.md` | V10 scope and implementation record |
 | `changelog.txt` | Short release history; retrospective V1–V5 notes and accepted V6 changes |
 | `Cut Pad Images/<episode>/` | Curated single-frame DVD cut-PAD repair stills, named by verified DVD timestamp/frame; not a DVD reference substitute |
 | `scripts/download_archive.ps1` | Metadata-verified, resumable source download; checks profile curl (>=7.71.0), and ListOnly prints inventory, integrity metadata, aggregate bytes, and projected free space |
@@ -529,10 +531,14 @@ permission.
 | `scripts/validate_episode.py` | Stage-specific manifest/artifact prerequisites; optional expensive source MD5 recheck |
 | `scripts/select_stack_reference.py` | Orc refresh loop that chooses/stabilizes the reference and writes a refreshed project; never renders |
 | `scripts/build_stack_project.py` | Manifest-driven Orc graph skeleton; scratch `--reference-override` does not edit the manifest |
+| `scripts/efm_paths.py` | Plan episode-scoped EFMSink WAV/report paths and refuse existing outputs |
 | `scripts/extract_video_descriptors.py` | Sequential master/DVD descriptor extraction on the validated FFmpeg rawvideo grid |
-| `scripts/measure_dvd_alignment.py` | Continuity-constrained DVD-minus-master Viterbi candidate path and confidence report |
-| `scripts/measure_break_edges.py` | Long-window content offsets, DP comparison, score/runner-up for each candidate break |
+| `scripts/measure_dvd_alignment.py` | Continuity-constrained DVD-minus-master Viterbi candidate path and sampled-range report |
+| `scripts/measure_break_edges.py` | Long-window content offsets, DP comparison, score/runner-up; clips windows away from adjacent recorded blacks |
 | `scripts/measure_audio_rate.py` | Multi-window audio-vs-picture-map diagnostic with OLS and robust checks; never auto-selects a correction |
+| `scripts/measure_pad_audio.py` | Report-only PAD_1 audio occupancy vs nearby PCM controls; never recommends a rate |
+| `scripts/measure_ld_black.py` | Report-only descriptor-luma dark-run intervals across selected thresholds |
+| `scripts/efm_paths.py` | Episode-scoped EFM WAV/report path plan with existing-output refusal |
 | `scripts/audio_timing_diagnostic.py` | DVD-free duration/PAD report; candidate-only by default, or `--promote-dvd-free` for the user's explicit no-DVD selection |
 | `scripts/build_ld_synced.py` | Sample-accurate AudioSkip + exact target sample count into FLAC; audio-only, refuses overwrites and records recipe/hashes |
 | `scripts/build_map.ps1` | TFM log + optional motion trace to cadence report, deinterlace map, AVS |
@@ -541,7 +547,7 @@ permission.
 | `scripts/build_padfix_vpy.py` / `scripts/encode_episode_mac.py` | macOS source-derived PAD replacement and non-encoding validation/single video-only final x265 pass via `vspipe` |
 | `scripts/remux_padfixed_mac.py` / `scripts/vspipe_util.py` | macOS stream-copy remux with packet identity; shared safe VapourSynth→FFmpeg transport |
 | `scripts/encode_episode.ps1` | Windows non-encoding AVS validation and the single final video-only x265 encode from the source-derived PAD-repaired AVS |
-| `scripts/retime_dvd_assets.py` | Measured manifest break schedule -> DVD 5.1 FLAC, retimed SRT, and retime map |
+| `scripts/retime_dvd_assets.py` | Measured break schedule -> DVD 5.1 FLAC/SRT/map plus output-silence gap verification; short gaps remain LIMIT |
 | `scripts/pad_audit.py` / `fullres_check.py` | Detect map-matched PADs in the source-derived post-IVTC `.avs`/`.vpy` and confirm them at full raster |
 | `scripts/rife_padframes.py` / `build_padfix_avs.py` | Generate replacements only for confirmed PADs and wrap the source-derived AVS without changing frame count |
 | `scripts/encode_padfixed.ps1` / `remux_padfixed.ps1` | Former second-pass encoder is retired; remux stream-copies tracks with packet-identity checks |
@@ -550,7 +556,7 @@ permission.
 | `scripts/qc_report.py` | Final delivery report; skipped/unverified required checks fail closed |
 | `scripts/regen_plain_text.py` | Rebuild the ASCII companion from the main Markdown runbook |
 
-### V9 entry points
+### V10 entry points
 
 ```text
 python scripts/bootstrap_deps.py --print --json
@@ -569,7 +575,7 @@ the full doctor so the transfer can start early. Every other write-capable stage
 text, performs cleanup, or replaces helper-level refusal/QC checks. Linux x86_64 can check its candidate dependency lock but
 production stage execution is blocked until the complete Linux workflow is validated.
 
-### V9 ordered workflow orchestration
+### V9 ordered workflow orchestration (retained in V10)
 
 `scripts/run_workflow.py` executes an ordered JSON plan by invoking only allowlisted
 `run_stage.py` stages. It is dry-run by default, does not run arbitrary shell text, choose
@@ -600,10 +606,29 @@ Only a plan step explicitly marked `resume_policy: "download"` can retry an inte
 download. Other failed/interrupted steps stop for inspection. The lock is per job ID; it is
 not a cross-job same-episode claim mechanism.
 
-V9 validation is fixture/unit testing only: no real Archive transfer, real-media processing,
-full end-to-end episode, or macOS support claim is made. Linux production stages remain
-blocked. The Mac cadence-dispatch integration issue remains open; do not use orchestration
-as evidence that Mac cadence dispatch is ready.
+V9 orchestration validation was fixture/unit testing only. V10 adds report-only PAD/LD-black
+diagnostics, episode-scoped EFM path planning, refusal of extrapolated A/V offsets, clipped
+break-edge windows, workspace legacy compatibility, and generated-retime silence verification.
+The new retime verifier's real-media output check and the new measurement diagnostics have
+not been run against a production episode; synthetic tests do not establish full end-to-end
+or new macOS support. Linux production remains blocked, and the Mac cadence-dispatch issue
+remains open.
+
+### V10 measurement and retime safeguards
+
+`retime_dvd_assets.py` now verifies the generated DVD 5.1 output against planned gap
+positions. A measurable mismatch stops the stage; sub-50 ms gaps are explicitly `LIMIT` and
+appear as a QC warning, never as a confident gap-verification pass. The tool does not move a
+cut automatically. `measure_ld_black.py` and `measure_pad_audio.py` write report-only
+threshold/energy evidence; neither picks a threshold/rate or edits the episode manifest.
+`measure_break_edges.py` excludes adjacent black intervals from content windows, and A/V
+offset checks refuse to extrapolate beyond sampled alignment coverage. V10 also preserves
+legacy workspace creation metadata while inferring missing storage mode and prevents
+repeated `shared_workspace.py init` from silently creating another matching workspace.
+
+V10 tests are synthetic/unit and local-fixture based. No real episode was reprocessed to
+validate the new retime detector or measurement reports, and no new macOS or Linux production
+support claim is made.
 
 ### Per-device episode workspaces (every README location)
 
