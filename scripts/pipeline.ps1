@@ -49,7 +49,7 @@ function Get-LdTool {
 function Get-LdRoot {
     param([Parameter(Mandatory)]$Profile, [Parameter(Mandatory)][string]$Name)
     if ($Name -eq 'logs' -and $Profile.shared -and $Profile.shared.enabled) {
-        if (-not $env:LDP_INSTANCE_ROOT) { throw "shared mode requires LDP_INSTANCE_ROOT; run scripts/shared_workspace.py init" }
+        if (-not $env:LDP_INSTANCE_ROOT) { throw "no active episode workspace; run scripts/shared_workspace.py ensure or invoke through run_stage.py" }
         $instance = [System.IO.Path]::GetFullPath($env:LDP_INSTANCE_ROOT)
         if ($env:LDP_INSTANCE_MODE -eq 'local-fallback') {
             $bundle = [System.IO.Path]::GetFullPath($script:LdBundle).TrimEnd('\') + '\'

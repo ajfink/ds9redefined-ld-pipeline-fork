@@ -505,10 +505,12 @@ permission.
 | `scripts/doctor.py` | Unified read-only profile/dependency/platform report; Linux x86_64 remains explicitly not episode-ready |
 | `scripts/bootstrap_deps.py` / `dependencies/` | Direct Python version locks for Windows x64, Mac arm64, and candidate Linux x86_64; check-only by default, `--install` is explicit |
 | `scripts/run_stage.py` | Allowlisted stage dispatcher; dry-run plan by default, explicit `--execute`, downloader-specific checks for the early download stage, full doctor/manifest gates before other write stages, and unique logs/reports |
+| `scripts/stage_clock.py` | Pause/resume timer for manual stages; separates active work from human gate waits and writes a timestamped record in the device workspace |
 | `scripts/shared_workspace.py` | Ensure a collision-resistant per-device/instance/episode folder beside the selected README, with local fallback; publish no-overwrite references and provenance-checked cut-PAD stills |
 | `scripts/generate_runbooks.py` / `templates/runbooks/` | Regenerate model variants from the canonical runbook plus model-policy templates; `--check` detects drift |
 | `WORKFLOW_VERSION` / `WORKFLOW_VERSIONING.md` | Authoritative workflow version and core-change/device-log rules |
 | `V7-RELEASE.md` | V7 tooling overview and platform validation boundaries |
+| `V8-RELEASE.md` | V8 stage timing and README-relative device workspace changes |
 | `changelog.txt` | Short release history; retrospective V1–V5 notes and accepted V6 changes |
 | `Cut Pad Images/<episode>/` | Curated single-frame DVD cut-PAD repair stills, named by verified DVD timestamp/frame; not a DVD reference substitute |
 | `scripts/download_archive.ps1` | Metadata-verified, resumable source download; checks profile curl (>=7.71.0), and ListOnly prints inventory, integrity metadata, aggregate bytes, and projected free space |
@@ -538,7 +540,7 @@ permission.
 | `scripts/qc_report.py` | Final delivery report; skipped/unverified required checks fail closed |
 | `scripts/regen_plain_text.py` | Rebuild the ASCII companion from the main Markdown runbook |
 
-### V7 entry points
+### V8 entry points
 
 ```text
 python scripts/bootstrap_deps.py --print --json
@@ -616,7 +618,7 @@ The device should alter only its own `devices/<device-instance>/` subtree. Do no
 release files or another device's folder. For shared-drive ACLs, the administrator should
 grant read/execute on the README/release tree and make `devices/` its sole writable child
 (pre-provision it or allow creation of that exact directory). Grant each device Modify
-only to its own instance subtree. V7 does not change ACLs. Application
+only to its own instance subtree. The workflow does not change ACLs. Application
 guards reject release-root and peer-instance writes; the doctor still blocks processing if
 the release root itself appears writable.
 
@@ -626,7 +628,9 @@ exit codes, Orc JSON refresh output, FFmpeg command/version sidecars, hashes, pr
 tool-version reports. Keep full artifacts rather than filtered error lines, never overwrite
 or clean prior runs, and do not put credentials/tokens in command lines. The workspace's
 `logs/README.md` records this policy. Shared-mode logs redact configured machine paths; they
-do not scrub arbitrary secrets.
+do not scrub arbitrary secrets. `run_stage.py` records active duration and gate/action
+breakdowns per invocation; time between invocations is excluded. For manual stages, use
+`scripts/stage_clock.py` and pause it while waiting for a human gate response.
 
 **ACL status for W:** no ACL changes were made. The current inherited root ACL still grants
 the connected LenovoFlex account Full Control, so the W release root is not OS-enforced

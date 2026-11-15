@@ -455,6 +455,7 @@ def main() -> int:
         "vspipe_util.py", "build_motion_trace.py", "qc_report.py",
         "verify_pad_identities.py", "check_space_budget.py", "doctor.py",
         "bootstrap_deps.py", "dependency_lock.py", "run_stage.py", "shared_workspace.py",
+        "stage_clock.py",
         "generate_runbooks.py",
     )
     missing_scripts = [name for name in required_scripts if not (scripts_dir / name).is_file()]

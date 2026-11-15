@@ -303,7 +303,7 @@ Add-Result 'avs:qtgmc' 'WARN' 'conditional: verify QTGMC and dependencies only i
 foreach ($leaf in 'download_archive.ps1', 'init_episode.py', 'validate_episode.py',
     'extract_video_descriptors.py', 'measure_dvd_alignment.py', 'measure_break_edges.py', 'measure_audio_rate.py',
     'build_map.ps1', 'encode_episode.ps1', 'build_stack_project.py', 'retime_dvd_assets.py',
-    'check_space_budget.py') {
+    'check_space_budget.py', 'stage_clock.py') {
     $scriptPath = Join-Path $here "scripts\$leaf"
     if (Test-Path -LiteralPath $scriptPath) { Add-Result "bundle-script:$leaf" 'PASS' $scriptPath }
     else { Add-Result "bundle-script:$leaf" 'FAIL' "required workflow script missing: $scriptPath" }
@@ -397,7 +397,7 @@ if ($prof.roots.work -and (Test-Path -LiteralPath $prof.roots.work)) {
 if ($Episode) {
     if ($prof.shared -and $prof.shared.enabled) {
         if (-not $env:LDP_MANIFEST_DIR) {
-            Add-Result "episode:$Episode" 'FAIL' 'shared mode requires LDP_INSTANCE_ROOT/LDP_MANIFEST_DIR; run shared_workspace.py init'
+            Add-Result "episode:$Episode" 'FAIL' 'no active episode workspace; run shared_workspace.py ensure or use run_stage.py to resolve/create one with local fallback'
             $mp = $null
         } else { $mp = Join-Path $env:LDP_MANIFEST_DIR "$Episode.json" }
     } else { $mp = Join-Path $here "episodes\$Episode.json" }

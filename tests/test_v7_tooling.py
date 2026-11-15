@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -12,7 +13,8 @@ sys.path.insert(0, str(SCRIPTS))
 from dependency_lock import LockError, read_lock, target_for  # noqa: E402
 from doctor import parse_windows_preflight  # noqa: E402
 from generate_runbooks import OUTPUTS, generated_text  # noqa: E402
-from run_stage import STAGES, make_action, requires_doctor, validate_command  # noqa: E402
+from run_stage import (STAGES, make_action, requires_doctor, validate_command,
+                       write_stage_report)  # noqa: E402
 
 
 class DependencyLockTests(unittest.TestCase):
@@ -41,6 +43,21 @@ class DependencyLockTests(unittest.TestCase):
 
 
 class StageRunnerTests(unittest.TestCase):
+    def test_stage_report_persists_active_and_gate_action_timings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "stage.json"
+            log = Path(tmp) / "stage.log"
+            timing = {"active_elapsed_seconds": 12.5,
+                      "gate_elapsed_seconds": 2.5,
+                      "action_elapsed_seconds": 10.0,
+                      "post_action_elapsed_seconds": 0.0,
+                      "human_wait_seconds": 0.0}
+            write_stage_report(report, Path(tmp) / "profile.json", "S01E99", "stack-reference",
+                               ["tool", "--run"], "2026-11-15T00:00:00+00:00", "PASS", 0,
+                               log, [], timing)
+            saved = json.loads(report.read_text(encoding="utf-8"))
+        self.assertEqual(saved["timing"], timing)
+
     def test_download_skips_full_doctor_but_processing_writes_do_not(self):
         self.assertFalse(requires_doctor("download"))
         self.assertTrue(requires_doctor("init-episode"))

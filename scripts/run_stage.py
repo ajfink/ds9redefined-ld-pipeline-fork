@@ -15,6 +15,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -210,13 +211,15 @@ def run_logged(command: list[str], env: dict[str, str], log_path: Path,
 def write_stage_report(path: Path, profile_path: Path, episode: str, stage: str,
                        command: list[str], started: str, status: str,
                        exit_code: int | None, log_path: Path,
-                       gates: list[dict], redactions: list[tuple[str, str]] | None = None) -> None:
+                       gates: list[dict], timing: dict,
+                       redactions: list[tuple[str, str]] | None = None) -> None:
     report = {"schema": "ld-pipeline-stage-run-v1",
               "workflow_version": (ROOT / "WORKFLOW_VERSION").read_text(encoding="ascii").strip(),
               "episode": episode, "stage": stage, "profile": str(profile_path),
               "command": command, "started_utc": started,
               "finished_utc": datetime.now(timezone.utc).isoformat(),
               "exit_code": exit_code, "status": status, "gates": gates,
+              "timing": timing,
               "log": str(log_path)}
     report_path = path
     if redactions:
@@ -344,43 +347,75 @@ def main() -> int:
         gate_results = ([{"kind": "workspace", "mode": instance_mode,
                          "instance_root": str(instance), "warning": workspace_warning}]
                         if shared and instance else [])
+        stage_clock_started = time.perf_counter()
+        gate_elapsed = 0.0
+        action_elapsed = 0.0
+        post_action_elapsed = 0.0
+
+        def timing_snapshot() -> dict:
+            total = max(0.0, time.perf_counter() - stage_clock_started)
+            return {
+                "active_elapsed_seconds": round(total, 3),
+                "gate_elapsed_seconds": round(gate_elapsed, 3),
+                "action_elapsed_seconds": round(action_elapsed, 3),
+                "post_action_elapsed_seconds": round(post_action_elapsed, 3),
+                "human_wait_seconds": 0.0,
+                "wait_policy": "Time between stage invocations is excluded; pause manual stage clocks while waiting for human gate input.",
+            }
+
+        def log_timing(log_status: str) -> None:
+            timing = timing_snapshot()
+            with log_path.open("a", encoding="utf-8", newline="\n") as log:
+                log.write("TIMING " + json.dumps({"status": log_status, **timing}) + "\n")
+
         if workspace_warning:
             print("WARN: " + workspace_warning, file=sys.stderr)
         if requires_doctor(args.stage):
             assert doctor is not None
+            gate_start = time.perf_counter()
             check = run_captured(doctor, env, log_path, redactions)
+            gate_elapsed += time.perf_counter() - gate_start
             doctor_row = {"kind": "doctor", "command": doctor, "exit_code": check.returncode}
             gate_results.append(doctor_row)
             if check.returncode:
+                log_timing("BLOCKED_DOCTOR")
                 write_stage_report(report_path, profile_path, args.episode, args.stage,
                                    action, start, "BLOCKED_DOCTOR", check.returncode,
-                                   log_path, gate_results, redactions)
+                                   log_path, gate_results, timing_snapshot(), redactions)
                 return check.returncode or 1
         for gate in gates:
+            gate_start = time.perf_counter()
             gate_proc = run_captured(gate, env, log_path, redactions)
+            gate_elapsed += time.perf_counter() - gate_start
             gate_results.append({"kind": "manifest", "command": gate,
                                  "exit_code": gate_proc.returncode})
             if gate_proc.returncode:
+                log_timing("BLOCKED_MANIFEST_GATE")
                 write_stage_report(report_path, profile_path, args.episode, args.stage,
                                    action, start, "BLOCKED_MANIFEST_GATE", gate_proc.returncode,
-                                   log_path, gate_results, redactions)
+                                   log_path, gate_results, timing_snapshot(), redactions)
                 return gate_proc.returncode or 1
         print("COMMAND: " + display(action), flush=True)
+        action_start = time.perf_counter()
         rc = run_logged(action, env, log_path, redactions)
+        action_elapsed += time.perf_counter() - action_start
         if rc == 0 and args.publish_reference:
             for reference in args.publish_reference:
                 publish = [py(profile), str(SCRIPTS / "shared_workspace.py"),
                            "publish-reference", "--profile", str(profile_path),
                            "--instance-root", str(instance), "--source", reference]
+                publish_start = time.perf_counter()
                 published = run_captured(publish, env, log_path, redactions)
+                post_action_elapsed += time.perf_counter() - publish_start
                 gate_results.append({"kind": "publish-reference", "command": publish,
                                      "exit_code": published.returncode})
                 if published.returncode:
                     rc = published.returncode
                     break
+        log_timing("PASS" if rc == 0 else "FAIL")
         write_stage_report(report_path, profile_path, args.episode, args.stage,
                            action, start, "PASS" if rc == 0 else "FAIL", rc,
-                           log_path, gate_results, redactions)
+                           log_path, gate_results, timing_snapshot(), redactions)
         return 0 if rc == 0 else rc
     except (OSError, json.JSONDecodeError, LockError) as exc:
         print(f"STAGE RUNNER ERROR: {exc}", file=sys.stderr)

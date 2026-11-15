@@ -123,6 +123,15 @@ Keep complete output, not just filtered error lines; never overwrite or clean ol
 Do not put credentials/tokens in commands. Each workspace logs/README.md repeats this
 logging contract; path redaction is not a general secret scrubber.
 
+Record stage durations: run_stage.py logs active elapsed time plus gate/action
+breakdowns in each stage report. Time outside a stage invocation-including waiting for a
+person to answer a gate-is not counted. For a manual stage, start
+python scripts/stage_clock.py start --profile <profile> --episode <code> --stage <name>
+and save its returned clock_file; pause with stage_clock.py pause --clock-file <clock>
+before asking/waiting for human input, resume after the answer, then stop with
+stage_clock.py stop --clock-file <clock> --result PASS|FAIL|BLOCKED|STOP. Keep the clock
+JSON in the same workspace logs/ folder.
+
 Run commands from this folder and initialize the measured job variables from the
 profile and the three user inputs (do not copy another episode's values):
 

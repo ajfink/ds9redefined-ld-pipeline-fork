@@ -71,10 +71,14 @@ instance's `logs/` folder, never the release root.
 `run_stage.py` is a bounded dispatcher, not an automatic end-to-end scheduler. It lists
 allowlisted stages, prints a dry-run command plan by default, and requires `--execute` for
 execution. The download stage runs its own profile/curl, Archive integrity, and space
-checks without waiting for the full doctor; other write stages run doctor and their declared manifest validators first. Logs
-and a JSON result are written under `roots.logs`. It does not download sources, render Orc
+checks without waiting for the full doctor; other write stages run doctor and their declared
+manifest validators first. Logs and JSON reports go to the episode workspace logs folder
+(or its local fallback). It does not download sources, render Orc
 projects, choose measurements, bypass user decisions, run arbitrary shell text, or clean
-files. Linux production stage dispatch is blocked.
+files. Linux production stage dispatch is blocked. Each stage report records active elapsed
+time and gate/action breakdowns; waits between invocations are excluded. Use
+`scripts/stage_clock.py start/pause/resume/stop` around manual stages, pausing while waiting
+for a person's gate decision.
 
 The Qwen runbooks are generated from the canonical runbook plus two short model-policy
 templates. Edit the canonical technical procedure or the template, then run

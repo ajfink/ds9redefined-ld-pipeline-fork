@@ -40,6 +40,12 @@ command/version sidecars, preflight/tool-version reports, hashes, and structured
 artifacts in their original form. Do not keep only filtered error lines or overwrite
 prior runs; correlate evidence by its timestamped filename.
 
+`run_stage.py` reports active elapsed, gate, action, and post-action seconds for each
+invocation. Time between invocations is excluded. For a manual stage, use
+`python scripts/stage_clock.py start --profile <profile> --episode <code> --stage <name>`;
+pause before waiting for a human gate input, resume after the answer, then stop at stage
+completion. Its JSON record separates active time, human wait, and wall time.
+
 Never put passwords, auth headers, or access tokens in command lines or logs. Shared-mode
 redaction handles configured machine-local paths, not arbitrary secrets. Preserve failed
 run logs for diagnosis; do not clean them as part of a rerun.

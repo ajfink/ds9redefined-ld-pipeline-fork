@@ -82,3 +82,18 @@ FROM Version 6 -> Version 7
   per-workspace logging guide for commands, full output, gates, versions, and provenance.
 - Validation: see the V7 entry in the authoring-device log and `V7-RELEASE.md`; installation is
   opt-in and no native tools/plugins are silently installed or upgraded.
+
+Version 8 (2026-11-15)
+FROM Version 7 -> Version 8
+- Made per-device episode workspaces README-relative for any `ld-pipeline` location, not
+  tied to W:. The intended `devices/<device-instance>/episodes/<code>/` folder is created or
+  reused automatically; if the README-folder `devices/` path is unavailable, the workflow
+  warns and uses isolated device-local profile roots rather than gating the run.
+- Clarified ACL policy: the README/source tree is read-only, `devices/` is its only writable
+  child, and each device may modify only its own instance subtree. V8 does not modify ACLs.
+- Added per-workspace logging guidance and `scripts/stage_clock.py` for manual stages.
+  `run_stage.py` logs active elapsed time and gate/action breakdowns; manual clocks can be
+  paused during human gate waits so waiting time is excluded from stage duration.
+- Validation: 63 passed, 7 Mac/VapourSynth-only skipped; Python compilation, PowerShell
+  parsing, runbook generation, and timing/fallback tests passed. See `V8-RELEASE.md` and the
+  V8 entry in the device execution log.
