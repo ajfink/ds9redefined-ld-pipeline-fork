@@ -32,6 +32,9 @@ lower V6 audio, video, safety, space, or QC gates.
   platform remuxers set Matroska `-max_interleave_delta 0`, the M5-verified fix for
   audio-less clusters caused by the default 10-second interleave flush. Final QC uses
   unique absolute-A/V report names so reruns do not fail on existing artifacts.
+- Fixed shared-mode path redaction in JSON reports: escaped Windows paths are redacted
+  safely before plain-text substitutions, including drive-root paths. Added regression
+  tests for both doctor/stage and `ldcommon` report paths.
 - `scripts/generate_runbooks.py`: generates the Qwen4B and Qwen4B/Luna runbooks from
   `DS9 LaserDisc OpenCode Runbook.md` plus short model-policy templates. `--check`
   detects stale generated copies.
@@ -56,7 +59,7 @@ lower V6 audio, video, safety, space, or QC gates.
   provision/modify filesystem ACLs. If the share grants write access at the root, an
   administrator must correct that ACL before calling it OS-enforced read-only.
 - The follow-up tests shared-workspace initialization/provenance and
-  per-instance manifest/write-path guards. Full suite: 53 passed, 7 Mac/VapourSynth-only
+  per-instance manifest/write-path guards and JSON-safe Windows-path redaction. Full suite: 56 passed, 7 Mac/VapourSynth-only
   skipped; Windows doctor passes in local mode. The active W account still has root write
   access, so W shared-mode doctor correctly blocks stage execution pending an ACL change.
 

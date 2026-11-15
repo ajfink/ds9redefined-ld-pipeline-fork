@@ -171,7 +171,29 @@ def shared_redactions(profile_path: str | Path, profile: dict) -> list[tuple[str
 
 def redact_shared_text(text: str, redactions: list[tuple[str, str]]) -> str:
     for original, replacement in redactions:
-        text = re.sub(re.escape(original), lambda _: replacement, text, flags=re.IGNORECASE)
+        # Reports are sometimes redacted after json.dumps(). Match that escaped
+        # representation first; otherwise a drive root such as ``D:\`` can
+        # consume only the first slash of JSON's ``D:\\`` and leave an invalid
+        # ``\D`` escape behind.
+        escaped = original.replace("\\", "\\\\")
+        if escaped != original:
+            escaped_replacement = replacement + ("\\\\" if original.endswith("\\") else "")
+            text = re.sub(re.escape(escaped), lambda _: escaped_replacement,
+                          text, flags=re.IGNORECASE)
         forward = original.replace("\\", "/")
-        text = re.sub(re.escape(forward), lambda _: replacement, text, flags=re.IGNORECASE)
+        if forward != original:
+            forward_replacement = replacement + ("/" if original.endswith(("\\", "/")) else "")
+            text = re.sub(re.escape(forward), lambda _: forward_replacement,
+                          text, flags=re.IGNORECASE)
+        # In plain text, replace the original spelling. The negative lookahead
+        # prevents a trailing drive-root slash from matching half of JSON's
+        # doubled backslash if an earlier escaped-form replacement did not apply.
+        raw_pattern = re.escape(original)
+        raw_replacement = replacement
+        if original.endswith("\\"):
+            raw_pattern += r"(?!\\)"
+        if original.endswith(("\\", "/")):
+            raw_replacement += original[-1]
+        text = re.sub(raw_pattern, lambda _: raw_replacement,
+                      text, flags=re.IGNORECASE)
     return text

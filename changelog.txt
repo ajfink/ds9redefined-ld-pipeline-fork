@@ -69,5 +69,8 @@ FROM Version 6 -> Version 7
   QC failure output documents the repair. Absolute-A/V QC reports use unique names so QC
   can be rerun without a stale-file error. M5 completed an end-to-end macOS arm64 workflow;
   fresh-Mac installation coverage remains separate.
+- Fixed shared-mode redaction of JSON-serialized Windows paths in both the stage/doctor
+  and ldcommon report paths. JSON-escaped paths are replaced before plain-text paths, with
+  a drive-root guard; regression tests cover `D:\` roots and plain-text log redaction.
 - Validation: see the V7 entry in the authoring-device log and `V7-RELEASE.md`; installation is
   opt-in and no native tools/plugins are silently installed or upgraded.

@@ -392,9 +392,26 @@ def redact_shared_text(text: str, ld: Ld) -> str:
             pairs.append((str(candidate.resolve()), f"<{section}.{name}>"))
     pairs = sorted(set(pairs), key=lambda pair: len(pair[0]), reverse=True)
     for original, replacement in pairs:
-        text = re.sub(re.escape(original), lambda _: replacement, text, flags=re.IGNORECASE)
-        text = re.sub(re.escape(original.replace("\\", "/")),
-                      lambda _: replacement, text, flags=re.IGNORECASE)
+        # JSON reports contain doubled backslashes. Redact that spelling first
+        # so a drive-root path cannot leave an invalid JSON ``\D`` escape.
+        escaped = original.replace("\\", "\\\\")
+        if escaped != original:
+            escaped_replacement = replacement + ("\\\\" if original.endswith("\\") else "")
+            text = re.sub(re.escape(escaped), lambda _: escaped_replacement,
+                          text, flags=re.IGNORECASE)
+        forward = original.replace("\\", "/")
+        if forward != original:
+            forward_replacement = replacement + ("/" if original.endswith(("\\", "/")) else "")
+            text = re.sub(re.escape(forward), lambda _: forward_replacement,
+                          text, flags=re.IGNORECASE)
+        raw_pattern = re.escape(original)
+        raw_replacement = replacement
+        if original.endswith("\\"):
+            raw_pattern += r"(?!\\)"
+        if original.endswith(("\\", "/")):
+            raw_replacement += original[-1]
+        text = re.sub(raw_pattern, lambda _: raw_replacement,
+                      text, flags=re.IGNORECASE)
     return text
 
 
