@@ -34,11 +34,15 @@ pull request was created.
   refuses to make a matching duplicate and recommends `ensure` or an explicit instance root.
 - Fixed the invalid-escape `SyntaxWarning` in `av_check_output.py` and added a one-off
   measurement checklist to the canonical and generated runbooks.
+- The FromStunToKill GUI now derives episode codes from the Archive item ID or metadata,
+  automatically reuses the default per-user machine profile or creates one when absent,
+  and provides hover help for the intake fields. It does not ask users to type an episode
+  code or locate a profile file.
 
 ## Validation and limits
 
 - Mainline V10 reported 105 passed and 7 VapourSynth-only skipped. This fork's expanded suite
-  passes **123 tests, with 7 VapourSynth-only skipped**.
+  passes **127 tests, with 7 VapourSynth-only skipped**.
 - Fork checks passed: Python `compileall`, generated-runbook `--check`, `git diff --check`,
   `av_check_output.py` import with `SyntaxWarning` treated as an error, PowerShell AST parsing
   of 8 scripts, and `run_stage.py --list` with both new diagnostics registered.
@@ -65,9 +69,11 @@ pull request was created.
 - The fork retains the approved prompt-to-configuration intake policy: confirmed URLs, DVD
   selections/paths, and settings may arrive through an AI prompt but must be persisted to
   the designated config/plan and validated, not left only in chat.
-- The new GUI plan-model tests cover real-template immutability, DVD/no-DVD argument
-  generation, plan validation, and overwrite refusal. The desktop window itself still needs
-  an interactive user acceptance pass; the V10 plan/runner contract is unchanged.
+- The GUI tests cover real-template immutability, DVD/no-DVD argument generation, Archive
+  episode inference, default profile location/creation and legacy-profile reuse, plan
+  validation, and overwrite refusal. Field-label tooltips explain the decisions. The desktop
+  window itself still needs an interactive user acceptance pass; the V10 plan/runner contract
+  is unchanged.
 - GitHub preparation check: `main` remains the V10 baseline and `fromstuntokill-app` holds
   the application branch. GitHub CLI is not installed, so no repository settings or pull
   request were created. The local `CONFIGURE HERE FIRST.json` is ignored and excluded; only

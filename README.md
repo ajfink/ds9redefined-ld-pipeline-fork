@@ -578,11 +578,20 @@ python scripts/generate_runbooks.py --check
 
 Launch the local desktop cockpit with `python scripts/workflow_app.py`. It loads the
 existing intake JSON by default, but **never edits that file**: `Save new plan…` writes a
-separate no-overwrite plan. The form includes Archive URL, profile, download folder, exact
-DVD selection or explicit no-DVD mode, the no-DVD cut-PAD choice, and a new manifest path.
-DVD-backed plans pass the selected file to `init_episode.py`; no-DVD plans retain the
-explicit `--no-dvd` choice. Preview runs the existing read-only `run_workflow.py` plan path.
-Run, resume, and review approval call the same allowlisted CLI; approvals are never
+separate no-overwrite plan. The app derives the episode code from the Archive item ID, or
+looks it up in Archive metadata when needed; it does not ask the user to type the code. It
+uses the default per-user machine-profile folder (`%LOCALAPPDATA%\ld-pipeline\profiles`
+on Windows, `~/Library/Application Support/ld-pipeline/profiles` on macOS, and
+`$XDG_CONFIG_HOME/ld-pipeline/profiles` on Linux). It reuses the default or a unique
+machine-matching legacy profile there; if none exists, it creates `machine.json` from the
+portable platform template (Windows also runs best-effort preflight discovery). Use
+**Open machine profile…** to configure unresolved roots/tools; the profile path is not an
+intake question.
+The form includes the Archive URL, download folder, exact DVD selection or explicit no-DVD
+mode, the no-DVD cut-PAD choice, and a new manifest path. Field-label tooltips describe the
+choices. DVD-backed plans pass the selected file to `init_episode.py`; no-DVD plans retain
+the explicit `--no-dvd` choice. Preview runs the existing read-only `run_workflow.py` plan
+path. Run, resume, and review approval call the same allowlisted CLI; approvals are never
 automatic, and plans containing final encode/remux receive an extra confirmation prompt.
 
 This UI is an optional layer over the existing V9/V10 plan and runner contracts. It does

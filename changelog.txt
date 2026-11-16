@@ -130,12 +130,13 @@ FROM fork Version 9 -> fork Version 10
 - Preserved V9 ordered orchestration, prompt/config intake, review gates, and cadence adapters;
   added the new analysis helpers to the allowlisted stage runner and preflight inventories.
 - Added the optional FromStunToKill Tk cockpit prototype over the same saved-plan/CLI
-  contract. It supports intake, exact DVD/no-DVD plan generation, preview, execution, resume,
-  and explicit human review approval; the CLI remains supported.
+  contract. It derives episode code from the Archive URL/metadata, reuses or creates the
+  default per-user profile, provides tooltips, and supports exact DVD/no-DVD plan generation,
+  preview, execution, resume, and explicit human review approval; the CLI remains supported.
 - Interim intake policy: AI-prompted URLs, DVD selections/paths, and settings are acceptable
   inputs, but confirmed values must also be persisted and validated in the designated config
   or plan, not left only in chat.
-- Validation: **123 passed, 7 VapourSynth-only skipped**; Python compilation, generated-runbook
+- Validation: **127 passed, 7 VapourSynth-only skipped**; Python compilation, generated-runbook
   check, whitespace check, warning-as-error import, PowerShell parsing, and stage-list check
   passed. See `V10-RELEASE.md`. The existing S01E08 canary predates this port and does not
   validate new V10 retime/measurement behavior.

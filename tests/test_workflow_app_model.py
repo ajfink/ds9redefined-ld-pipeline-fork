@@ -12,7 +12,10 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from run_workflow import load_plan  # noqa: E402
 from workflow_app_model import (WorkflowAppError, build_intake_plan,
-                                read_intake_template, write_new_plan)  # noqa: E402
+                                choose_existing_profile, create_default_profile,
+                                default_profile_path, episode_code_from_url_identifier,
+                                read_intake_template, resolve_episode_code,
+                                write_new_plan)  # noqa: E402
 
 
 def intake_template() -> dict:
@@ -71,6 +74,59 @@ def values_for(root: Path) -> dict[str, str]:
 
 
 class WorkflowAppPlanTests(unittest.TestCase):
+    def test_default_profile_locations_are_per_user_and_portable(self):
+        home = Path("C:/Users/tester")
+        windows = default_profile_path(system="Windows", env={"LOCALAPPDATA": "C:/Users/tester/AppData/Local"}, home=home)
+        self.assertEqual(windows, Path("C:/Users/tester/AppData/Local/ld-pipeline/profiles/machine.json"))
+        mac = default_profile_path(system="Darwin", env={"HOME": "/Users/tester"}, home=Path("/Users/tester"))
+        self.assertTrue(str(mac).replace("\\", "/").endswith(
+            "/Users/tester/Library/Application Support/ld-pipeline/profiles/machine.json"))
+        linux = default_profile_path(system="Linux", env={"HOME": "/home/tester", "XDG_CONFIG_HOME": "/home/tester/.cfg"}, home=Path("/home/tester"))
+        self.assertTrue(str(linux).replace("\\", "/").endswith(
+            "/home/tester/.cfg/ld-pipeline/profiles/machine.json"))
+
+    def test_default_profile_creation_uses_template_and_refuses_overwrite(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile_path = root / "profiles" / "machine.json"
+            created, did_create = create_default_profile(
+                profile_path, ROOT, system="Windows", hostname="TEST-HOST")
+            self.assertTrue(did_create)
+            data = json.loads(created.read_text(encoding="utf-8"))
+            self.assertEqual(data["machine"], "TEST-HOST")
+            self.assertEqual(data["os"], "windows")
+            data["notes"] = ["preserve"]
+            created.write_text(json.dumps(data), encoding="utf-8")
+            same_path, did_create = create_default_profile(
+                profile_path, ROOT, system="Windows", hostname="OTHER-HOST")
+            self.assertFalse(did_create)
+            self.assertEqual(json.loads(same_path.read_text(encoding="utf-8"))["notes"], ["preserve"])
+
+    def test_legacy_profile_hint_is_auto_selected_from_default_profile_folder(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "profiles"
+            directory.mkdir()
+            default = directory / "machine.json"
+            legacy = directory / "machine-test.json"
+            legacy.write_text(json.dumps({"machine": "TEST-HOST"}), encoding="utf-8")
+            template = {"_operator_inputs_EDIT": {
+                "profile": {"value": str(legacy), "_comment": "local"}}}
+            self.assertEqual(choose_existing_profile(default, template, hostname="TEST-HOST"), legacy.resolve())
+
+    def test_episode_code_is_inferred_from_archive_url_or_item_metadata(self):
+        self.assertEqual(episode_code_from_url_identifier(
+            "https://archive.org/details/DS9-S01E07-LaserDisc-Copies"), "S01E07")
+        code, source = resolve_episode_code(
+            "https://archive.org/details/DS9-LaserDisc-Copies",
+            metadata_reader=lambda _item: {
+                "metadata": {"identifier": "DS9-LaserDisc-Copies", "title": "Deep Space Nine S01E08 Dax"},
+                "files": [{"name": "DS9-S01E08-Dax-L1.tbc"}],
+            })
+        self.assertEqual((code, source), ("S01E08", "Archive metadata"))
+        with self.assertRaisesRegex(WorkflowAppError, "multiple episode codes"):
+            resolve_episode_code("https://archive.org/details/DS9-Copies", metadata_reader=lambda _item: {
+                "metadata": {"title": "S01E07 and S01E08"}, "files": []})
+
     def test_real_intake_template_builds_without_modifying_source(self):
         template_path = ROOT / "CONFIGURE HERE FIRST.example.json"
         before = template_path.read_bytes()
