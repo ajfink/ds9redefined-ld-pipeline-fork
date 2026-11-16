@@ -136,10 +136,16 @@ FROM fork Version 9 -> fork Version 10
   preview, execution, resume, and explicit human review approval; the CLI remains supported.
 - Local intake recognizes common raw-RF extensions as “decode required” rather than passing
   them to the TBC pipeline; raw-RF decoding remains future work.
+- Added a navigable PAD-review popup for cut-PAD stills and optional five-image RIFE context
+  (source −2, source −1, replacement, source +1, source +2). Only marked app-owned temporary
+  preview copies are cleaned up; canonical RIFE outputs and curated stills are preserved.
+- Added a bottom-of-window verbose logging checkbox. Standard mode shows diagnostics/progress
+  and failure context while retaining full stage output in the workflow log; verbose mode streams
+  all child output. CLI output remains verbose by default.
 - Interim intake policy: AI-prompted URLs, DVD selections/paths, and settings are acceptable
   inputs, but confirmed values must also be persisted and validated in the designated config
   or plan, not left only in chat.
-- Validation: **130 passed, 7 VapourSynth-only skipped**; Python compilation, generated-runbook
+- Validation: **139 passed, 7 VapourSynth-only skipped**; Python compilation, generated-runbook
   check, whitespace check, warning-as-error import, PowerShell parsing, and stage-list check
   passed. See `V10-RELEASE.md`. The existing S01E08 canary predates this port and does not
   validate new V10 retime/measurement behavior.

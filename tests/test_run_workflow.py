@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import io
 import json
 import getpass
+import os
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -14,7 +17,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import run_workflow  # noqa: E402
 from run_workflow import (PLAN_SCHEMA, WorkflowError, file_fingerprints,
-                          generate_job_id, load_plan, run_plan, _state_for_disk)
+                          generate_job_id, load_plan, run_plan, standard_output_line,
+                          _run_child, _state_for_disk)
 
 
 FAKE_RUN_STAGE = r'''from __future__ import annotations
@@ -85,6 +89,53 @@ class WorkflowPlanTests(unittest.TestCase):
         generated = generate_job_id("S01E99", "Q-Less: The Return!",
                                     datetime(2026, 11, 15, 12, 30, 0, 123456, tzinfo=timezone.utc))
         self.assertEqual(generated, "S01E99-q-less-the-return-20261115T123000123456Z")
+
+    def test_standard_output_filter_keeps_diagnostics_and_gates(self):
+        self.assertFalse(standard_output_line("loaded 4 source captures"))
+        self.assertTrue(standard_output_line("WARN: optional report was not found"))
+        self.assertTrue(standard_output_line("REVIEW REQUIRED [stack]: inspect metrics"))
+        self.assertTrue(standard_output_line("stage report: report.json"))
+
+    def test_standard_mode_hides_routine_output_but_saves_full_log(self):
+        script = self.root / "routine_stage.py"
+        script.write_text("print('loaded 4 source captures')\n", encoding="utf-8")
+        log_path = self.root / "standard.log"
+        state = {"active_index": 0, "steps": [{}]}
+        output = io.StringIO()
+        with log_path.open("w", encoding="utf-8") as log, redirect_stdout(output):
+            code = _run_child([sys.executable, str(script)], os.environ.copy(), log, [], state,
+                              self.root / "unused-state.json", verbose=False)
+        self.assertEqual(code, 0)
+        self.assertNotIn("loaded 4 source captures", output.getvalue())
+        self.assertIn("loaded 4 source captures", log_path.read_text(encoding="utf-8"))
+
+    def test_standard_mode_shows_recent_output_when_a_stage_fails(self):
+        script = self.root / "failing_stage.py"
+        script.write_text("print('opening source media')\nprint('ERROR: decoder failed')\nraise SystemExit(7)\n",
+                          encoding="utf-8")
+        log_path = self.root / "failure.log"
+        state = {"active_index": 0, "steps": [{}]}
+        output = io.StringIO()
+        with log_path.open("w", encoding="utf-8") as log, redirect_stdout(output):
+            code = _run_child([sys.executable, str(script)], os.environ.copy(), log, [], state,
+                              self.root / "unused-state.json", verbose=False)
+        self.assertEqual(code, 7)
+        self.assertIn("ERROR: decoder failed", output.getvalue())
+        self.assertIn("Recent stage output", output.getvalue())
+        self.assertIn("opening source media", output.getvalue())
+        self.assertIn("opening source media", log_path.read_text(encoding="utf-8"))
+
+    def test_verbose_mode_streams_routine_child_output(self):
+        script = self.root / "verbose_stage.py"
+        script.write_text("print('loaded 4 source captures')\n", encoding="utf-8")
+        log_path = self.root / "verbose.log"
+        state = {"active_index": 0, "steps": [{}]}
+        output = io.StringIO()
+        with log_path.open("w", encoding="utf-8") as log, redirect_stdout(output):
+            code = _run_child([sys.executable, str(script)], os.environ.copy(), log, [], state,
+                              self.root / "unused-state.json", verbose=True)
+        self.assertEqual(code, 0)
+        self.assertIn("loaded 4 source captures", output.getvalue())
 
     def test_plan_rejects_non_allowlisted_stages_and_bad_resume_policy(self):
         path = self.write_plan(stage="arbitrary-shell")

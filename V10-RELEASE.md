@@ -48,11 +48,18 @@ pull request was created.
 - Local intake recognizes likely raw-RF files (`.lds`, `.ldf`, `.s16`, `.raw`) and stops with
   a decode-required message instead of treating them as TBC. Standalone `.flac`/`.wav` inputs
   are reported as ambiguous. Raw-RF decoding remains a future workflow capability.
+- Added an optional visual PAD-review popup. It pages through available cut-PAD stills or
+  RIFE replacements with source −2, source −1, replacement, source +1, source +2 context.
+  Preview copies live in a uniquely marked temporary directory and are removed on popup/GUI
+  close or successful workflow completion; canonical repair assets are preserved.
+- Added a bottom GUI verbosity checkbox. Standard mode keeps warnings, errors, progress,
+  gates, summaries, and recent failure output visible while the workflow log retains every
+  stage line. Verbose mode streams all child-stage output; CLI behavior remains verbose by default.
 
 ## Validation and limits
 
 - Mainline V10 reported 105 passed and 7 VapourSynth-only skipped. This fork's expanded suite
-  passes **130 tests, with 7 VapourSynth-only skipped**.
+  passes **139 tests, with 7 VapourSynth-only skipped**.
 - Fork checks passed: Python `compileall`, generated-runbook `--check`, `git diff --check`,
   `av_check_output.py` import with `SyntaxWarning` treated as an error, PowerShell AST parsing
   of 8 scripts, and `run_stage.py --list` with both new diagnostics registered.

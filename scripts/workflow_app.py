@@ -27,6 +27,7 @@ from workflow_app_model import (WorkflowAppError, build_intake_plan,
                                 default_profile_path, episode_code_from_url_identifier,
                                 read_intake_template, resolve_episode_code,
                                 write_new_plan)  # noqa: E402
+from pad_review import PadReviewWindow, PreviewCache  # noqa: E402
 
 RUN_WORKFLOW = Path(__file__).with_name("run_workflow.py")
 LOCAL_TEMPLATE = ROOT / "CONFIGURE HERE FIRST.json"
@@ -123,6 +124,7 @@ class WorkflowApp:
         self.source_mode_var = self.values["source_mode"]
         self.previous_source_mode = "archive-url"
         self.values["fingerprint_policy"] = tk.StringVar(value="balanced")
+        self.verbose_logging_var = tk.BooleanVar(value=False)
         self.episode_display = tk.StringVar(value="Not resolved from Archive URL")
         self.manifest_display = tk.StringVar(value="Resolve the Archive URL to select the episode manifest location")
         self.resolved_archive_url = ""
@@ -141,6 +143,8 @@ class WorkflowApp:
         self.pending_action: str | None = None
         self.pending_plan_hash: str | None = None
         self.output_queue: queue.Queue[str] = queue.Queue()
+        self.pad_review_windows: list[PadReviewWindow] = []
+        self.pad_review_caches: set[PreviewCache] = set()
         self.values["archive_url"].trace_add("write", self._archive_url_changed)
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -279,6 +283,8 @@ class WorkflowApp:
         self.review_box.pack(side="left")
         self.approve_button = ttk.Button(actions, text="Review & approve…", command=self._approve)
         self.approve_button.pack(side="left", padx=5)
+        self.pad_review_button = ttk.Button(actions, text="Review PAD frames", command=self._review_pad_frames)
+        self.pad_review_button.pack(side="left", padx=5)
 
         self.status = tk.StringVar(value="Load an intake plan, or open an existing workflow plan.")
         ttk.Label(outer, textvariable=self.status, wraplength=940).pack(anchor="w", pady=(0, 6))
@@ -289,6 +295,15 @@ class WorkflowApp:
         self.log.configure(yscrollcommand=scroll.set)
         self.log.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
+        logging_row = ttk.Frame(outer)
+        logging_row.pack(fill="x", pady=(6, 0))
+        self.verbose_logging_check = ttk.Checkbutton(
+            logging_row, text="Verbose logging (show all stage output)",
+            variable=self.verbose_logging_var)
+        self.verbose_logging_check.pack(side="left", anchor="w")
+        ToolTip(self.verbose_logging_check,
+                "Standard mode shows warnings, errors, review gates, and summaries while retaining complete stage output in the workflow log. "
+                "Verbose mode streams all stage output into this window. On stage failure, standard mode also shows the recent output tail.")
         self._set_running(False)
 
     def _browse_handler(self, key: str):
@@ -759,7 +774,8 @@ class WorkflowApp:
                 text += "\n\nThis plan includes final encoding or remuxing. Confirm only if that work is approved."
             if not messagebox.askyesno("Confirm workflow execution", text, parent=self.root):
                 return
-        self._start_process([sys.executable, str(RUN_WORKFLOW), "--plan", str(self.plan_path), *options[action]], action)
+        self._start_process([sys.executable, str(RUN_WORKFLOW), "--plan", str(self.plan_path),
+                             *options[action], *self._logging_args()], action)
 
     def _approve(self) -> None:
         if not self.plan_path or not self.plan_path.is_file():
@@ -780,7 +796,50 @@ class WorkflowApp:
                                    parent=self.root):
             return
         self._start_process([sys.executable, str(RUN_WORKFLOW), "--plan", str(self.plan_path),
-                             "--execute", "--resume", "--approve", step_id], "approve")
+                             "--execute", "--resume", "--approve", step_id,
+                             *self._logging_args()], "approve")
+
+    def _logging_args(self) -> list[str]:
+        return ["--verbose"] if self.verbose_logging_var.get() else ["--standard-output"]
+
+    def _review_pad_frames(self) -> None:
+        if self.process and self.process.poll() is None:
+            messagebox.showwarning("Workflow is running", "Open PAD review after the workflow command finishes.",
+                                   parent=self.root)
+            return
+        plan = self.plan or {}
+        operator = plan.get("_operator_inputs_EDIT") or {}
+        def value(key: str) -> str:
+            entry = operator.get(key)
+            return str(entry.get("value", "")) if isinstance(entry, dict) else ""
+        episode = str(plan.get("episode") or value("episode") or self.values["episode"].get()).strip()
+        profile_value = str(plan.get("profile") or value("profile") or self.values["profile"].get()).strip()
+        manifest_value = (value("manifest_path") or
+                          str(self.values["manifest_path"].get()).strip())
+        if not episode or not profile_value or not manifest_value:
+            messagebox.showwarning("PAD review unavailable",
+                                   "Resolve the episode/workspace or open a plan with an episode, profile, and manifest path first.",
+                                   parent=self.root)
+            return
+        profile, manifest = Path(profile_value).expanduser(), Path(manifest_value).expanduser()
+        if not profile.is_file() or not manifest.is_file():
+            messagebox.showerror("PAD review unavailable",
+                                 "The selected machine profile or episode manifest is missing.", parent=self.root)
+            return
+        instance_value = plan.get("instance_root")
+        instance_root = Path(instance_value).expanduser() if isinstance(instance_value, str) and instance_value else None
+
+        def released(cache: PreviewCache) -> None:
+            cache.cleanup()
+            self.pad_review_caches.discard(cache)
+
+        reviewer = PadReviewWindow(self.root, episode, profile, manifest, instance_root, on_close=released)
+        reviewer.show()
+        if reviewer.window is not None:
+            self.pad_review_windows = [window for window in self.pad_review_windows if window.window is not None]
+            self.pad_review_windows.append(reviewer)
+            if reviewer.cache:
+                self.pad_review_caches.add(reviewer.cache)
 
     def _plan_digest(self) -> str | None:
         if not self.plan_path or not self.plan_path.is_file():
@@ -852,6 +911,8 @@ class WorkflowApp:
                 self.process = None
                 self._set_running(False)
                 self.status.set(f"Workflow command finished (exit {code}). Review its output/state before continuing.")
+                if code == "0" and self.pending_action in ("run", "resume", "approve"):
+                    self._cleanup_pad_previews()
                 self.pending_action = None
                 self.pending_plan_hash = None
             else:
@@ -866,8 +927,10 @@ class WorkflowApp:
 
     def _set_running(self, running: bool) -> None:
         state = "disabled" if running else "normal"
-        for button in (self.preview_button, self.run_button, self.resume_button, self.approve_button):
+        for button in (self.preview_button, self.run_button, self.resume_button, self.approve_button,
+                       self.pad_review_button):
             button.configure(state=state)
+        self.verbose_logging_check.configure(state=state)
         if hasattr(self, "resolve_button"):
             can_resolve = (not running and self.form_editable and
                            bool(self.values["archive_url"].get().strip()) and not self.resolving_episode)
@@ -883,7 +946,16 @@ class WorkflowApp:
                                        "The workflow command will continue in the background if the GUI closes. Close anyway?",
                                        parent=self.root):
                 return
+        self._cleanup_pad_previews()
         self.root.destroy()
+
+    def _cleanup_pad_previews(self) -> None:
+        for reviewer in list(self.pad_review_windows):
+            reviewer.close()
+        self.pad_review_windows.clear()
+        for cache in list(self.pad_review_caches):
+            cache.cleanup()
+        self.pad_review_caches.clear()
 
 
 def main() -> int:

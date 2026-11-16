@@ -23,6 +23,7 @@ import json
 import os
 import queue
 import re
+import re
 import shlex
 import signal
 import subprocess
@@ -530,6 +531,18 @@ def _display(command: list[str]) -> str:
     return subprocess.list2cmdline(command) if os.name == "nt" else shlex.join(command)
 
 
+STANDARD_OUTPUT_RE = re.compile(
+    r"(?:\b(?:warn(?:ing)?|error|failed|failure|fail|limit|blocked|critical|fatal|exception|traceback)\b"
+    r"|\bworkflow\b|\breview(?: required| approved)?\b|\bstage runner error\b"
+    r"|\bstage report:|\bprogress\b|\b\d+\s*/\s*\d+\b|(?<!\w)\d{1,3}%(?!\w))",
+    re.IGNORECASE)
+
+
+def standard_output_line(line: str) -> bool:
+    """Keep notable diagnostics and gate/status lines in the concise console view."""
+    return bool(STANDARD_OUTPUT_RE.search(line))
+
+
 def configure_console() -> None:
     """Keep diagnostic streaming safe on Windows code pages without Unicode glyphs."""
     for stream in (sys.stdout, sys.stderr):
@@ -578,7 +591,7 @@ def _stop_child_tree(proc: subprocess.Popen) -> None:
 
 def _run_child(command: list[str], env: dict[str, str], log,
                redactions: list[tuple[str, str]], state: dict,
-               state_path: Path) -> int:
+               state_path: Path, *, verbose: bool = True) -> int:
     safe_command = redact_shared_text(_display(command), redactions)
     log.write(f"\n[{utc_now()}] COMMAND: {safe_command}\n")
     log.flush()
@@ -608,6 +621,7 @@ def _run_child(command: list[str], env: dict[str, str], log,
     thread.start()
     line_count = 0
     last_line: str | None = None
+    recent_lines: list[str] = []
     eof = False
     try:
         while not eof:
@@ -625,15 +639,24 @@ def _run_child(command: list[str], env: dict[str, str], log,
             safe_line = redact_shared_text(line, redactions)
             log.write(safe_line)
             log.flush()
-            sys.stdout.write(safe_line)
-            sys.stdout.flush()
+            recent_lines.append(safe_line.rstrip("\r\n"))
+            if len(recent_lines) > 40:
+                del recent_lines[0]
+            if verbose or standard_output_line(safe_line):
+                sys.stdout.write(safe_line)
+                sys.stdout.flush()
             last_line = line.rstrip("\r\n")
             line_count += 1
             if line_count % 25 == 0:
                 state["heartbeat_utc"] = utc_now()
                 state["steps"][state["active_index"]]["last_output"] = redact_shared_text(last_line[-500:], redactions)
                 save_state(state_path, state, redactions)
-        return proc.wait()
+        rc = proc.wait()
+        if rc and not verbose:
+            print("Recent stage output (full details are retained in the workflow log):", flush=True)
+            for detail in recent_lines:
+                print(detail, flush=True)
+        return rc
     except KeyboardInterrupt:
         _stop_child_tree(proc)
         raise
@@ -650,7 +673,7 @@ def _load_state(path: Path) -> dict:
 
 
 def run_plan(plan_path: Path, *, execute: bool, resume: bool,
-             approve_steps: set[str] | None = None) -> int:
+             approve_steps: set[str] | None = None, verbose: bool = True) -> int:
     plan, raw = load_plan(plan_path)
     approve_steps = approve_steps or set()
     review_ids = {step["id"] for step in plan["steps"] if step.get("kind") == "review"}
@@ -743,6 +766,8 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool,
         env = os.environ.copy()
         env["LDP_PROFILE"] = str(profile_path)
         env.setdefault("PYTHONIOENCODING", "utf-8:replace")
+        if verbose:
+            env["PYTHONUNBUFFERED"] = "1"
         env.update(shell_exports)
         if instance_root:
             env["LDP_INSTANCE_ROOT"] = instance_root
@@ -752,6 +777,8 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool,
 
         try:
             with log_path.open("a", encoding="utf-8", newline="\n") as log:
+                log.write(f"\n[{utc_now()}] output_mode={'verbose' if verbose else 'standard'}\n")
+                log.flush()
                 for index, step in enumerate(plan["steps"]):
                     saved = state["steps"][index]
                     inputs = step.get("inputs", [])
@@ -825,7 +852,8 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool,
                     started = time.monotonic()
                     command = _command(plan, step, profile_path, instance_root)
                     try:
-                        rc = _run_child(command, env, log, redactions, state, state_path)
+                        rc = _run_child(command, env, log, redactions, state, state_path,
+                                        verbose=verbose)
                     except KeyboardInterrupt:
                         saved["status"] = "INTERRUPTED"
                         saved["finished_utc"] = utc_now()
@@ -881,6 +909,11 @@ def main() -> int:
     parser.add_argument("--resume", action="store_true", help="resume this exact saved job after verifying plan/profile/files")
     parser.add_argument("--approve", action="append", default=[], metavar="STEP_ID",
                         help="approve a named review step while resuming after personally reviewing its evidence")
+    output_group = parser.add_mutually_exclusive_group()
+    output_group.add_argument("--verbose", action="store_true",
+                              help="stream all child-stage output to the console (the default; full logs are always saved)")
+    output_group.add_argument("--standard-output", action="store_true",
+                              help="show warnings, errors, gates, and summaries; retain complete output in the workflow log")
     args = parser.parse_args()
     if (args.resume or args.approve) and not args.execute:
         parser.error("--resume/--approve require --execute")
@@ -888,7 +921,7 @@ def main() -> int:
         parser.error("--approve requires --resume")
     try:
         return run_plan(Path(args.plan), execute=args.execute, resume=args.resume,
-                        approve_steps=set(args.approve))
+                        approve_steps=set(args.approve), verbose=not args.standard_output)
     except (OSError, json.JSONDecodeError, LockError, WorkflowError) as exc:
         print(f"WORKFLOW ERROR: {exc}", file=sys.stderr)
         return 2

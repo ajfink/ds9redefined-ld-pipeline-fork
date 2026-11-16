@@ -517,8 +517,8 @@ permission.
 | `scripts/doctor.py` | Unified read-only profile/dependency/platform report; Linux x86_64 remains explicitly not episode-ready |
 | `scripts/bootstrap_deps.py` / `dependencies/` | Direct Python version locks for Windows x64, Mac arm64, and candidate Linux x86_64; check-only by default, `--install` is explicit |
 | `scripts/run_stage.py` | Allowlisted stage dispatcher; dry-run plan by default, explicit `--execute`, downloader-specific checks for the early download stage, full doctor/manifest gates before other write stages, and unique logs/reports |
-| `scripts/run_workflow.py` | Fork orchestration: ordered JSON plans over allowlisted stages, durable status/logging, fingerprint-checked resume, review gates, and downloader-only automatic retry |
-| `scripts/workflow_app.py` | Optional local Tk desktop cockpit for intake forms, new-plan generation, dry-run preview, execution, resume, and explicit review approval |
+| `scripts/run_workflow.py` | Fork orchestration: ordered JSON plans over allowlisted stages, durable status/logging, standard or verbose console output, fingerprint-checked resume, review gates, and downloader-only automatic retry |
+| `scripts/workflow_app.py` / `scripts/pad_review.py` | Optional Tk cockpit for intake, plan/run controls, explicit review approval, and temporary cut-PAD/RIFE visual review |
 | `scripts/render_stack.py` | Orc weighted-stack render adapter; checks measured space, capture-load/StackerStage/unrecoverable/frame-count evidence, and writes a report before the mandatory human review gate |
 | `scripts/generate_tfm_log.py` | Full-side TFM decision-log generator for Windows AviSynth or macOS VapourSynth; requires measured capture PAD and exact frame-count coverage |
 | `scripts/cadence_analysis_mac.py` | macOS cadence adapter: runs the shared PowerShell TFM-log parser into a temporary AVS, then builds the VapourSynth chain from the measured map |
@@ -606,6 +606,17 @@ Field-label tooltips describe the choices. DVD-backed plans pass the selected fi
 the explicit `--no-dvd` choice. Preview runs the existing read-only `run_workflow.py` plan
 path. Run, resume, and review approval call the same allowlisted CLI; approvals are never
 automatic, and plans containing final encode/remux receive an extra confirmation prompt.
+**Review PAD frames** opens a navigable popup for available cut-PAD stills and, optionally,
+RIFE replacements in a five-image strip: source −2, source −1, RIFE replacement, source +1,
+source +2. The extra copies and extracted outer neighbors are app-owned temporary previews;
+they are removed when the popup closes, when the GUI closes, or after a workflow completes
+successfully. Canonical RIFE replacements, neighbor images, and curated source stills are
+never deleted by this cleanup.
+The bottom **Verbose logging** checkbox defaults off: standard mode keeps warnings, errors,
+progress, review gates, and summaries visible while saving all child-stage output in the
+workflow log. On failure it also displays the last 40 stage-output lines. Enabling verbose
+mode streams every child-stage line to the GUI as well. The `run_workflow.py` CLI remains
+verbose by default; `--standard-output` selects the concise view explicitly.
 
 This UI is an optional layer over the existing V9/V10 plan and runner contracts. It does
 not replace the CLI or alter the workflow version, so saved V10 plans can continue to run
