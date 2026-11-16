@@ -160,4 +160,4 @@ FROM Version 11 -> Version 12
   kept the E08 one-off script/report and all episode media outside the repository.
 - Validation: **116 passed, 7 VapourSynth-only skipped**; 12 comparator tests, compilation,
   warning-as-error import, generated-runbook, and diff checks passed. No real E12 media run or
-  peak-memory benchmark is claimed. See `V12-RELEASE.md` and execution-log section 45.
+  peak-memory benchmark is claimed. See `V12-RELEASE.md` and execution-log section 46.

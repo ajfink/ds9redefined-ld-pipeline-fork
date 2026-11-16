@@ -39,4 +39,4 @@ approval workflow.
 - Linux production remains blocked. V12 makes no new macOS or end-to-end support claim.
 
 See `V12-QUEUE.md`, `WORKFLOW_VERSIONING.md`, `changelog.txt`, and authoring-device execution
-log section 45.
+log section 46.
