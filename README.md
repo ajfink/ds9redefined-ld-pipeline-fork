@@ -1,6 +1,6 @@
 # DS9 LaserDisc OpenCode Operator Pack
 
-**Workflow version: 12** — check `WORKFLOW_VERSION` and follow the core-change/device-log
+**Workflow version: 13** — check `WORKFLOW_VERSION` and follow the core-change/device-log
 rules in `WORKFLOW_VERSIONING.md` before editing or syncing workflow files.
 
 **Design goal:** make the workflow clear and reliable enough for capable free or low-cost
@@ -124,6 +124,24 @@ preflight, dependency-lock, and doctor gates pass. Save preliminary evidence und
 ```
 
 The prompt starts the job; it does not waive machine setup or quality gates.
+
+## Work ahead while the transfer runs
+
+The transfer is the clock, not a reason to wait idle. After the download-specific checks
+pass, start the resumable transfer and work through every independent preparation task.
+Create/reuse the stable device/episode workspace, then copy
+`templates/episode-prep-checklist.template.md` to
+`<instance_root>/logs/prep-checklist.md`. Record task status, evidence paths, and the exact
+artifact or gate that will unblock each deferred task.
+
+**Allowed during transfer:** tool/version inventory and the user's update decision (apply
+changes only after transfer completion), DVD copy/hash/stream/PTS/black/silence preparation,
+workspace setup, readiness checks, stage space estimates, and staged commands.
+**Blocked until `download-manifest.csv` verifies every selected source file:** episode
+manifest initialization, EFM decode/capture choice, stack/reference work, cadence/trims,
+LD-dependent picture/audio measurements, PAD decisions/repairs, retiming, encode, and
+delivery QC. DVD-only prep never authorizes guessing an LD value. The checklist records
+progress; it does not waive a gate.
 For Qwen3.5 4B, apply the Qwen4B step format. Route to `opencode-go/gpt-6-luna`
 only when a Luna **DELEGATE** rule is triggered after the local checks; if the
 fallback route is unavailable, ask the user rather than silently changing models.
@@ -455,11 +473,15 @@ missing, verify and regenerate it before continuing.
    7. **Prepare confirmed PAD repairs before final encoding.** Validate the source-derived
       script without x265, then run `pad_audit.py`, `fullres_check.py`, `rife_padframes.py`,
       and the platform's padfix builder (`build_padfix_avs.py` on Windows,
-      `build_padfix_vpy.py` on macOS). Use RIFE only for confirmed non-cut PADs. If no DVD
-      was supplied and the user chose the shared images, match timestamp-named
-      `Cut Pad Images/<episode>/` PNGs to exact confirmed cut-PAD output frames and pass
-      `--cut-pad-image <output-frame>=<PNG>`; otherwise use `--hold-cut`. Never RIFE across
-       a shot cut. Record the exact measured `pads.cut_pad_frames` list so the image-to-pad
+       `build_padfix_vpy.py` on macOS). Use RIFE only for confirmed non-cut PADs. For a
+       DVD-backed cut PAD, publish the independently mapped, cropped/color-reviewed DVD
+        still and provenance to this episode's per-device `cut-pad-images/` with
+        `shared_workspace.py publish-cut-pad` (verified DVD SHA-256, `--confirm-mapping`,
+        and a non-empty `--color-match-note`), then pass that exact PNG via
+       `--cut-pad-image <output-frame>=<PNG>`; `--hold-cut` is only the explicit no-DVD
+       fallback. No cross-shot RIFE. In no-DVD mode, use curated timestamp-named
+       `Cut Pad Images/<episode>/` stills only if the user chose them, or hold the prior frame.
+       Record the exact measured `pads.cut_pad_frames` list so the image-to-pad
        mapping is auditable. Require source-raster and replacement-identity checks; do not
        repair genuine dark content or derive repairs from an encode.
    8. **Retime DVD tracks only when available and requested.** With a DVD, adjudicate every
@@ -520,7 +542,7 @@ permission.
 | `scripts/run_workflow.py` | Ordered JSON-plan orchestration using only `run_stage.py` allowlisted stages; durable status/log, per-job locking, input/output fingerprints, and conservative resume |
 | `CONFIGURE HERE FIRST.json` | Sanitized no-DVD intake-plan template; edit only `_operator_inputs_EDIT` values and replace every placeholder |
 | `scripts/stage_clock.py` | Pause/resume timer for manual stages; separates active work from human gate waits and writes a timestamped record in the device workspace |
-| `scripts/shared_workspace.py` | Ensure a collision-resistant per-device/instance/episode folder beside the selected README, with local fallback; publish no-overwrite references and provenance-checked cut-PAD stills |
+| `scripts/shared_workspace.py` | Ensure one stable per-machine device folder with per-episode workspaces; publish no-overwrite references and reviewed cut-PAD provenance |
 | `scripts/generate_runbooks.py` / `templates/runbooks/` | Regenerate model variants from the canonical runbook plus model-policy templates; `--check` detects drift |
 | `WORKFLOW_VERSION` / `WORKFLOW_VERSIONING.md` | Authoritative workflow version and core-change/device-log rules |
 | `V7-RELEASE.md` | V7 tooling overview and platform validation boundaries |
@@ -529,22 +551,25 @@ permission.
 | `V10-RELEASE.md` | V10 retime verification, measurement diagnostics, workspace compatibility, and analysis safeguards |
 | `V11-RELEASE.md` | Queue-use boundary and `init_episode` shared-mode regression fix |
 | `V12-RELEASE.md` | Optional report-only LD/DVD audio comparator and regression coverage |
+| `V13-RELEASE.md` | Fail-closed break edges, cut-PAD policy/provenance, stable workspaces, Orc resume, and bounded extraction |
 | `V9-QUEUE.md` | Historical V9 device-log review and inherited carry-overs; planning only |
 | `V10-QUEUE.md` | Historical V10 scope and implementation record; planning only |
 | `V11-QUEUE.md` | Historical V11 record and dependency-policy proposal; planning only |
 | `V12-QUEUE.md` | V12 planning/review record; not live workflow instructions |
+| `V13-QUEUE.md` | V13 implementation/evidence record and held episode findings; non-operative |
 | `changelog.txt` | Short release history; retrospective V1–V5 notes and accepted V6 changes |
 | `Cut Pad Images/<episode>/` | Curated single-frame DVD cut-PAD repair stills, named by verified DVD timestamp/frame; not a DVD reference substitute |
 | `scripts/download_archive.ps1` | Metadata-verified, resumable source download; checks profile curl (>=7.71.0), and ListOnly prints inventory, integrity metadata, aggregate bytes, and projected free space |
 | `scripts/check_space_budget.py` | Projected per-stage free-space gate that preserves the configured reserve |
 | `scripts/init_episode.py` | Verified Archive/download + optional DVD -> draft manifest; `--no-dvd` records explicit approval, and macOS gets `.vpy` script paths |
 | `scripts/validate_episode.py` | Stage-specific manifest/artifact prerequisites; optional expensive source MD5 recheck |
-| `scripts/select_stack_reference.py` | Orc refresh loop that chooses/stabilizes the reference and writes a refreshed project; never renders |
+| `scripts/select_stack_reference.py` | Streamed Orc refresh loop with heartbeat and verified completed-pass resume; selects/stabilizes a reference and never renders |
 | `scripts/build_stack_project.py` | Manifest-driven Orc graph skeleton; scratch `--reference-override` does not edit the manifest |
 | `scripts/efm_paths.py` | Plan episode-scoped EFMSink WAV/report paths and refuse existing outputs |
 | `scripts/extract_video_descriptors.py` | Sequential master/DVD descriptor extraction on the validated FFmpeg rawvideo grid |
 | `scripts/measure_dvd_alignment.py` | Continuity-constrained DVD-minus-master Viterbi candidate path and sampled-range report |
 | `scripts/measure_break_edges.py` | Long-window content offsets, DP comparison, score/runner-up; clips windows away from adjacent recorded blacks |
+| `scripts/extract_candidate_frames.py` | Bounded exact-index PNG extraction; caps output/select terms and records hashes |
 | `scripts/measure_audio_rate.py` | Multi-window audio-vs-picture-map diagnostic with OLS and robust checks; never auto-selects a correction |
 | `scripts/ld_dvd_audio_compare.py` | Optional report-only LD/DVD envelope and band comparison; never selects a rate or gates QC |
 | `scripts/measure_pad_audio.py` | Report-only PAD_1 audio occupancy vs nearby PCM controls; never recommends a rate |
@@ -567,7 +592,7 @@ permission.
 | `scripts/qc_report.py` | Final delivery report; skipped/unverified required checks fail closed |
 | `scripts/regen_plain_text.py` | Rebuild the ASCII companion from the main Markdown runbook |
 
-### V10 entry points
+### V13 entry points
 
 ```text
 python scripts/bootstrap_deps.py --print --json
@@ -650,7 +675,7 @@ it is not tied to W: or to one shared-drive copy. The expected layout is:
 <README folder>/                       # release/source tree: read-only
   README.md
   devices/                             # the only writable area beneath the README folder
-    <device>-<instance-id>/             # this device-instance's subtree only
+    <device>-<stable-id>/                # one stable folder per machine
       episodes/<code>/
         manifest/
         logs/
@@ -665,14 +690,19 @@ the README being followed. `shared_workspace.py configure-profile --source <loca
 --output <new-local-profile>` creates a new external profile for that README folder.
 
 **Required setup, not a workflow gate:** at the start of each episode, create/reuse the
-device-instance workspace with `python scripts/shared_workspace.py ensure --profile
+machine's stable device folder and episode workspace with `python scripts/shared_workspace.py ensure --profile
 <local-profile> --episode <code>`. `run_stage.py` also attempts this automatically. If
-`devices/<device-instance>` cannot be created or accessed, it warns and continues using an
+`devices/<device>-<stable-id>` cannot be created or accessed, it warns and continues using an
 isolated fallback under the device profile's local `roots.logs` (or `roots.work`). It never
 falls back to writing elsewhere in the README/release tree. The fallback data is local and
 won't be visible to other devices until deliberately published/copied. Keep the returned
 `instance_root` for this episode to resume in the same workspace; do not start a second
 concurrent run against it.
+The suffix is stored in a machine-local identity file under
+`~/.config/ld-pipeline/device-identities/`, outside the release tree. If legacy folders are
+ambiguous or unverifiable, the helper does not guess, move, or delete them; use
+an explicitly reviewed `shared.device_instance_id`/`LDP_DEVICE_INSTANCE_ID` or the local
+fallback.
 Initialize/reuse it before creating the manifest; the initializer and stage runner also
 resolve it automatically. Preserve and explicitly reconcile any legacy root-level manifest
 rather than copying or overwriting it without confirming ownership.
@@ -699,7 +729,7 @@ For a DVD-backed episode, pass `--script-arg=--dvd --script-arg=<DVD path>` inst
 configured local source folder; manifests, logs, references, and cut-PAD images go to this
 episode's workspace when available, otherwise to its local fallback.
 
-The device should alter only its own `devices/<device-instance>/` subtree. Do not edit
+The device should alter only its own `devices/<device>-<stable-id>/` subtree. Do not edit
 release files or another device's folder. For shared-drive ACLs, the administrator should
 grant read/execute on the README/release tree and make `devices/` its sole writable child
 (pre-provision it or allow creation of that exact directory). Grant each device Modify

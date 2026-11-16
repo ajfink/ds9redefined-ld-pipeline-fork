@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -34,6 +35,7 @@ SR = 16000
 HOP = 0.02
 WIN = 60.0
 EDGE_CLEAR_S = 2.0
+MIN_SUB_S = 8.0
 DEFAULT_POINTS = (100.0, 500.0, 900.0, 1400.0, 1900.0, 2400.0, 2600.0)
 GATE_CONST_MS, GATE_SLOPE_PPM, GATE_RMS_MS = 100.0, 30.0, 40.0
 
@@ -73,6 +75,43 @@ def corr_peak(a, b):
     s = cum[n:] - cum[:-n]
     e = cum2[n:] - cum2[:-n] - s * s / n
     return dot / np.sqrt((a * a).sum() * np.maximum(e, 1e-9))
+
+
+def split_at_cuts(start_s: float, blacks_out: list[tuple[float, float]],
+                  window_s: float = WIN, min_sub_s: float = MIN_SUB_S
+                  ) -> tuple[list[tuple[float, float, float]], list[tuple[float, float]]]:
+    """Split a correlation window around recorded blacks; return kept and dropped spans.
+
+    Each kept tuple is (start, duration, anchor). The anchor is the start of that
+    constant-offset side, so a split window is compared against its own offset model.
+    Short spans are returned separately for explicit diagnostics, never silently measured.
+    """
+    if not math.isfinite(start_s) or not math.isfinite(window_s) or window_s <= 0:
+        raise PipelineError("A/V window start and duration must be finite, with positive duration")
+    if not math.isfinite(min_sub_s) or min_sub_s <= 0:
+        raise PipelineError("minimum A/V sub-window duration must be positive")
+    spans = [(start_s, start_s + window_s)]
+    for black_start, black_end in sorted(blacks_out):
+        if not (math.isfinite(black_start) and math.isfinite(black_end)) or black_end <= black_start:
+            raise PipelineError(f"invalid recorded black interval: {black_start!r}..{black_end!r}")
+        next_spans = []
+        for span_start, span_end in spans:
+            if black_end <= span_start or black_start >= span_end:
+                next_spans.append((span_start, span_end))
+                continue
+            if black_start > span_start:
+                next_spans.append((span_start, min(black_start, span_end)))
+            if black_end < span_end:
+                next_spans.append((max(black_end, span_start), span_end))
+        spans = next_spans
+    kept, dropped = [], []
+    for span_start, span_end in spans:
+        duration = span_end - span_start
+        if duration < min_sub_s:
+            dropped.append((span_start, span_end))
+        else:
+            kept.append((span_start, duration, span_start))
+    return kept, dropped
 
 
 def fit_windows(ep) -> list[tuple[float, float]]:
@@ -211,26 +250,56 @@ def main() -> int:
           f"DELTA={delta:.6f}s (audio is measured from the delivered file; AudioSkip is already applied)", flush=True)
 
     rows = []
+    uncovered_points = []
+    retime = ep.data.get("retime") or {}
+    blacks_out = sorted(
+        [(float(b["ld_black"][0]) - delta, float(b["ld_black"][1]) - delta)
+         for b in (retime.get("breaks") or []) if b.get("ld_black")]
+        + [(float(m["ld_black"][0]) - delta, float(m["ld_black"][1]) - delta)
+           for m in (retime.get("merged_music_through") or []) if m.get("ld_black")]
+        + ([(float(retime["end_black_ld"][0]) - delta,
+              float(retime["end_black_ld"][1]) - delta)]
+           if retime.get("end_black_ld") else []))
     for t in args.points:
-        master = delta + t
-        d_v = master + off(master) / FPS
-        k0 = d_v - t
-        a = envelope(ld_audio, t, WIN)
-        lo, hi = k0 - 6.0, k0 + 6.0
-        b = envelope(dvd_audio, t + lo, (hi - lo) + WIN)
-        sc = corr_peak(a, b)
-        i = int(np.argmax(sc))
-        if 0 < i < len(sc) - 1:
-            y0, y1, y2 = sc[i - 1], sc[i], sc[i + 1]
-            den = y0 - 2 * y1 + y2
-            refine = 0.5 * (y0 - y2) / den if abs(den) > 1e-12 else 0.0
-        else:
-            refine = 0.0
-        k = lo + (i + refine) * HOP
-        av = k - delta - off(master) / FPS
-        rows.append((t, master, off(master), k0, k, float(sc[i]), av))
-        print(f"  t={t:6.0f}s master={master:8.1f} off={off(master):+7.1f} "
-              f"k={k:+7.3f} (expected {k0:+6.3f}) corr={sc[i]:.3f} A/V={av*1000:+7.1f} ms", flush=True)
+        subs, dropped = split_at_cuts(t, blacks_out)
+        for a0, b0 in dropped:
+            print(f"  note: dropping act-cut sub-window {a0:.1f}-{b0:.1f}s "
+                  f"(<{MIN_SUB_S:.0f}s; insufficient content for a one-lag estimate)",
+                  flush=True)
+        if dropped or len(subs) != 1 or (subs and abs(subs[0][1] - WIN) > 1e-9):
+            print(f"  t={t:6.0f}s window {t:.1f}-{t + WIN:.1f}s intersects a recorded black; "
+                  f"measuring {len(subs)} sub-window(s) separately", flush=True)
+        if not subs:
+            uncovered_points.append(t)
+        for s, slen, anchor in subs:
+            master = delta + anchor
+            d_v = master + off(master) / FPS
+            k0 = d_v - anchor
+            a = envelope(ld_audio, s, slen)
+            lo, hi = k0 - 6.0, k0 + 6.0
+            b = envelope(dvd_audio, s + lo, (hi - lo) + slen)
+            sc = corr_peak(a, b)
+            i = int(np.argmax(sc))
+            if 0 < i < len(sc) - 1:
+                y0, y1, y2 = sc[i - 1], sc[i], sc[i + 1]
+                den = y0 - 2 * y1 + y2
+                refine = 0.5 * (y0 - y2) / den if abs(den) > 1e-12 else 0.0
+            else:
+                refine = 0.0
+            k = lo + (i + refine) * HOP
+            av = k - delta - off(master) / FPS
+            rows.append((s, master, off(master), k0, k, float(sc[i]), av, slen))
+            tag = "" if abs(slen - WIN) < 1e-9 else f"[{s:.1f}-{s + slen:.1f}]"
+            print(f"  t={s:7.1f}s{tag:<18.18} master={master:8.1f} off={off(master):+7.1f} "
+                  f"k={k:+7.3f} (expected {k0:+6.3f}) corr={sc[i]:.3f} "
+                  f"A/V={av*1000:+7.1f} ms", flush=True)
+
+    if uncovered_points:
+        raise PipelineError("no >=8s content sub-window remains for A/V point(s) "
+                            + ", ".join(f"{p:.1f}s" for p in uncovered_points)
+                            + "; add reviewed measurement points rather than silently skipping coverage")
+    if len(rows) < 3:
+        raise PipelineError(f"only {len(rows)} content windows remain; at least 3 are needed for an A/V fit")
 
     x = np.array([r[0] for r in rows])
     y = np.array([r[6] for r in rows]) * 1000
@@ -245,10 +314,10 @@ def main() -> int:
     with out.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f, delimiter="\t")
         w.writerow(("out_time_s", "master_s", "offset_frames", "expected_lag_s",
-                    "measured_lag_s", "corr", "av_ms"))
+                    "measured_lag_s", "corr", "av_ms", "window_duration_s"))
         for r in rows:
             w.writerow((f"{r[0]:.3f}", f"{r[1]:.6f}", f"{r[2]:.3f}", f"{r[3]:.6f}",
-                        f"{r[4]:.6f}", f"{r[5]:.6f}", f"{r[6]*1000:.3f}"))
+                        f"{r[4]:.6f}", f"{r[5]:.6f}", f"{r[6]*1000:.3f}", f"{r[7]:.3f}"))
     print(f"\nA/V: constant {const:+.1f} ms  slope {ppm:+.1f} ppm  rms {rms:.1f} ms  n={len(y)}")
     print(f"range {y.min():+.1f}..{y.max():+.1f} ms  report: {out}")
     gates = {

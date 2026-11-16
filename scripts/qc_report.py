@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
 import subprocess
 import sys
@@ -55,15 +56,28 @@ STANDING_WARNINGS = [
 ]
 
 
-def sh(args: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace")
+def sh(args: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(args, capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", env=env)
 
 
 def run_gate(script: str, args: list[str], skip: bool) -> tuple[str, str]:
     """Run a gate script; return (status, detail). status in PASS/FAIL/ERROR/SKIP."""
     if skip:
         return "SKIP", "reuse artifacts (--skip-heavy)"
-    p = sh([sys.executable, str(SCRIPTS / script), *args])
+    command = [sys.executable, str(SCRIPTS / script), *args]
+    # DYLD_LIBRARY_PATH is needed by VapourSynth plugins during source processing,
+    # but delivery QC does not invoke vspipe. Inherited conda plugin paths can make
+    # cv2 load the wrong libiconv and turn a valid install into a misleading failure.
+    # Scope the cleanup to the macOS OpenCV identity gate and leave the parent process
+    # environment untouched.
+    if (script == "verify_pad_identities.py" and sys.platform == "darwin" and
+            os.environ.get("DYLD_LIBRARY_PATH")):
+        child_env = os.environ.copy()
+        child_env.pop("DYLD_LIBRARY_PATH", None)
+        p = sh(command, env=child_env)
+    else:
+        p = sh(command)
     tail = "\n".join((p.stdout or "").strip().splitlines()[-4:])
     if p.returncode == 0:
         if "not applicable" in (p.stdout or "").lower():

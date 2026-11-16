@@ -113,7 +113,10 @@ def main() -> int:
                     actual = actual or result["packages"].get("opencv-python-headless")
                 if name == "opencv-python-headless":
                     actual = actual or result["packages"].get("opencv-python")
-                print(f"  {'PASS' if actual == version else 'FAIL'} {name}: expected={version}, installed={actual}")
+                state = result.get("package_version_status", {}).get(name, "unverified")
+                label = "PASS" if state in ("exact", "newer") else "FAIL"
+                suffix = " (newer-than-target accepted)" if state == "newer" else ""
+                print(f"  {label} {name}: target={version}, installed={actual}{suffix}")
             if args.print_command:
                 print("install command (not run): " + result["command_text"])
             elif args.install and result.get("install_exit_code") == 0:

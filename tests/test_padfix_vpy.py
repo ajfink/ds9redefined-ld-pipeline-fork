@@ -14,6 +14,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -26,6 +27,30 @@ if importlib.util.find_spec("vapoursynth") is not None:
     import vapoursynth as vs  # noqa: E402
 else:  # the source-only Windows test run does not install the Mac-only frameserver
     vs = None
+
+
+class PadfixGeneratedPathContractTests(unittest.TestCase):
+    def test_emitter_passes_generated_string_constants_as_paths(self):
+        source = (ROOT / "scripts" / "build_padfix_vpy.py").read_text(encoding="utf-8")
+        self.assertIn("payloads = load_payloads(Path(AUDIT), Path(REPORT), LABEL, src)", source)
+
+    def test_payload_loader_accepts_generated_string_paths(self):
+        """The emitted .vpy stores AUDIT/REPORT as strings before invoking the loader."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            audit = root / "audit.tsv"
+            report = root / "report.tsv"
+            audit.write_text("frame\tzero_max\n10\t0\n", encoding="utf-8")
+            report.write_text("episode\tframe\tmethod\tpng\n", encoding="utf-8")
+
+            source = SimpleNamespace(
+                format=SimpleNamespace(subsampling_w=1, subsampling_h=1),
+                num_frames=100,
+                height=4,
+                width=4,
+            )
+            with self.assertRaisesRegex(PipelineError, "no replacement method recorded"):
+                load_payloads(str(audit), str(report), "SELF", source)
 
 
 @unittest.skipUnless(vs is not None, "requires the selected VapourSynth Python environment")

@@ -133,7 +133,7 @@ def load_source_chain(script: Path):
     return clip
 
 
-def load_payloads(audit: Path, report: Path, label: str, src) -> dict:
+def load_payloads(audit: str | Path, report: str | Path, label: str, src) -> dict:
     """Pad frames -> (Y, U, V) uint16 planes, loaded from the pad audit + RIFE report.
 
     Shared by this generator and by the emitted `.vpy`, so the parsing and the
@@ -141,6 +141,12 @@ def load_payloads(audit: Path, report: Path, label: str, src) -> dict:
     """
     import numpy as np
     from PIL import Image
+
+    # Generated .vpy scripts embed these filenames as string literals. Coerce
+    # at the loader boundary as well as in the emitter so either representation
+    # is safe and the generated script cannot fail late at encode time.
+    audit = Path(audit)
+    report = Path(report)
 
     fmt = src.format
     if fmt is None:
@@ -300,7 +306,7 @@ PADS = frozenset({padset!r})
 src = load_source_chain(Path(BASE))
 assert src.num_frames == TOTAL, f"source frame count mismatch: {{src.num_frames}}"
 
-payloads = load_payloads(AUDIT, REPORT, LABEL, src)
+payloads = load_payloads(Path(AUDIT), Path(REPORT), LABEL, src)
 
 def _write(n, f):
     if n not in payloads:

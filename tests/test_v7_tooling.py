@@ -5,12 +5,14 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from dependency_lock import LockError, read_lock, target_for  # noqa: E402
+import dependency_lock  # noqa: E402
+from dependency_lock import LockError, read_lock, target_for, version_relation  # noqa: E402
 from doctor import parse_windows_preflight  # noqa: E402
 from generate_runbooks import OUTPUTS, generated_text  # noqa: E402
 from run_stage import (STAGES, make_action, requires_doctor, validate_command,
@@ -40,6 +42,37 @@ class DependencyLockTests(unittest.TestCase):
             recipe = (ROOT / "dependencies" / f"environment-{target}.yml").read_text(encoding="utf-8")
             for name, version in packages:
                 self.assertIn(f"{name}=={version}", recipe)
+
+    def test_pep440_target_or_newer_policy_is_conservative(self):
+        self.assertEqual(version_relation("5.0.0", "5.0.0"), "exact")
+        self.assertEqual(version_relation("5.0.0.93", "5.0.0"), "newer")
+        self.assertEqual(version_relation("5.0.0rc1", "5.0.0"), "older")
+        self.assertEqual(version_relation("not-a-version", "5.0.0"), "unverified")
+        self.assertEqual(version_relation(None, "5.0.0"), "missing")
+
+    def test_lock_accepts_newer_importable_package_but_not_import_errors(self):
+        lock_path = ROOT / "dependencies" / "requirements-macos-arm64.lock.txt"
+        packages = [("opencv-python-headless", "5.0.0")]
+        actual = {"python": "3.15.2", "executable": "python",
+                  "packages": {"opencv-python-headless": "5.0.0.93"},
+                  "import_errors": {}}
+        with patch.object(dependency_lock, "read_lock",
+                          return_value=(lock_path, "3.15.2", packages)), \
+                patch.object(dependency_lock, "inspect_interpreter", return_value=actual):
+            result = dependency_lock.compare_lock("macos-arm64", "python")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["package_version_status"]["opencv-python-headless"], "newer")
+        self.assertEqual(result["newer_versions_accepted"], [{
+            "package": "opencv-python-headless", "target": "5.0.0", "installed": "5.0.0.93"}])
+
+        broken = actual | {"import_errors": {
+            "opencv-python-headless": "ImportError: incompatible native library"}}
+        with patch.object(dependency_lock, "read_lock",
+                          return_value=(lock_path, "3.15.2", packages)), \
+                patch.object(dependency_lock, "inspect_interpreter", return_value=broken):
+            result = dependency_lock.compare_lock("macos-arm64", "python")
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("actual_import_error" in item for item in result["mismatches"]))
 
 
 class StageRunnerTests(unittest.TestCase):

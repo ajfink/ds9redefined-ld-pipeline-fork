@@ -3,13 +3,15 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from av_check_output import require_alignment_sample_coverage  # noqa: E402
 from ldcommon import PipelineError  # noqa: E402
-from measure_break_edges import content_window_bounds  # noqa: E402
+from measure_break_edges import (content_window_bounds, match_content_windows,
+                                 report_exit_code)  # noqa: E402
 from measure_ld_black import best_overlap, luma_runs  # noqa: E402
 
 
@@ -40,6 +42,45 @@ class V10MeasurementSafetyTests(unittest.TestCase):
         ]
         with self.assertRaisesRegex(PipelineError, "intervals overlap"):
             content_window_bounds(breaks, 0, window_s=10.0, fade_clear_s=1.0)
+
+    def test_close_pair_clipping_returns_explicit_empty_window_at_clearance_boundary(self):
+        own = {"label": "B1", "ld_black": [100.0, 102.0]}
+        for gap, has_window in ((4.1, True), (4.0, False), (3.9, False)):
+            with self.subTest(gap=gap):
+                neighbor = {"label": "B2", "ld_black": [102.0 + gap, 105.0 + gap]}
+                bounds = content_window_bounds([own, neighbor], 0,
+                                               window_s=48.0, fade_clear_s=2.0)
+                self.assertEqual(bounds["after"] is not None, has_window)
+                if bounds["after"] is not None:
+                    self.assertLess(bounds["after"][0], bounds["after"][1])
+
+    def test_empty_and_none_matches_are_unmeasured_without_subscript_crash(self):
+        empty = match_content_windows(None, None, None, (10.0, 20.0), 0, 0, 40, 10, 300)
+        self.assertEqual(empty, {"status": "window-too-small", "before": None, "after": None})
+
+        with patch("measure_break_edges.match_window", return_value=None) as match:
+            result = match_content_windows(None, None, (0.0, 10.0), (20.0, 30.0),
+                                           0, 1, 40, 10, 300)
+        self.assertEqual(result["status"], "window-too-small")
+        self.assertIsNone(result["before"])
+        self.assertIsNone(result["after"])
+        self.assertEqual(match.call_count, 2)
+
+    def test_tiny_valid_match_with_insufficient_texture_stays_unmeasured(self):
+        low = {"offset": None, "score": None, "runner": None, "n": 1}
+        with patch("measure_break_edges.match_window", side_effect=[low, low]):
+            result = match_content_windows(None, None, (0.0, 0.05), (10.0, 10.05),
+                                           0, 0, 40, 10, 300)
+        self.assertEqual(result["status"], "insufficient-texture")
+        self.assertIsNone(result["before"]["offset"])
+        self.assertIsNone(result["after"]["offset"])
+
+    def test_unresolved_edges_keep_the_report_exit_nonzero(self):
+        self.assertEqual(report_exit_code([{"status": "measured"}]), 0)
+        self.assertEqual(report_exit_code([{"status": "measured"},
+                                           {"status": "window-too-small"}]), 1)
+        self.assertEqual(report_exit_code([{"status": "insufficient-texture"}]), 1)
+        self.assertEqual(report_exit_code([]), 1)
 
     def test_luma_runs_are_reported_at_multiple_thresholds_without_selecting_one(self):
         means = [40, 9, 8, 12, 14, 18, 4, 4, 4, 30]

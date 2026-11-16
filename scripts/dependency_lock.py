@@ -19,6 +19,30 @@ class LockError(RuntimeError):
     pass
 
 
+def version_relation(installed: str | None, target: str) -> str:
+    """Compare PEP 440 versions; unsupported/unparseable values fail closed."""
+    if installed is None:
+        return "missing"
+    if installed == target:
+        return "exact"
+    try:
+        from packaging.version import InvalidVersion, Version
+    except ImportError:
+        try:
+            # pip vendors packaging, so use that parser if the selected helper
+            # environment does not expose packaging as a top-level module.
+            from pip._vendor.packaging.version import InvalidVersion, Version
+        except ImportError:
+            return "unverified"
+    try:
+        actual, expected = Version(installed), Version(target)
+    except InvalidVersion:
+        return "unverified"
+    if actual == expected:
+        return "exact"
+    return "newer" if actual > expected else "older"
+
+
 def normalize_arch(value: str) -> str:
     value = value.casefold().replace("-", "_")
     if value in {"amd64", "x64", "x86_64"}:
@@ -122,20 +146,29 @@ def compare_lock(target: str, interpreter: str) -> dict:
         mismatches.append({"package": "Python", "expected": expected_python,
                            "actual": actual["python"]})
     installed = actual["packages"]
+    version_status: dict[str, str] = {}
+    newer_accepted: list[dict[str, str]] = []
     aliases = {"opencv-python": ("opencv-python", "opencv-python-headless"),
                "opencv-python-headless": ("opencv-python-headless", "opencv-python")}
     for name, expected in packages:
         actual_version = next((installed.get(alias) for alias in aliases.get(name, (name,))
                                if installed.get(alias)), None)
-        if actual_version != expected:
+        relation = version_relation(actual_version, expected)
+        version_status[name] = relation
+        if relation == "newer":
+            newer_accepted.append({"package": name, "target": expected,
+                                   "installed": str(actual_version)})
+        elif relation not in ("exact",):
             mismatches.append({"package": name, "expected": expected,
-                               "actual": actual_version})
+                               "actual": actual_version, "version_status": relation})
         if name in actual.get("import_errors", {}):
             mismatches.append({"package": name, "expected_import": "working",
                                "actual_import_error": actual["import_errors"][name]})
     return {"target": target, "lock": str(lock), "python": actual["python"],
             "interpreter": actual["executable"], "packages": installed,
             "import_errors": actual.get("import_errors", {}),
+            "package_version_status": version_status,
+            "newer_versions_accepted": newer_accepted,
             "expected_packages": dict(packages), "mismatches": mismatches,
             "ok": not mismatches}
 

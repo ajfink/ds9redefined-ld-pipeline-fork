@@ -23,11 +23,22 @@ arguments, or gates while running an episode. Follow this current runbook and RE
 released scripts matching WORKFLOW_VERSION; queue content has no effect until explicitly
 implemented and released.
 
-During a long source download, do useful independent prep rather than waiting: verify
-and probe the matching DVD, check machine readiness, and preserve clearly labeled
-preliminary evidence. Do not create/validate the episode manifest until the downloader
-has verified every selected source file. DVD-only prep does not authorize guessing any
-LD cadence, timing, audio, or picture-map value.
+Work ahead while the source transfer runs
+
+The transfer is the clock, not a reason to wait idle. After the download-specific checks pass,
+start the resumable transfer and work through every independent preparation task. Create/reuse
+the stable device/episode workspace and copy templates/episode-prep-checklist.template.md
+to <instance_root>/logs/prep-checklist.md. Record task status, evidence paths, and the exact
+artifact or gate that unblocks deferred work.
+
+Allowed during transfer: tool/version inventory and the user's update decision (apply changes
+only after transfer completion), DVD copy/hash/stream/PTS/black/silence preparation, workspace
+setup, readiness checks, stage space estimates, and staged commands. Do not initialize the
+episode manifest or perform EFM decode/capture choice, stack/reference work, cadence/trims,
+LD-dependent picture/audio measurements, PAD decisions/repairs, retiming, encode, or delivery
+QC until the download manifest verifies every selected source file and the relevant readiness
+gates pass. DVD-only prep never authorizes guessing an LD value. The checklist records progress;
+it does not waive a gate.
 
 
 1. OpenCode job brief and machine setup
@@ -79,7 +90,7 @@ Record WORKFLOW_VERSION in the device/job log before starting. Confirm it has no
 before every stage; if core files or the version change mid-job, pause before the next
 stage, re-read its current instructions, and reconcile rather than mixing procedures.
 
-Per-device workspace and logs (every README location, V7)
+Per-device workspace and logs (every README location, V13)
 
 The workspace belongs beside the README that started this episode, not to a hard-coded W:
 share. In the device-local profile set shared.enabled=true and shared.release_root to
@@ -89,10 +100,10 @@ Images/, episodes/_template.json, and other devices' workspaces are not episode 
 locations. The permitted data subtree is:
 
 <folder containing the selected README.md>/
-  devices/<device>-<instance-id>/episodes/<code>/
+  devices/<device>-<stable-id>/episodes/<code>/
     manifest/  logs/  references/  cut-pad-images/
 
-Creating/reusing this device-instance workspace is a required setup instruction, but
+Creating/reusing this stable device folder and episode workspace is a required setup instruction, but
 not a processing gate. Prefer
 python scripts/shared_workspace.py ensure --profile <local-profile> --episode <code>.
 run_stage.py also tries to reuse/create it automatically. If the README-folder devices/
@@ -108,7 +119,12 @@ boundary-never guess which device owns it or overwrite it automatically.
 
 In shared mode, keep machine.json outside the README folder and set
 shared.enabled=true, shared.release_root=<folder containing this README>, and a device
-name in that local profile. The workspace owns the episode manifest/backups and its logs,
+name in that local profile. The stable suffix is persisted in a machine-local identity file
+under ~/.config/ld-pipeline/device-identities/, outside the release tree; episode data stay
+under per-episode folders beneath that stable device folder. If legacy suffixes are ambiguous
+or unverifiable, the helper does not guess, move, or delete them; explicitly select the intended
+shared.device_instance_id/LDP_DEVICE_INSTANCE_ID or use the isolated local fallback. The
+workspace owns the episode manifest/backups and its logs,
 references, and cut-PAD inbox. Work/render/download/cache/final outputs stay on the
 profile's local volumes. For direct helpers, use the LDP_PROFILE, LDP_INSTANCE_ROOT,
 LDP_MANIFEST_DIR, LDP_INSTANCE_LOGS, LDP_CUT_PAD_IMAGES, and LDP_INSTANCE_MODE
@@ -282,14 +298,19 @@ Confirm the title/capture list and run python scripts\validate_episode.py --epis
    It builds a scratch project with a deterministic provisional input order, runs Orc's
    non-rendering refresh, maps suggestedReference to a capture label, and repeats with
    that capture first until the recommendation is stable (maximum three refreshes). It
-   then records the selected reference and promotes the refreshed project to the
-   manifest's stack-project path. The seed is scratch-only, never a guessed manifest
-   value. If the manifest already has a different reference, use --reselect only when
-   intentionally replacing it; an existing project is never overwritten. Read the
-   selection report, verify all captures were analyzed and the final suggestion is input
-   1, then record the measured alignment_map. If Orc fails, emits no valid suggestion,
-   or does not stabilize, STOP; do not choose a reference from noise alone or hand-derive
-   offsets.
+    then records the selected reference and promotes the refreshed project to the
+    manifest's stack-project path. The seed is scratch-only, never a guessed manifest
+    value. If the manifest already has a different reference, use --reselect only when
+    intentionally replacing it; an existing project is never overwritten. Read the
+    selection report, verify all captures were analyzed and the final suggestion is input
+    1, then record the measured alignment_map. If Orc fails, emits no valid suggestion,
+    or does not stabilize, STOP; do not choose a reference from noise alone or hand-derive
+    offsets. Output is streamed and a heartbeat is logged during quiet refreshes. The helper
+    checkpoints only completed passes; if interrupted, resume with
+    python scripts\select_stack_reference.py --episode <code> --resume <logs/checkpoint.json>.
+    The checkpoint verifies the workflow/manifest/profile, capture inputs, Orc executable, and
+    completed project/log hashes. Preserve the checkpoint and partial logs; do not restart with
+    a different input set or add a harness timeout to a long background refresh.
 2. Graph: one tbc_source and frame_map per capture  ->  source_align  ->  stacker Weighted  ->  video_sink. Keep the measured reference/input order. Sink baseline: mov-prores, prores_profile=hq, decoder_type=ntsc3d, adapt_threshold=0.1, chroma_weight=2.0, ntsc_phase_comp=true, display aspect 4:3. Do not add unmeasured crops or post-stack filters.
 3. Before the render, estimate the peak ProRes and scratch-space demand and run
    python scripts\check_space_budget.py --stage stack-render --planned-gib <estimate>.
@@ -439,7 +460,7 @@ Diagnosis and classification
 Fill policy
 
 - Non-cut PAD: use the upstream rife-ncnn-vulkan engine's RIFE midpoint between the two adjacent real output-domain frames. A tested best-quality command (768x484 PNG pair, model already installed) was rife-ncnn-vulkan -0 prev.png -1 next.png -o pad.png -s 0.5 -g -1 -x -z -m <model-dir> (-x spatial TTA, -z temporal TTA; CPU/fp32, UHD and de-duplication off). In the E03 identical-encode A/B at pad 22221, maintained-frame steps were 0.00 then 18.79; RIFE steps were 11.36 then 10.60. RIFE reduced high-frequency energy ~22% on that one frame, so constrain it to proven PADs. A tested CPU+TTA run was numerically tied with GPU fp32+TTA; GPU without TTA differed substantially, and NCNN Vulkan fp16 is the precision risk. Verify the installed engine, model, backend, and PNG color path on the current machine; none is implied by another host's setup. The tested RGB24 PNG path can be converted to YUV420 10-bit for output, but conversion cannot recreate source 10-bit precision.
-- PAD on a cut with a DVD: never RIFE across two shots. Map through the independently verified DVD <-> LD picture map, sequentially decode/IVTC the DVD to 23.976, and accept only a uniquely matching frame. Crop/scale to the LD raster and color-match gently to the prior good LD frame.
+- PAD on a cut with a DVD: never RIFE across two shots. Map through the independently verified DVD <-> LD picture map, sequentially decode/IVTC the DVD to 23.976, and accept only a uniquely matching frame. Crop/scale to the LD raster and color-match gently to the prior good LD frame. Publish the reviewed timestamped PNG and provenance into this episode's devices/<device>-<stable-id>/episodes/<code>/cut-pad-images/ with shared_workspace.py publish-cut-pad (include the verified DVD SHA-256, --confirm-mapping, and a non-empty --color-match-note), then pass the exact PNG as --cut-pad-image <output-frame>=<PNG>.
 - PAD on a cut without a DVD: if the user selected shared cut-pad stills, use only the reviewed Cut Pad Images/<episode>/DVD-HH-MM-SS.mmm-fNNNNNNNN.png still whose scene/timestamp maps uniquely to this measured cut PAD; pass it as --cut-pad-image <output-frame>=<PNG>. The timestamp is a candidate locator, not proof of alignment. If no unique image match exists or the user declined stills, use --hold-cut <output-frame> to copy the immediately previous native 10-bit LD frame. Never cross-shot RIFE or guess a DVD-time mapping.
 
 Injection, encode, and validation

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -72,9 +73,16 @@ def main() -> int:
 
     try:
         import cv2  # noqa: F401
-    except ImportError as e:
-        raise PipelineError("missing Python package cv2 - pip install opencv-python "
-                            "(required by the replacement-identity gate)") from e
+    except Exception as e:
+        distribution = ("opencv-python-headless" if sys.platform in ("darwin", "linux")
+                        else "opencv-python")
+        env_note = (" DYLD_LIBRARY_PATH is set; it can make OpenCV load an incompatible "
+                    "native library." if sys.platform == "darwin" and
+                    os.environ.get("DYLD_LIBRARY_PATH") else "")
+        raise PipelineError(
+            f"OpenCV import failed under {sys.executable}; expected the selected "
+            f"environment's {distribution} package. {type(e).__name__}: {e}{env_note}"
+        ) from e
 
     ld = Ld()
     ep = load_episode(args.episode, ld)

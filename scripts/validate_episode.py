@@ -229,10 +229,27 @@ def main() -> int:
         c.file(probe / f"{ep.code}-pad-repair-frames.txt", "confirmed-PAD-repair-list")
         for key in ("map_pads", "rendered_isolated", "repaired", "cut_pads"):
             c.require(nonnull(d, "pads", key), f"pads.{key}", "record the audit result")
-        if not dvd_available and int((d.get("pads") or {}).get("cut_pads") or 0) > 0:
-            cut_frames = (d.get("pads") or {}).get("cut_pad_frames") or []
-            c.require(len(cut_frames) == int(d["pads"]["cut_pads"]), "pads.cut_pad_frames",
-                      "no-DVD cut repairs need the exact measured output-frame list")
+        pad_data = d.get("pads") or {}
+        raw_cut_count = pad_data.get("cut_pads")
+        raw_cut_frames = pad_data.get("cut_pad_frames") or []
+        cut_count_is_int = type(raw_cut_count) is int and raw_cut_count >= 0
+        cut_frames_are_ints = isinstance(raw_cut_frames, list) and all(
+            type(frame) is int and frame >= 0 for frame in raw_cut_frames)
+        cut_count = raw_cut_count if cut_count_is_int else -1
+        cut_frames = raw_cut_frames if cut_frames_are_ints else []
+        c.require(cut_count_is_int and cut_frames_are_ints and
+                  len(cut_frames) == cut_count and
+                  len(set(cut_frames)) == len(cut_frames), "pads.cut_pad_frames",
+                  "record the exact, unique output-frame list for every classified cut PAD")
+        if cut_frames:
+            try:
+                repair_frames = {int(value) for value in
+                                 (ld.probe() / f"{ep.code}-pad-repair-frames.txt")
+                                 .read_text(encoding="utf-8").split()}
+            except (OSError, ValueError):
+                repair_frames = set()
+            c.require(set(cut_frames).issubset(repair_frames), "pads.cut_pad_frames-confirmed",
+                      "every cut PAD must also be in the confirmed PAD repair list")
 
     if args.stage == "deliverable":
         key = d.get("deliverable")

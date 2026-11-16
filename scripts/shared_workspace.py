@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Create and populate isolated per-instance data folders under a shared release.
+"""Create and populate a stable per-device tree of isolated episode workspaces.
 
 The README/code-bundle folder is never an output target. The preferred mutation is
-under its pre-provisioned ``devices/`` subtree: per-device instance folders with
+under its pre-provisioned ``devices/`` subtree: one stable device folder with
 manifests, logs/references, and reviewed cut-PAD stills. If that workspace is
 unavailable, the helper creates an isolated fallback under the machine profile's
 local roots. It never edits ACLs.
@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 EPISODE_RE = re.compile(r"^S\d{2}E\d{2}$", re.IGNORECASE)
 IMAGE_RE = re.compile(r"^DVD-(\d{2})-(\d{2})-(\d{2})\.(\d{3})-f(\d{8})\.png$", re.IGNORECASE)
 SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9._-]+$")
+DEVICE_ID_RE = re.compile(r"^[0-9A-F]{8}$")
 REFERENCE_EXTENSIONS = {".md", ".txt", ".json", ".csv", ".tsv", ".log"}
 LOGGING_GUIDE = """# Episode workspace logs
 
@@ -132,6 +133,199 @@ def safe_component(value: str) -> str:
     if not cleaned:
         raise LockError(f"cannot make a safe path component from {value!r}")
     return cleaned[:64]
+
+
+def device_identity_path(device: str) -> Path:
+    """Machine-local sidecar that keeps one device folder stable across episodes."""
+    configured = os.environ.get("LDP_DEVICE_ID_DIR")
+    root = (Path(os.path.expandvars(os.path.expanduser(configured))).resolve()
+            if configured else Path.home() / ".config" / "ld-pipeline" / "device-identities")
+    return root / f"{device}.json"
+
+
+def _load_device_identity(path: Path, device: str, machine: str | None) -> str:
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise LockError(f"invalid machine-local device identity {path}: {exc}") from exc
+    instance_id = str(record.get("instance_id", "")).upper()
+    if (record.get("schema") != "ld-pipeline-device-identity-v1" or
+            record.get("device_name") != device or
+            record.get("machine") != machine or
+            not DEVICE_ID_RE.fullmatch(instance_id)):
+        raise LockError(f"device identity does not match this profile/device: {path}")
+    return instance_id
+
+
+def _legacy_device_ids(devices: Path, device: str, machine: str | None) -> set[str]:
+    """Discover old per-episode-generated folder suffixes without choosing ambiguously."""
+    found = set()
+    if not devices.is_dir():
+        return found
+    for folder in devices.glob(f"{device}-*"):
+        if folder.is_symlink() or not folder.is_dir():
+            continue
+        suffix = folder.name[len(device) + 1:]
+        if not DEVICE_ID_RE.fullmatch(suffix):
+            continue
+        for metadata_path in folder.glob("episodes/*/workspace.json"):
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if (metadata.get("machine") == machine and
+                    str(metadata.get("instance_id", "")).upper() == suffix):
+                found.add(suffix)
+                break
+    return found
+
+
+def _unverified_legacy_device_folders(devices: Path, device: str,
+                                      verified_ids: set[str]) -> list[str]:
+    """Find matching suffix folders whose ownership cannot be established safely."""
+    if not devices.is_dir():
+        return []
+    result = []
+    prefix = device + "-"
+    for folder in devices.glob(f"{device}-*"):
+        suffix = folder.name[len(prefix):]
+        if DEVICE_ID_RE.fullmatch(suffix) and suffix not in verified_ids:
+            result.append(folder.name)
+    return sorted(result)
+
+
+def _write_device_identity(path: Path, device: str, machine: str | None,
+                           instance_id: str) -> str:
+    """Persist a small identity record atomically without overwriting another process's choice."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {"schema": "ld-pipeline-device-identity-v1", "device_name": device,
+              "machine": machine, "instance_id": instance_id,
+              "created_utc": datetime.now(timezone.utc).isoformat()}
+    payload = (json.dumps(record, indent=2) + "\n").encode("utf-8")
+    temp = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
+    try:
+        with temp.open("xb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            # Hard-link creation is atomic and refuses to replace a concurrent winner.
+            os.link(temp, path)
+            return instance_id
+        except FileExistsError:
+            return _load_device_identity(path, device, machine)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def record_device_identity(profile: dict, device: str, instance_id: str) -> str:
+    """Persist an explicitly selected legacy folder id; never replace an existing id."""
+    instance_id = str(instance_id).upper()
+    if not DEVICE_ID_RE.fullmatch(instance_id):
+        raise LockError("device instance suffix must be exactly 8 hexadecimal characters")
+    path = device_identity_path(device)
+    if path.is_symlink():
+        raise LockError(f"refusing device-identity symlink: {path}")
+    try:
+        path.resolve().relative_to(workspace_release_root(profile))
+    except ValueError:
+        pass
+    else:
+        raise LockError("machine-local device identity must stay outside the shared release tree")
+    if path.exists():
+        current = _load_device_identity(path, device, profile.get("machine"))
+        if current != instance_id:
+            raise LockError(f"selected workspace id {instance_id} conflicts with saved device id {current}")
+        return current
+    return _write_device_identity(path, device, profile.get("machine"), instance_id)
+
+
+def adopt_workspace_device_identity(root: Path, profile: dict, metadata: dict) -> None:
+    """Bind a validated, explicitly selected legacy workspace to this machine's identity."""
+    devices = workspace_release_root(profile) / "devices"
+    try:
+        relative = root.resolve().relative_to(devices.resolve())
+    except ValueError:
+        return
+    device = safe_component(str((profile.get("shared") or {}).get("device_name") or
+                                profile.get("machine") or "device"))
+    if len(relative.parts) != 3 or relative.parts[1] != "episodes":
+        return
+    prefix = device + "-"
+    folder_name = relative.parts[0]
+    if not folder_name.startswith(prefix):
+        return
+    suffix = folder_name[len(prefix):]
+    if str(metadata.get("instance_id", "")).upper() != suffix.upper():
+        raise LockError("selected workspace folder suffix does not match its metadata")
+    record_device_identity(profile, device, suffix)
+
+
+def stable_device_instance_id(profile: dict, device: str, devices: Path) -> str:
+    """Resolve/persist the machine's stable suffix; never guess among legacy duplicates."""
+    shared = profile.get("shared") or {}
+    machine = profile.get("machine")
+    override = (shared.get("device_instance_id") or
+                os.environ.get("LDP_DEVICE_INSTANCE_ID"))
+    if override is not None:
+        override = str(override).upper()
+        if not DEVICE_ID_RE.fullmatch(override):
+            raise LockError("device_instance_id must be exactly 8 hexadecimal characters")
+    identity_path = device_identity_path(device)
+    if identity_path.is_symlink():
+        raise LockError(f"refusing device-identity symlink: {identity_path}")
+    try:
+        identity_path.resolve().relative_to(workspace_release_root(profile))
+    except ValueError:
+        pass
+    else:
+        raise LockError("machine-local device identity must stay outside the shared release tree")
+    if identity_path.exists():
+        stored = _load_device_identity(identity_path, device, machine)
+        if override and override != stored:
+            raise LockError("configured device_instance_id conflicts with the saved machine identity")
+        return stored
+    if override:
+        chosen = override
+    else:
+        legacy = _legacy_device_ids(devices, device, machine)
+        unverified = _unverified_legacy_device_folders(devices, device, legacy)
+        if unverified:
+            raise LockError(
+                "existing device folder ownership cannot be verified: "
+                + ", ".join(unverified)
+                + "; select/adopt one explicitly before creating another episode folder")
+        if len(legacy) > 1:
+            choices = ", ".join(sorted(legacy))
+            raise LockError(
+                f"multiple legacy device folders exist for {device} ({choices}); "
+                "operator must set shared.device_instance_id or LDP_DEVICE_INSTANCE_ID "
+                "to the intended existing folder before creating another episode")
+        chosen = next(iter(legacy)) if legacy else secrets.token_hex(4).upper()
+    return record_device_identity(profile, device, chosen)
+
+
+def existing_device_instance_id(profile: dict, device: str) -> str | None:
+    """Read an explicit/saved machine id without creating or adopting one."""
+    shared = profile.get("shared") or {}
+    override = shared.get("device_instance_id") or os.environ.get("LDP_DEVICE_INSTANCE_ID")
+    if override is not None:
+        value = str(override).upper()
+        if not DEVICE_ID_RE.fullmatch(value):
+            raise LockError("device_instance_id must be exactly 8 hexadecimal characters")
+        return value
+    path = device_identity_path(device)
+    if path.is_symlink():
+        raise LockError(f"refusing device-identity symlink: {path}")
+    if path.exists():
+        try:
+            path.resolve().relative_to(workspace_release_root(profile))
+        except ValueError:
+            pass
+        else:
+            raise LockError("machine-local device identity must stay outside the shared release tree")
+        return _load_device_identity(path, device, profile.get("machine"))
+    return None
 
 
 def workspace_release_root(profile: dict) -> Path:
@@ -298,18 +492,36 @@ def create_workspace(profile_path: Path, profile: dict, episode: str) -> dict:
         except OSError as exc:
             raise LockError(f"could not create README-folder devices directory {devices}: {exc}") from exc
     device = safe_component(str(shared.get("device_name") or profile.get("machine") or "device"))
-    instance_id = secrets.token_hex(4).upper()
+    instance_id = stable_device_instance_id(profile, device, devices)
     instance_name = f"{device}-{instance_id}"
     device_instance = devices / instance_name
-    try:
-        # mkdir without parents/exist_ok is the collision-safe reservation. Do
-        # not create the shared-root devices/ parent from an ordinary run.
-        device_instance.mkdir()
-    except FileExistsError:
-        return create_workspace(profile_path, profile, episode)
+    if device_instance.is_symlink():
+        raise LockError(f"refusing device workspace symlink: {device_instance}")
+    if device_instance.exists() and not device_instance.is_dir():
+        raise LockError(f"device workspace path is not a directory: {device_instance}")
+    device_instance.mkdir(exist_ok=True)
+    episodes_dir = device_instance / "episodes"
+    if episodes_dir.is_symlink():
+        raise LockError(f"refusing episodes-directory symlink: {episodes_dir}")
+    episodes_dir.mkdir(exist_ok=True)
     episode_root = device_instance / "episodes" / episode.upper()
-    (device_instance / "episodes").mkdir()
-    episode_root.mkdir()
+    if episode_root.is_symlink():
+        raise LockError(f"refusing episode workspace symlink: {episode_root}")
+    try:
+        episode_root.mkdir()
+    except FileExistsError:
+        # A concurrent init may have reserved this same stable device/episode
+        # workspace. Reuse it only if its provenance validates; never create a
+        # sibling random folder as a collision workaround.
+        validate_instance(str(episode_root), profile_path, profile)
+        metadata_path = episode_root / "workspace.json"
+        metadata = normalize_workspace_record(
+            episode_root, profile, json.loads(metadata_path.read_text(encoding="utf-8")))
+        metadata["instance_root"] = str(episode_root.resolve())
+        metadata["shell_exports"] = _shell_exports(
+            profile_path, episode_root, metadata.get("storage_mode", "shared-release"))
+        ensure_workspace_dirs(episode_root)
+        return metadata
     dirs = {
         "manifest_dir": episode_root / "manifest",
         "logs": episode_root / "logs",
@@ -330,7 +542,7 @@ def create_workspace(profile_path: Path, profile: dict, episode: str) -> dict:
         "profile_name": profile_path.name,
         "release_root": ".",
         "instance_relative_path": episode_root.resolve().relative_to(ROOT.resolve()).as_posix(),
-        "write_scope": "this unique per-instance episode folder only",
+        "write_scope": "this machine's episode workspace only",
         "environment": {
             "LDP_INSTANCE_ROOT": ".",
             "LDP_MANIFEST_DIR": "manifest",
@@ -366,6 +578,7 @@ def resolve_instance_workspace(profile_path: Path, profile: dict, episode: str,
             ensure_workspace_dirs(root)
             meta = normalize_workspace_record(
                 root, profile, json.loads((root / "workspace.json").read_text(encoding="utf-8")))
+            adopt_workspace_device_identity(root, profile, meta)
             meta["instance_root"] = str(root)
             meta["shell_exports"] = _shell_exports(profile_path, root,
                                                    meta.get("storage_mode", "shared-release"))
@@ -377,9 +590,13 @@ def resolve_instance_workspace(profile_path: Path, profile: dict, episode: str,
     devices = Path(os.path.expandvars(os.path.expanduser(
         str(shared.get("release_root") or ROOT)))).resolve() / "devices"
     device = safe_component(str(shared.get("device_name") or profile.get("machine") or "device"))
+    preferred_id = existing_device_instance_id(profile, device)
     candidates = []
     if devices.is_dir():
         for root in devices.glob(f"{device}-*/episodes/{episode.upper()}"):
+            suffix = root.parents[1].name[len(device) + 1:]
+            if preferred_id and suffix != preferred_id:
+                continue
             try:
                 candidates.append(validate_instance(str(root), profile_path, profile))
             except (LockError, OSError, json.JSONDecodeError):
@@ -394,6 +611,7 @@ def resolve_instance_workspace(profile_path: Path, profile: dict, episode: str,
         else:
             meta = normalize_workspace_record(
                 root, profile, json.loads((root / "workspace.json").read_text(encoding="utf-8")))
+            adopt_workspace_device_identity(root, profile, meta)
             meta["instance_root"] = str(root)
             meta["shell_exports"] = _shell_exports(profile_path, root,
                                                    meta.get("storage_mode", "shared-release"))
@@ -518,7 +736,7 @@ def publish_reference(source: Path, instance: Path, name: str | None,
 
 def publish_cut_pad(source: Path, instance: Path, output_frame: int,
                     source_dvd: str | None, dvd_sha256: str,
-                    mapping_verified: bool) -> tuple[Path, Path]:
+                    mapping_verified: bool, color_match_note: str) -> tuple[Path, Path]:
     source = source.expanduser().resolve()
     if not source.is_file() or source.suffix.casefold() != ".png":
         raise LockError(f"cut-PAD source must be an existing PNG: {source}")
@@ -529,6 +747,9 @@ def publish_cut_pad(source: Path, instance: Path, output_frame: int,
         raise LockError("output cut-PAD frame must be nonnegative")
     if not mapping_verified:
         raise LockError("confirm the DVD scene/timestamp-to-output-PAD mapping before publishing this still")
+    color_match_note = color_match_note.strip()
+    if not color_match_note:
+        raise LockError("record the reviewed color-match method before publishing this still")
     dvd_sha256 = dvd_sha256.strip().lower()
     if not re.fullmatch(r"[0-9a-f]{64}", dvd_sha256):
         raise LockError("provide the verified source DVD's 64-character SHA-256")
@@ -545,7 +766,7 @@ def publish_cut_pad(source: Path, instance: Path, output_frame: int,
         raise LockError(f"cut-PAD image/provenance already exists; refusing overwrite: {image}")
     copy_exclusive(source, image)
     record = {
-        "schema": "ld-pipeline-cut-pad-provenance-v1",
+        "schema": "ld-pipeline-cut-pad-provenance-v2",
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "episode": instance.name,
         "output_pad_frame": output_frame,
@@ -555,6 +776,7 @@ def publish_cut_pad(source: Path, instance: Path, output_frame: int,
         "source_dvd_sha256": dvd_sha256,
         "png_sha256": sha256(image),
         "reviewed_episode_scene_and_pad_mapping": True,
+        "color_match_note": color_match_note,
         "source_filename": source.name,
     }
     with provenance.open("x", encoding="utf-8") as f:
@@ -583,6 +805,8 @@ def main() -> int:
     cut.add_argument("--source-dvd-sha256", required=True)
     cut.add_argument("--confirm-mapping", action="store_true", required=True,
                      help="assert that the timestamp/scene and output PAD frame were independently verified")
+    cut.add_argument("--color-match-note", required=True,
+                     help="brief record of the reviewed DVD-to-LD color-match method/evidence")
     ensure = sub.add_parser("ensure", help="reuse/create the README-folder workspace or use a local fallback")
     ensure.add_argument("--profile", required=True)
     ensure.add_argument("--episode", required=True)
@@ -618,7 +842,8 @@ def main() -> int:
             else:
                 image, provenance = publish_cut_pad(
                     Path(args.source), instance, args.output_pad_frame,
-                    args.source_dvd, args.source_dvd_sha256, args.confirm_mapping)
+                    args.source_dvd, args.source_dvd_sha256, args.confirm_mapping,
+                    args.color_match_note)
                 print(f"published cut-PAD image: {image}\nprovenance: {provenance}")
         return 0
     except (LockError, OSError, json.JSONDecodeError) as exc:

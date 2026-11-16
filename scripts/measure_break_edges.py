@@ -84,8 +84,12 @@ def match_window(master,dvd_norm,lo_s:float,hi_s:float,guess:float,search:int,te
 
 
 def content_window_bounds(breaks, index: int, window_s: float,
-                          fade_clear_s: float) -> dict[str, object]:
-    """Clip before/after match windows away from neighboring black intervals."""
+                          fade_clear_s: float) -> dict[str, object | None]:
+    """Clip match windows away from neighboring blacks; empty windows are ``None``.
+
+    A close pair can leave no interval that meets the requested fade clearance.
+    Represent that explicitly instead of returning a backwards ``(lo, hi)`` pair.
+    """
     if not 0 <= index < len(breaks):
         raise PipelineError(f"break index {index} is outside the adjudication list")
     own = breaks[index].get("ld_black")
@@ -119,8 +123,32 @@ def content_window_bounds(breaks, index: int, window_s: float,
     if overlapping_next:
         after[1] = min(after[1], min(row[0] for row in overlapping_next) - fade_clear_s)
         clipped_after = True
-    return {"before": tuple(before), "after": tuple(after),
+    before_bounds = tuple(before) if before[1] > before[0] else None
+    after_bounds = tuple(after) if after[1] > after[0] else None
+    return {"before": before_bounds, "after": after_bounds,
             "before_clipped": clipped_before, "after_clipped": clipped_after}
+
+
+def match_content_windows(master, dvd_norm, before_bounds, after_bounds,
+                          dp_before: float, dp_after: float, search: int,
+                          texture_std: float, min_frames: int) -> dict:
+    """Match both sides safely, preserving empty/low-texture outcomes as unmeasured."""
+    if before_bounds is None or after_bounds is None:
+        return {"status": "window-too-small", "before": None, "after": None}
+    before = match_window(master, dvd_norm, *before_bounds, dp_before, search,
+                          texture_std, min_frames)
+    after = match_window(master, dvd_norm, *after_bounds, dp_after, search,
+                         texture_std, min_frames)
+    if before is None or after is None:
+        return {"status": "window-too-small", "before": before, "after": after}
+    if before.get("offset") is None or after.get("offset") is None:
+        return {"status": "insufficient-texture", "before": before, "after": after}
+    return {"status": "measured", "before": before, "after": after}
+
+
+def report_exit_code(rows: list[dict]) -> int:
+    """An incomplete/empty report is not a successful set of break measurements."""
+    return 0 if rows and all(row.get("status") == "measured" for row in rows) else 1
 
 
 def main()->int:
@@ -156,8 +184,10 @@ def main()->int:
         if not black or len(black)!=2: raise PipelineError(f"break {b.get('label',i)} needs measured ld_black=[start,end]")
         b0,b1=map(float,black)
         windows=content_window_bounds(breaks,i-1,args.window,args.fade_clear)
-        before_lo,before_hi=windows['before']
-        after_lo,after_hi=windows['after']
+        before_bounds=windows['before']
+        after_bounds=windows['after']
+        before_lo,before_hi=before_bounds if before_bounds is not None else (None,None)
+        after_lo,after_hi=after_bounds if after_bounds is not None else (None,None)
         dpb=dp_median(align,b0-45,b0-args.fade_clear-1/FPS)
         dpa=dp_median(align,b1+args.fade_clear+1/FPS,b1+45)
         if dpb is None or dpa is None:
@@ -167,15 +197,21 @@ def main()->int:
                          "before_window_clipped":windows['before_clipped'],
                          "after_window_clipped":windows['after_clipped']})
             continue
-        before=match_window(master,dvd,before_lo,before_hi,dpb,args.search_frames,args.texture_std,args.min_frames)
-        after=match_window(master,dvd,after_lo,after_hi,dpa,args.search_frames,args.texture_std,args.min_frames)
-        if before["offset"] is None or after["offset"] is None:
-            rows.append({"label":b.get('label',f"B{i}"),"status":"insufficient-texture","ld_black_start":b0,"ld_black_end":b1,
-                         "dp_before":dpb,"dp_after":dpa,"n_before":before['n'],"n_after":after['n'],
+        matched=match_content_windows(master,dvd,before_bounds,after_bounds,dpb,dpa,
+                                      args.search_frames,args.texture_std,args.min_frames)
+        before,after=matched["before"],matched["after"]
+        if matched["status"] != "measured":
+            row={"label":b.get('label',f"B{i}"),"status":matched["status"],"ld_black_start":b0,"ld_black_end":b1,
+                         "dp_before":dpb,"dp_after":dpa,
+                         "n_before":before.get('n') if before else None,
+                         "n_after":after.get('n') if after else None,
                          "window_before_start":before_lo,"window_before_end":before_hi,
                          "window_after_start":after_lo,"window_after_end":after_hi,
                          "before_window_clipped":windows['before_clipped'],
-                         "after_window_clipped":windows['after_clipped']})
+                         "after_window_clipped":windows['after_clipped']}
+            rows.append(row)
+            print(f"{row['label']}: status={row['status']} "
+                  f"before={before_bounds} after={after_bounds}; offsets remain unmeasured",flush=True)
             continue
         step=after["offset"]-before["offset"]
         row={"label":b.get('label',f"B{i}"),"status":"measured","ld_black_start":b0,"ld_black_end":b1,
@@ -202,7 +238,7 @@ def main()->int:
         w=csv.DictWriter(f,fieldnames=keys,delimiter='\t');w.writeheader();w.writerows(rows)
     print(f"report: {out}")
     print("Adjudicate offsets with content/plateau/DP/black-start evidence; this report does not edit the manifest.")
-    return 0 if all(r.get('status')=='measured' for r in rows) else 1
+    return report_exit_code(rows)
 
 
 if __name__=='__main__':

@@ -171,7 +171,9 @@ def linux_preflight(profile: dict, profile_file: Path, interpreter: str,
             f"exit={stages['exit_code']}; missing/unconfirmed={missing}")
 
     add("dependency-lock", "PASS" if lock_report.get("ok") else "FAIL",
-        f"{lock_report.get('lock')} Python {lock_report.get('python')}; mismatches={lock_report.get('mismatches')}")
+        f"{lock_report.get('lock')} Python {lock_report.get('python')}; "
+        f"newer accepted={lock_report.get('newer_versions_accepted', [])}; "
+        f"mismatches={lock_report.get('mismatches')}")
     return {"ok": all(c["status"] != "FAIL" for c in checks), "checks": checks,
             "episode": episode, "profile": str(profile_file)}
 

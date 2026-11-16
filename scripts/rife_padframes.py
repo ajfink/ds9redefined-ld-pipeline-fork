@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Generate CPU/TTA RIFE midpoint PNGs for one episode's confirmed PAD blips.
+"""Generate replacements for one episode's confirmed single-frame PAD blips.
 
   python scripts\\rife_padframes.py --episode S01E05
   python scripts\\rife_padframes.py --episode S01E05 --hold-cut 26160
+  python scripts\\rife_padframes.py --episode S01E05 --cut-pad-image 26160=...\\DVD-....png
 
 Inputs (profile probe root):  <code>-pad-audit.tsv, <code>-pad-repair-frames.txt,
                               <code>-pad-fullres.tsv
 Outputs: probe/rife-padframes/<code>/{neighbors,interpolated}/*.png
          probe/rife-pad-replacements-local.tsv  (merged by episode+frame)
 
-The full-raster check is mandatory: a candidate that is not near-black aborts
-the run rather than being silently skipped, and a selective run never clobbers
-other episodes' rows in the shared report.
+Non-cut candidates use RIFE. Cut candidates never use RIFE: a DVD-backed cut
+requires a reviewed per-device DVD still; the explicit no-DVD path may use a
+user-approved still or hold the previous native frame. The full-raster check is
+mandatory, and a selective run never clobbers other episodes' report rows.
 """
 from __future__ import annotations
 
@@ -141,6 +143,83 @@ def parse_shared_cut_image(spec: str, episode: str, bundle: Path) -> tuple[int, 
     return frame, source_png, timestamp, int(match.group(5))
 
 
+def is_device_instance_cut_pad_image(source: Path, bundle: Path, episode: str) -> bool:
+    """True only for this episode's instance inbox, not the curated source folder."""
+    source = source.resolve()
+    try:
+        relative = source.relative_to((bundle / "devices").resolve())
+    except ValueError:
+        relative = None
+    if (relative and len(relative.parts) == 5 and relative.parts[1] == "episodes" and
+            relative.parts[2].casefold() == episode.casefold() and
+            relative.parts[3] == "cut-pad-images"):
+        return True
+    active_root = os.environ.get("LDP_CUT_PAD_IMAGES")
+    if active_root:
+        active = Path(active_root).expanduser().resolve()
+        return (source.parent == active and active.name == "cut-pad-images" and
+                active.parent.name.casefold() == episode.casefold())
+    return False
+
+
+def require_color_match_note(source: Path) -> str:
+    sidecar = source.with_suffix(".provenance.json")
+    try:
+        provenance = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PipelineError(f"invalid cut-PAD provenance sidecar {sidecar}: {exc}") from exc
+    note = str(provenance.get("color_match_note", "")).strip()
+    if not note:
+        raise PipelineError(f"DVD-backed cut-PAD image needs a reviewed color_match_note: {sidecar}")
+    return note
+
+
+def validate_cut_replacement_policy(episode_data: dict, candidates: set[int],
+                                    hold_frames: set[int],
+                                    image_frames: set[int]) -> set[int]:
+    """Keep cut-PAD inventory complete and select policy by DVD availability."""
+    pads = episode_data.get("pads") or {}
+    raw_count = pads.get("cut_pads") or 0
+    raw_frames = pads.get("cut_pad_frames") or []
+    if type(raw_count) is not int or not isinstance(raw_frames, list) or any(
+            type(frame) is not int for frame in raw_frames):
+        raise PipelineError("pads.cut_pad_frames/cut_pads must contain integer frame values")
+    cut_count = raw_count
+    cuts = set(raw_frames)
+    if cut_count < 0 or len(cuts) != cut_count:
+        raise PipelineError("record the exact, unique measured pads.cut_pad_frames list before cut-PAD repair")
+    if not cuts.issubset(candidates):
+        raise PipelineError(f"manifest cut-pad frames are not all confirmed candidates: {sorted(cuts - candidates)}")
+    if (hold_frames | image_frames) - cuts:
+        raise PipelineError("cut-PAD hold/image substitutions may target only manifest-confirmed cut pads")
+    if hold_frames & image_frames:
+        raise PipelineError(f"a cut PAD cannot be both held and image-filled: {sorted(hold_frames & image_frames)}")
+
+    dvd_available = episode_data.get("dvd_reference_available")
+    if dvd_available is None:  # same legacy inference as validate_episode.py
+        dvd_available = bool((episode_data.get("files") or {}).get("dvd"))
+    no_dvd = not bool(dvd_available)
+    if not no_dvd:
+        if hold_frames:
+            raise PipelineError("--hold-cut is only a no-DVD fallback; DVD-backed cut PADs need matched DVD stills")
+        missing = cuts - image_frames
+        if missing:
+            raise PipelineError(f"DVD-backed cut PADs need reviewed per-device DVD stills: {sorted(missing)}")
+        return cuts
+
+    if episode_data.get("no_dvd_proceed_approved") is not True:
+        raise PipelineError("no-DVD PAD handling requires the user's explicit no-DVD choice")
+    image_choice = episode_data.get("cut_pad_images_choice")
+    if image_frames and image_choice != "use":
+        raise PipelineError("shared DVD stills were supplied but the manifest does not record user choice 'use'")
+    if image_choice == "skip" and image_frames:
+        raise PipelineError("user declined shared cut-pad images; remove --cut-pad-image entries")
+    unresolved = cuts - image_frames - hold_frames
+    if unresolved:
+        raise PipelineError(f"no-DVD cut PADs need a reviewed shared image or --hold-cut: {sorted(unresolved)}")
+    return cuts
+
+
 def extract_neighbors(ld: Ld, video: Path, frame: int, inp: Path) -> tuple[Path, Path]:
     """Take frames ``frame-1`` and ``frame+1``, skipping the black pad itself.
 
@@ -182,9 +261,9 @@ def main() -> int:
     ap.add_argument("--episode", required=True)
     ap.add_argument("--encode", help="override source-derived video path (defaults to avs_encode)")
     ap.add_argument("--hold-cut", type=int, action="append", default=[],
-                    help="frame to hold instead of interpolating (pad sits on a shot cut); repeatable")
+                    help="no-DVD fallback: hold the previous native frame at a confirmed cut PAD; repeatable")
     ap.add_argument("--cut-pad-image", action="append", default=[], metavar="FRAME=PNG",
-                    help="use one reviewed Cut Pad Images/<episode>/ DVD still for a confirmed cut PAD; repeatable")
+                    help="use one reviewed timestamped/provenanced DVD still for a confirmed cut PAD; repeatable")
     ap.add_argument("--accept-residual", type=int, action="append", default=[],
                     help="frame explicitly classified as a PAD despite full-raster residue above the "
                          "near-black threshold (record the section 6 step 2 evidence first; the "
@@ -221,28 +300,20 @@ def main() -> int:
     unknown_images = set(shared_images) - {c["frame"] for c in cands}
     if unknown_images:
         raise PipelineError(f"shared-image frames are not confirmed PADs: {sorted(unknown_images)}")
-    if shared_images and ep.data.get("dvd_reference_available") is not False:
-        raise PipelineError("shared cut-pad still substitution is reserved for the explicit no-DVD workflow")
-    if hold & set(shared_images):
-        raise PipelineError(f"a cut PAD cannot be both held and image-filled: {sorted(hold & set(shared_images))}")
-
-    no_dvd = ep.data.get("dvd_reference_available") is False
-    if no_dvd:
-        if ep.data.get("no_dvd_proceed_approved") is not True:
-            raise PipelineError("no-DVD PAD handling requires the user's explicit no-DVD choice")
-        cuts = set(int(x) for x in (ep.data.get("pads") or {}).get("cut_pad_frames", []))
-        if len(cuts) != int((ep.data.get("pads") or {}).get("cut_pads") or 0):
-            raise PipelineError("record the exact measured pads.cut_pad_frames list before no-DVD cut-PAD repair")
-        if not cuts.issubset({c["frame"] for c in cands}):
-            raise PipelineError(f"manifest cut-pad frames are not all confirmed candidates: {sorted(cuts)}")
-        image_choice = ep.data.get("cut_pad_images_choice")
-        if shared_images and image_choice != "use":
-            raise PipelineError("shared DVD stills were supplied but the manifest does not record user choice 'use'")
-        if image_choice == "skip" and shared_images:
-            raise PipelineError("user declined shared cut-pad images; remove --cut-pad-image entries")
-        unresolved = cuts - set(shared_images) - hold
-        if unresolved:
-            raise PipelineError(f"no-DVD cut PADs need a reviewed shared image or --hold-cut: {sorted(unresolved)}")
+    dvd_available = ep.data.get("dvd_reference_available")
+    if dvd_available is None:
+        dvd_available = bool((ep.data.get("files") or {}).get("dvd"))
+    no_dvd = not bool(dvd_available)
+    cuts = validate_cut_replacement_policy(
+        ep.data, {c["frame"] for c in cands}, hold, set(shared_images))
+    if not no_dvd:
+        bundle = Path(__file__).resolve().parent.parent
+        for frame, (source_png, _timestamp, _dvd_frame) in shared_images.items():
+            if not is_device_instance_cut_pad_image(source_png, bundle, ep.code):
+                raise PipelineError(
+                    "DVD-backed cut PAD stills must be published in this episode's "
+                    "devices/<device>/episodes/<episode>/cut-pad-images folder")
+            require_color_match_note(source_png)
     unknown_acc = set(args.accept_residual) - {c["frame"] for c in cands}
     if unknown_acc:
         raise PipelineError(f"--accept-residual frames are not candidates: {sorted(unknown_acc)}")
@@ -253,7 +324,8 @@ def main() -> int:
         d.mkdir(parents=True, exist_ok=True)
     # Resolve engine/model BEFORE the header print: the original order printed
     # `engine=` first and crashed with UnboundLocalError (S01E06 V5 rerun, 15:1x).
-    if any(c["frame"] not in hold for c in cands):
+    rife_frames = {c["frame"] for c in cands} - hold - set(shared_images)
+    if rife_frames:
         try:
             engine = str(ld.tool("rife_engine"))
             model = str(ld.tool("rife_model_dir"))
@@ -262,7 +334,7 @@ def main() -> int:
     else:
         engine, model = "not-used", "not-used"
     print(f"{label}: candidates={len(cands)} cut-hold={len(hold)} "
-          f"CPU-RIFE={len(cands)-len(hold)}  engine={engine}", flush=True)
+          f"cut-image={len(shared_images)} CPU-RIFE={len(rife_frames)}  engine={engine}", flush=True)
     if not cands:
         print("No confirmed isolated PADs; build_padfix_avs.py will create an identity AVS wrapper.")
         return 0

@@ -161,3 +161,20 @@ FROM Version 11 -> Version 12
 - Validation: **116 passed, 7 VapourSynth-only skipped**; 12 comparator tests, compilation,
   warning-as-error import, generated-runbook, and diff checks passed. No real E12 media run or
   peak-memory benchmark is claimed. See `V12-RELEASE.md` and execution-log section 46.
+
+Version 13 (2026-11-16)
+FROM Version 12 -> Version 13
+- Made break-edge measurement fail closed on clipped-empty/invalid windows; unresolved edges
+  remain unmeasured and return nonzero. This does not adjudicate S01E12's missing offsets.
+- Added exact cut-PAD frame inventory checks, DVD-backed per-device still/provenance policy,
+  reviewed color-match notes, and retained the separately approved no-DVD still/hold path.
+- Reused stable per-machine workspace identity with explicit legacy ambiguity handling; allowed
+  PEP 440 target-or-newer direct-package versions while preserving import failures as blockers.
+- Added Mac OpenCV import diagnostics/environment isolation, act-cut A/V window splitting,
+  streamed Orc progress/checkpoints, bounded exact-index frame extraction, and report-only E12
+  helper tests. Added the transfer-time work-ahead checklist to the live instructions.
+- Validation: **165 passed, 7 skipped**; compilation, warning-as-error imports, generated
+  runbooks, and diff checks passed. The W S01E09 act-cut patch's QC result is referenced as
+  device evidence; the Z implementation itself was tested synthetically. No real-media run,
+  S01E12 break-edge adjudication, new Mac VapourSynth validation, or Linux support claim.
+  See `V13-RELEASE.md` and `V13-QUEUE.md`.
