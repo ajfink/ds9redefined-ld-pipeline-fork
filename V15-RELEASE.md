@@ -59,3 +59,12 @@ was downloaded or processed to implement or validate these changes.
   `pad_audit.py` boundary raise before any output is written. The episode used a documented
   local adaptation (`Z:\work\probe\pad_audit_local_boundaryfix.py`; device log section 52,
   episode log `S01E12-pad-audit-boundary.md`), proposed for merge into a future increment.
+
+## Sync
+
+The 24-file V15 delta was synchronized to the shared release tree `W:\ld-pipeline` and
+verified: 24/24 files identical by normalized-content SHA-256 (release-time sync covered
+21; the 3 count/evidence corrections from `32eea22` were confirmed against the `7ae47d3`
+baseline before overwrite). W's unrelated files and stale Git metadata were preserved;
+no reset/rebase was performed. Device-local content (`devices/`, `Z:\work`, profiles) is
+not part of the sync. See execution-log section 53.
