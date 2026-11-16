@@ -1,6 +1,6 @@
 # DS9 LaserDisc OpenCode Operator Pack
 
-**Workflow version: 14** — check `WORKFLOW_VERSION` and follow the core-change/device-log
+**Workflow version: 15** — check `WORKFLOW_VERSION` and follow the core-change/device-log
 rules in `WORKFLOW_VERSIONING.md` before editing or syncing workflow files. The W working tree
 is synchronized separately; its Git metadata remains behind because of pre-existing local
 changes and is not reset or rebased as part of this release.
@@ -25,6 +25,12 @@ Do not read, cite, or apply queue entries as episode instructions, measurements,
 stage arguments, or gates during a live job. Use this README, the canonical runbook, and
 released scripts at `WORKFLOW_VERSION`; a queued proposal becomes operative only after it is
 implemented and released.
+
+**Changelog boundary:** `changelog.txt` and release/version-history summaries are retrospective
+records only, not live workflow inputs. Ignore them as inputs to a live job: do not derive
+episode identity, title,
+measurements, stage arguments, approvals, or gates from changelog text. If a current runbook,
+helper, manifest, or explicit user decision is missing or ambiguous, stop and clarify.
 
 **Start here.** An OpenCode instance given this folder and the three job inputs
 below should read this README, then follow `DS9 LaserDisc OpenCode Runbook.md`.
@@ -600,6 +606,8 @@ permission.
 | `scripts/bootstrap_deps.py` / `dependencies/` | Direct Python version locks for Windows x64, Mac arm64, and candidate Linux x86_64; check-only by default, `--install` is explicit |
 | `scripts/run_stage.py` | Allowlisted stage dispatcher; dry-run plan by default, explicit `--execute`, series-aware stage identity, downloader-specific checks for early download, and full gates before other writes |
 | `scripts/run_workflow.py` | Ordered JSON-plan orchestration; series-scoped status/log/locks/resume, input/output fingerprints, and conservative resume |
+| `scripts/measure_ld_black.py`, `scripts/prepare_retime_breaks.py`, `scripts/record_retime_breaks.py` | Threshold-sensitivity report, ambiguous-safe DVD/LD pairing report, and explicit backed-up recording of reviewed intervals; offsets remain unmeasured until edge adjudication |
+| `scripts/retime_break_candidates.py` | Pure pairing/record-validation helpers used by the report and recorder; no manifest write on report path |
 | `CONFIGURE HERE FIRST.json` | Sanitized no-DVD intake-plan template; choose DS9 or VOY in the editable `series` value |
 | `scripts/stage_clock.py` | Pause/resume timer for manual stages; separates active work from human gate waits and writes a timestamped record in the device workspace |
 | `scripts/shared_workspace.py` | Ensure one stable per-machine device folder with series-scoped episode workspaces; publish no-overwrite references and reviewed cut-PAD provenance |
@@ -613,12 +621,14 @@ permission.
 | `V12-RELEASE.md` | Optional report-only LD/DVD audio comparator and regression coverage |
 | `V13-RELEASE.md` | Fail-closed break edges, cut-PAD policy/provenance, stable workspaces, Orc resume, and bounded extraction |
 | `V14-RELEASE.md` | Section 31 Archive tree, natural resolver, and series-aware VOY workflow release record |
+| `V15-RELEASE.md` | Changelog source boundary, fail-closed break candidate intake, and retime output verification improvements |
 | `V9-QUEUE.md` | Historical V9 device-log review and inherited carry-overs; planning only |
 | `V10-QUEUE.md` | Historical V10 scope and implementation record; planning only |
 | `V11-QUEUE.md` | Historical V11 record and dependency-policy proposal; planning only |
 | `V12-QUEUE.md` | V12 planning/review record; not live workflow instructions |
 | `V13-QUEUE.md` | V13 implementation/evidence record and held episode findings; non-operative |
 | `V14-QUEUE.md` | Archive catalog/resolver scope and coverage limitations; planning only |
+| `V15-QUEUE.md` | V15 implementation record and acceptance evidence; planning only, never live instructions |
 | `changelog.txt` | Short release history; retrospective V1–V5 notes and accepted V6 changes |
 | `Cut Pad Images/<episode>/` | Curated single-frame DVD cut-PAD repair stills, named by verified DVD timestamp/frame; not a DVD reference substitute |
 | `scripts/download_archive.ps1` | Metadata-verified, resumable source download; checks profile curl (>=7.71.0), and ListOnly prints inventory, integrity metadata, aggregate bytes, and projected free space |

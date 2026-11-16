@@ -23,6 +23,11 @@ arguments, or gates while running an episode. Follow this current runbook and RE
 released scripts matching WORKFLOW_VERSION; queue content has no effect until explicitly
 implemented and released.
 
+Changelog boundary: changelog.txt and version/release summaries are retrospective history,
+not live workflow inputs. Do not use them to choose an episode, copy measurements, choose stage
+arguments, approve actions, or change gates. If the current runbook, released helper, active
+manifest, or an explicit user decision is missing/ambiguous, stop and clarify.
+
 Work ahead while the source transfer runs
 
 The transfer is the clock, not a reason to wait idle. After the download-specific checks pass,
@@ -92,7 +97,7 @@ Record WORKFLOW_VERSION in the device/job log before starting. Confirm it has no
 before every stage; if core files or the version change mid-job, pause before the next
 stage, re-read its current instructions, and reconcile rather than mixing procedures.
 
-Per-device workspace and logs (every README location, V14)
+Per-device workspace and logs (every README location, V15)
 
 The workspace belongs beside the README that started this episode, not to a hard-coded W:
 share. In the device-local profile set shared.enabled=true and shared.release_root to
@@ -549,9 +554,52 @@ Create both descriptor grids with python scripts\extract_video_descriptors.py --
 3. Use this map for both DVD audio and subtitles. A global -itsoffset is wrong if there are act-break steps or rate drift. For source DVD -> LD mapping, if DVD time advances at ratio r per LD second, use atempo=r on that DVD audio segment (output duration becomes input/r) and insert silence for LD-only black extensions. Transform SRT cue times through the inverse affine map plus cumulative gaps.
 4. DVD 5.1 is a discrete remix; DVD stereo is a separate mix, not a downmix or substitute for the LD's original Dolby Surround stereo. LD 2.0 must stay default.
 
-Before recording candidate retime.breaks[].ld_black intervals, run python scripts\measure_ld_black.py --episode <code>. It reports descriptor-luma dark runs at several thresholds and their sensitivity; it chooses no threshold and edits no manifest. Compare with the frame-level picture and blackdetect evidence, then record the adjudicated interval.
+Before recording candidate retime.breaks[].ld_black intervals, run python scripts\measure_ld_black.py --episode <code>. It reports descriptor-luma dark runs at several thresholds and their sensitivity; it chooses no threshold and edits no manifest. Compare with the frame-level picture and blackdetect evidence.
 
-For candidate break windows in the manifest, run python scripts\measure_break_edges.py --episode <code>. It reports long-window content offsets, DP medians, score/runner-up margins, and differences from any recorded offsets. Before/after content windows are clipped clear of adjacent recorded black intervals; if too little textured content remains, the result is insufficient-texture, not a measurement. The helper does not decide which edge wins, whether a music-through black is merged, or edit the manifest. Resolve disagreements using the independent methods below; only then record off_before/off_after.
+For the retime candidate-intake path, generate a unique DVD/LD pairing report. Parameters must be selected and recorded from the current episode's evidence; the example values below are not defaults and are not reusable measurements:
+
+$series = 'DS9' # set to 'VOY' for Voyager; keep it explicit
+$identity = "$series:$ep"
+$probeRoot = $profile.roots.probe
+if ($series -eq 'VOY') { $probeRoot = Join-Path $probeRoot 'VOY' }
+$stamp = Get-Date -Format 'yyyyMMddTHHmmssffffZ'
+$ldBlackReport = Join-Path $probeRoot "$ep-ld-black-intervals-$stamp.json"
+$candidateReport = Join-Path $probeRoot "$ep-retime-break-candidates-$stamp.json"
+
+python scripts\measure_ld_black.py --episode $identity --thresholds 5 10 15 --report-out $ldBlackReport
+python scripts\prepare_retime_breaks.py --episode $identity
+  --ld-black-report $ldBlackReport --ld-threshold <reviewed-luma-threshold>
+  --dvd-silence-noise-db <reviewed-negative-dB>
+  --dvd-silence-min-duration <reviewed-seconds>
+  --pair-tolerance-s <reviewed-seconds>
+  --max-offset-spread-frames <reviewed-frame-limit> --report-out $candidateReport
+
+The preparation report is read-only. It lists every LD interval, the alignment coverage and
+offset spread, every plausible DVD 5.1 silence pairing, and statuses such as unique-pair,
+ambiguous-pair, many-to-one-collision, offset-transition, no-dvd-silence, or
+alignment-uncovered. It never picks the nearest candidate to break a tie. Review the report
+and raw evidence; a no-silence result is not automatically a music-through decision.
+
+Preview only the human-selected labels first:
+
+python scripts\record_retime_breaks.py --episode $identity --candidate-report $candidateReport
+  --select B1 --dry-run
+
+Only after the candidate report is reviewed, record interval candidates with an explicit apply,
+canonical-identity confirmation, and review note (the preview prints the SHA-256 to confirm):
+
+python scripts\record_retime_breaks.py --episode $identity --candidate-report $candidateReport
+  --select B1 --apply --confirm-review $identity
+  --confirm-report-sha256 <reviewed-report-sha256>
+  --review-note "<evidence reviewed and decision>"
+
+The recorder refuses ambiguous/colliding candidates, stale inputs/manifests, existing break
+records, duplicate pair claims, and overwrite/symlink targets. It backs up then atomically
+updates only the reviewed ld_black/dvd_silence candidate intervals; off_before,
+off_after, step, and gap_s remain null. It re-runs the manifest validator. Then measure
+and adjudicate both content edges with measure_break_edges.py; unresolved edges stay blocked.
+
+For candidate break windows in the manifest, run python scripts\measure_break_edges.py --episode <identity>. It reports long-window content offsets, DP medians, score/runner-up margins, and differences from any recorded offsets. Before/after content windows are clipped clear of adjacent recorded black intervals. If one side is clipped or too low-texture, the report preserves any valid opposite-side evidence as partial-window/partial-measurement, but the command remains nonzero and the break remains unmeasured. The helper does not decide which edge wins, whether a music-through black is merged, or edit the manifest. Resolve disagreements using independent methods below; only then record off_before/off_after.
 
 Emissary-only regression map:
 
@@ -569,6 +617,7 @@ Retimed DVD audio and English SRT
 - Keep original DVD AC-3 as an intermediate/reference. Split at the measured source boundaries; apply segment-specific atempo; insert 5.1 silence at measured LD-only black intervals. Use 24-bit FLAC for the retimed track to avoid another lossy encode after AC-3 decoding.
 - Retimed SRT should preserve all cue text, sorted times, and episode duration; cues spanning a boundary must remain visually sensible. VobSub is a backup unless its packet timestamps receive the same piecewise retiming. Do not mux it with a global offset.
 - After every cut/offset has been independently adjudicated and recorded, run python scripts\retime_dvd_assets.py --episode <code> --dry-run; require nonnegative gaps inside the measured black, plausible tempo (0.99..1.01), and all source SRT cues retained. Then rerun without --dry-run to create the graph, retimed 5.1 FLAC, retimed SRT, segment map, and output-gap verification JSON. The helper scans the generated 5.1 output at the recorded threshold, coalesces only touching silence detections, and stops on a mismatch. Sub-50 ms gaps are LIMIT/unverified, not a confident pass; final QC reports that limitation as a warning.
+- V15 pins each post-atempo segment to its adjudicated output duration before concatenation, preventing cumulative per-segment tempo rounding from moving later gaps. The generated-output verifier scans with its recorded V15 -50 dB threshold, distinct from the episode-measured DVD silence parameters used to build the schedule. PASS, LIMIT, and FAIL remain separate; a sub-resolution gap is never promoted to PASS.
 - After both retimed assets pass validation, set mux_tracks and deliverable_tracks together to ['ld','51','srt']; keep ld_audio_source='ld_synced'. V6's Windows/Mac remux maps ld_synced, retimed_51, and retimed_srt directly into the declared deliverable; a preassembled pre_upscale track container is not required. Without a DVD, leave retime fields unset and both track lists ['ld'].
 - E01 template outputs: Z:\work\audio\dvd-51-retimed.flac, Z:\work\subs\dvd-eng-retimed.srt. Its filter graph is at Z:\work\audio\dvd-51-retimed.filter.
 - The bundled retime generator retains the graph as a review artifact and passes it with current FFmpeg -filter_complex (FFmpeg 9 does not accept the legacy -filter_complex_script option). It uses asplit when one DVD audio input feeds multiple trims; never seek the reference DVD with -ss.

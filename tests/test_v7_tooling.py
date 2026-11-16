@@ -154,6 +154,22 @@ class StageRunnerTests(unittest.TestCase):
         self.assertEqual(STAGES["measure-pad-audio"]["gate"], "stack")
         self.assertEqual(STAGES["measure-ld-black"]["gate"], "stack")
 
+    def test_retime_break_candidate_stages_are_allowlisted_and_doctor_gated(self):
+        profile = {"os": "darwin", "python": {"interpreter": sys.executable}}
+        prepare = make_action("prepare-retime-breaks", "S01E12", profile,
+                              ["--ld-threshold", "15", "--report-out", "candidates.json"], None)
+        self.assertTrue(prepare[1].endswith("prepare_retime_breaks.py"))
+        self.assertEqual(prepare[prepare.index("--episode") + 1], "S01E12")
+        self.assertIn("--report-out", prepare)
+        record = make_action("record-retime-breaks", "S01E12", profile,
+                             ["--candidate-report", "candidates.json"], None)
+        self.assertTrue(record[1].endswith("record_retime_breaks.py"))
+        self.assertNotIn("--apply", record)
+        self.assertEqual(STAGES["prepare-retime-breaks"]["gate"], "stack")
+        self.assertEqual(STAGES["record-retime-breaks"]["gate"], "inputs")
+        self.assertTrue(requires_doctor("prepare-retime-breaks"))
+        self.assertTrue(requires_doctor("record-retime-breaks"))
+
 
 class RunbookGeneratorTests(unittest.TestCase):
     def test_both_generated_variants_include_canonical_source_and_model_policy(self):

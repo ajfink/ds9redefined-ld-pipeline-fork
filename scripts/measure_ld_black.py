@@ -8,6 +8,7 @@ threshold sensitivity and the reported run to independent picture/content eviden
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from datetime import datetime, timezone
@@ -24,6 +25,14 @@ from measure_dvd_alignment import load_desc  # noqa: E402
 
 FPS = 30000.0 / 1001.0
 DEFAULT_THRESHOLDS = (5.0, 10.0, 15.0)
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def luma_runs(means, threshold: float, fps: float = FPS,
@@ -103,14 +112,19 @@ def main() -> int:
                                "threshold_matches": candidates})
 
         report = {
-            "schema": "ld-pipeline-ld-black-intervals-v1",
+            "schema": "ld-pipeline-ld-black-intervals-v2",
             "workflow_version": (ROOT / "WORKFLOW_VERSION").read_text(encoding="ascii").strip(),
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "episode": ep.code,
+            "series": ep.series,
+            "identity": ep.identity,
             "status": "CANDIDATE_ONLY",
             "fps": FPS,
+            "minimum_run_duration_s": args.min_duration,
+            "thresholds_luma_8bit": args.thresholds,
             "descriptor_shape": list(master.shape),
             "source_descriptors": str(master_path),
+            "source_descriptors_sha256": sha256_file(master_path),
             "thresholds_luma": thresholds,
             "candidate_break_matches": break_rows,
             "manifest_updated": False,

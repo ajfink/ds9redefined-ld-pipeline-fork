@@ -55,8 +55,10 @@ class V10MeasurementSafetyTests(unittest.TestCase):
                     self.assertLess(bounds["after"][0], bounds["after"][1])
 
     def test_empty_and_none_matches_are_unmeasured_without_subscript_crash(self):
-        empty = match_content_windows(None, None, None, (10.0, 20.0), 0, 0, 40, 10, 300)
+        with patch("measure_break_edges.match_window", return_value=None) as match:
+            empty = match_content_windows(None, None, None, (10.0, 20.0), 0, 0, 40, 10, 300)
         self.assertEqual(empty, {"status": "window-too-small", "before": None, "after": None})
+        self.assertEqual(match.call_count, 1)
 
         with patch("measure_break_edges.match_window", return_value=None) as match:
             result = match_content_windows(None, None, (0.0, 10.0), (20.0, 30.0),
@@ -74,6 +76,29 @@ class V10MeasurementSafetyTests(unittest.TestCase):
         self.assertEqual(result["status"], "insufficient-texture")
         self.assertIsNone(result["before"]["offset"])
         self.assertIsNone(result["after"]["offset"])
+
+    def test_valid_side_is_preserved_when_only_the_other_window_is_clipped(self):
+        measured = {"offset": -100, "score": 0.95, "runner": 0.90,
+                    "margin": 0.05, "n": 1400}
+        with patch("measure_break_edges.match_window", return_value=measured):
+            result = match_content_windows(
+                None, None, (0.0, 10.0), None, -100, 0, 40, 10, 300)
+        self.assertEqual(result["status"], "partial-window")
+        self.assertEqual(result["before"], measured)
+        self.assertIsNone(result["after"])
+        self.assertEqual(report_exit_code([result]), 1)
+
+    def test_valid_side_is_preserved_when_the_other_match_is_rejected(self):
+        measured = {"offset": -100, "score": 0.95, "runner": 0.90,
+                    "margin": 0.05, "n": 1400}
+        low = {"offset": None, "score": None, "runner": None, "n": 12}
+        with patch("measure_break_edges.match_window", side_effect=[measured, low]):
+            result = match_content_windows(
+                None, None, (0.0, 10.0), (20.0, 30.0), -100, -90, 40, 10, 300)
+        self.assertEqual(result["status"], "partial-measurement")
+        self.assertEqual(result["before"], measured)
+        self.assertEqual(result["after"], low)
+        self.assertEqual(report_exit_code([result]), 1)
 
     def test_unresolved_edges_keep_the_report_exit_nonzero(self):
         self.assertEqual(report_exit_code([{"status": "measured"}]), 0)

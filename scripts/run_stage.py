@@ -48,6 +48,8 @@ STAGES = {
     "master-descriptors": {"kind": "python", "script": "extract_video_descriptors.py", "fixed_args": ["--source", "master"], "gate": "stack", "write": True},
     "dvd-descriptors": {"kind": "python", "script": "extract_video_descriptors.py", "fixed_args": ["--source", "dvd"], "gate": "stack", "write": True},
     "measure-dvd-alignment": {"kind": "python", "script": "measure_dvd_alignment.py", "gate": "stack", "write": True},
+    "prepare-retime-breaks": {"kind": "python", "script": "prepare_retime_breaks.py", "gate": "stack", "write": True},
+    "record-retime-breaks": {"kind": "python", "script": "record_retime_breaks.py", "gate": "inputs", "write": True},
     "measure-break-edges": {"kind": "python", "script": "measure_break_edges.py", "gate": "stack", "write": True},
     "measure-audio-rate": {"kind": "python", "script": "measure_audio_rate.py", "write": True},
     "measure-pad-audio": {"kind": "python", "script": "measure_pad_audio.py", "gate": "stack", "write": True},

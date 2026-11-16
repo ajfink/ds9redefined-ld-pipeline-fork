@@ -142,9 +142,39 @@ def verify_expected_gaps(expected_gaps: list[dict], detected: list[tuple[float, 
             "gaps": rows, "detected_interval_count": len(intervals)}
 
 
+# Verification scan threshold. -40 dB merged quiet post-break content into planned
+# gaps on S01E12 (scene-opening ambience whose samples sit between -40 and -50 dB
+# inflated B1 by 1223 ms); at -50 dB the same FLAC yields exactly the 17 gaps plus
+# head/tail with B1 matching plan to ~1 ms, and digital anullsrc gaps remain
+# detectable at any threshold. See the S01E12 retime-verification episode log.
+VERIFY_NOISE_DB = -50
+
+
+def silencedetect_filter() -> str:
+    """FFmpeg silence-detect expression used to verify the generated output."""
+    return f"silencedetect=noise={VERIFY_NOISE_DB}dB:d=0.015"
+
+
+def segment_chain(index: int, src_start: float, src_end: float, tempo: float,
+                  dst_span: float) -> str:
+    """atrim -> asetpts -> atempo, then pin the segment to exactly ``dst_span``.
+
+    ``atempo`` output length deviates from input/tempo by 14-31 ppm (measured in
+    isolation on S01E12: decode+atrim is sample-exact, the A0 chain lost 267
+    samples). The error accumulates across segments and shifts later gaps earlier
+    (-76 ms over S01E12's 18 segments, past the 70 ms verification tolerance).
+    ``apad``+``atrim`` pin each segment's output so every gap lands at its planned
+    position; the <=11 ms correction sits at the segment end, adjacent to the
+    following gap, where it is absorbed by that gap.
+    """
+    return (f"[src{index}]atrim=start={src_start:.6f}:end={src_end:.6f},"
+            f"asetpts=PTS-STARTPTS,atempo={tempo:.9f},"
+            f"apad=whole_dur={dst_span:.6f},atrim=duration={dst_span:.6f}[a{index}]")
+
+
 def scan_retimed_gaps(ld: Ld, audio_path: Path, expected_gaps: list[dict]) -> dict:
     cmd = [ld.ffmpeg(), "-hide_banner", "-nostats", "-i", str(audio_path), "-map", "0:a:0",
-           "-af", "silencedetect=noise=-40dB:d=0.015", "-f", "null", "-"]
+           "-af", silencedetect_filter(), "-f", "null", "-"]
     proc = run(cmd)
     if proc.returncode:
         raise PipelineError(f"FFmpeg output-silence verification failed (exit {proc.returncode}): {proc.stderr[-800:]}")
@@ -298,7 +328,7 @@ def main() -> int:
     graph = [f"[{selector}]asplit={n}" + "".join(f"[src{i}]" for i in range(n))]
     concat = []
     for i, (s0, s1, d0, d1, tempo) in enumerate(segments):
-        graph.append(f"[src{i}]atrim=start={s0:.6f}:end={s1:.6f},asetpts=PTS-STARTPTS,atempo={tempo:.9f}[a{i}]")
+        graph.append(segment_chain(i, s0, s1, tempo, d1 - d0))
         concat.append(f"[a{i}]")
         if i < len(gaps) and gaps[i] > 0:
             graph.append(f"anullsrc=r=48000:cl={channel_layout}:d={gaps[i]:.9f}[g{i}]")
@@ -373,7 +403,7 @@ def main() -> int:
         "episode": ep.code,
         "audio": str(audio_out),
         "map": str(map_out),
-        "method": "FFmpeg silencedetect on generated 5.1 output; -40 dB, 15 ms minimum; only touching intervals coalesced",
+        "method": f"FFmpeg silencedetect on generated 5.1 output; {VERIFY_NOISE_DB} dB, 15 ms minimum; only touching intervals coalesced",
         "manifest_updated": False,
     })
     if verification["status"] == "LIMIT":

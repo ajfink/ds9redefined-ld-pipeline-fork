@@ -12,13 +12,26 @@ from generate_runbooks import OUTPUTS, generated_text  # noqa: E402
 
 class QueueWorkflowBoundaryTests(unittest.TestCase):
     def test_all_queue_documents_start_with_a_live_workflow_warning(self):
-        for name in ("V9-QUEUE.md", "V10-QUEUE.md", "V11-QUEUE.md", "V12-QUEUE.md", "V13-QUEUE.md", "V14-QUEUE.md"):
+        for name in ("V9-QUEUE.md", "V10-QUEUE.md", "V11-QUEUE.md", "V12-QUEUE.md", "V13-QUEUE.md", "V14-QUEUE.md", "V15-QUEUE.md"):
             with self.subTest(name=name):
                 lines = (ROOT / name).read_text(encoding="utf-8").splitlines()
                 self.assertTrue(lines[0].startswith("> **NOT FOR LIVE WORKFLOW USE.**"))
                 warning = " ".join(line.replace(">", " ").strip() for line in lines[:5]).casefold()
                 self.assertTrue("do not cite or apply" in warning or
                                 "do not read, cite, or apply" in warning)
+
+    def test_v15_queue_scopes_changelogs_and_reusable_break_tools_safely(self):
+        text = " ".join((ROOT / "V15-QUEUE.md").read_text(encoding="utf-8").casefold().split())
+        self.assertIn("changelog.txt", text)
+        self.assertIn("ignored by normal episode workflow execution", text)
+        self.assertIn("retrospective records only", text)
+        for required in (
+            "parameter overrides", "ambiguous", "dry-run/report-only is the default",
+            "no-overwrite backup", "atomically replace", "synthetic descriptor/interval fixtures",
+            "must not automatically choose an edge",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, text)
 
     def test_readme_and_canonical_runbook_exclude_queues_from_live_sources(self):
         for path in (ROOT / "README.md", ROOT / "DS9 LaserDisc OpenCode Runbook.md"):
@@ -28,6 +41,9 @@ class QueueWorkflowBoundaryTests(unittest.TestCase):
                 self.assertTrue("Live-run authority" in text or "Live-workflow source boundary" in text)
                 self.assertIn("Do not read, cite, or", text)
                 self.assertIn("active", text.casefold())
+                self.assertIn("changelog.txt", text)
+                self.assertIn("retrospective", text.casefold())
+                self.assertIn("not live workflow inputs", text.casefold())
 
     def test_generated_model_runbooks_keep_the_queue_boundary(self):
         for name in OUTPUTS:
@@ -35,6 +51,8 @@ class QueueWorkflowBoundaryTests(unittest.TestCase):
                 output = generated_text(name)
                 self.assertIn("V*-QUEUE.md", output)
                 self.assertIn("Live-run authority", output)
+                self.assertIn("changelog.txt", output)
+                self.assertIn("not live workflow inputs", output.casefold())
 
 
 if __name__ == "__main__":

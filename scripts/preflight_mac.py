@@ -447,7 +447,8 @@ def main() -> int:
     required_scripts = (
         "build_map_vpy.py", "build_map.ps1", "build_stack_project.py",
         "select_stack_reference.py", "extract_video_descriptors.py",
-        "measure_dvd_alignment.py", "measure_break_edges.py",
+        "measure_dvd_alignment.py", "prepare_retime_breaks.py", "record_retime_breaks.py",
+        "retime_break_candidates.py", "measure_break_edges.py",
         "measure_audio_rate.py", "audio_timing_diagnostic.py", "build_ld_synced.py",
         "measure_pad_audio.py", "measure_ld_black.py", "efm_paths.py",
         "retime_dvd_assets.py", "av_check_output.py", "ld_only_sync_check.py",

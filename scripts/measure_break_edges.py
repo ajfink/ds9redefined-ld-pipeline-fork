@@ -132,17 +132,25 @@ def content_window_bounds(breaks, index: int, window_s: float,
 def match_content_windows(master, dvd_norm, before_bounds, after_bounds,
                           dp_before: float, dp_after: float, search: int,
                           texture_std: float, min_frames: int) -> dict:
-    """Match both sides safely, preserving empty/low-texture outcomes as unmeasured."""
-    if before_bounds is None or after_bounds is None:
+    """Match each side independently; preserve a valid side when its pair is unusable.
+
+    The row remains non-measured unless both offsets pass the existing texture gate.
+    This is evidence preservation only; it does not infer a missing edge or permit a
+    partial result to be written to the manifest.
+    """
+    before = (match_window(master, dvd_norm, *before_bounds, dp_before, search,
+                           texture_std, min_frames) if before_bounds is not None else None)
+    after = (match_window(master, dvd_norm, *after_bounds, dp_after, search,
+                          texture_std, min_frames) if after_bounds is not None else None)
+    if before is None and after is None:
         return {"status": "window-too-small", "before": None, "after": None}
-    before = match_window(master, dvd_norm, *before_bounds, dp_before, search,
-                          texture_std, min_frames)
-    after = match_window(master, dvd_norm, *after_bounds, dp_after, search,
-                         texture_std, min_frames)
     if before is None or after is None:
-        return {"status": "window-too-small", "before": before, "after": after}
-    if before.get("offset") is None or after.get("offset") is None:
-        return {"status": "insufficient-texture", "before": before, "after": after}
+        return {"status": "partial-window", "before": before, "after": after}
+    before_ok = before is not None and before.get("offset") is not None
+    after_ok = after is not None and after.get("offset") is not None
+    if not before_ok or not after_ok:
+        status = "partial-measurement" if before_ok != after_ok else "insufficient-texture"
+        return {"status": status, "before": before, "after": after}
     return {"status": "measured", "before": before, "after": after}
 
 
@@ -202,9 +210,17 @@ def main()->int:
         before,after=matched["before"],matched["after"]
         if matched["status"] != "measured":
             row={"label":b.get('label',f"B{i}"),"status":matched["status"],"ld_black_start":b0,"ld_black_end":b1,
-                         "dp_before":dpb,"dp_after":dpa,
-                         "n_before":before.get('n') if before else None,
-                         "n_after":after.get('n') if after else None,
+                          "dp_before":dpb,"dp_after":dpa,
+                          "content_before":before.get('offset') if before else None,
+                          "ncc_before":before.get('score') if before else None,
+                          "runner_before":before.get('runner') if before else None,
+                          "margin_before":before.get('margin') if before else None,
+                          "n_before":before.get('n') if before else None,
+                          "content_after":after.get('offset') if after else None,
+                          "ncc_after":after.get('score') if after else None,
+                          "runner_after":after.get('runner') if after else None,
+                          "margin_after":after.get('margin') if after else None,
+                          "n_after":after.get('n') if after else None,
                          "window_before_start":before_lo,"window_before_end":before_hi,
                          "window_after_start":after_lo,"window_after_end":after_hi,
                          "before_window_clipped":windows['before_clipped'],

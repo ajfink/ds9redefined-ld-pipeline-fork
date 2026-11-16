@@ -197,3 +197,19 @@ FROM Version 13 -> Version 14
   PowerShell parsing checks passed. The metadata snapshot was read-only; no media was downloaded. See `V14-QUEUE.md` and
   `V14-RELEASE.md`. GitHub is at V14; W's source files are synchronized without changing its
   stale Git metadata or unrelated local changes.
+
+Version 15 (2026-11-16)
+FROM Version 14 -> Version 15
+- Made changelogs retrospective-only in live episode work, with the boundary in the README,
+  canonical runbook, and generated operator guides.
+- Added report-only, series-aware break-candidate pairing with explicit thresholds, coverage,
+  ambiguity/collision reporting, and no automatic nearest-pair or offset decisions.
+- Added a separate preview-first recorder with review identity/report-digest confirmation,
+  verified-input checks, locking, a verified no-overwrite backup, atomic manifest replacement,
+  and post-write validation. Unresolved offsets/steps remain null.
+- Preserved one-sided break-edge evidence while keeping incomplete results nonzero; pinned
+  retimed audio segment durations and recorded the generated-output silence scan threshold.
+- Validation: **231 passed, 7 skipped**; compileall, warnings-as-errors imports, generated
+  runbooks and byte-identical plain-text output, all 7 PowerShell parser checks, and diff check
+  passed. No episode media/download/encode/remux was run for release validation. See
+  `V15-RELEASE.md` and the authoring-device V15 change record.
