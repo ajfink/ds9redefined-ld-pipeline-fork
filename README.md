@@ -585,6 +585,9 @@ does not ask the user to type the code. Open local accepts a folder or listed so
 from a local rip, checks TBC/JSON/optional EFM pairing, and skips the download stage. It
 creates local fingerprint evidence without claiming Archive authenticity; an existing
 `download-manifest.csv` is useful provenance but is not required.
+Likely raw-RF captures (`.lds`, `.ldf`, `.s16`, `.raw`) are detected as “decode required”
+and are not sent to the TBC stack. `.flac`/`.wav` alone is ambiguous without format metadata.
+Raw-RF decoding is a planned future capability, not part of this local-inventory flow.
 The **Resolve episode/workspace** button appears only for URL mode; local selection resolves
 the episode from its manifest automatically. Both flows derive the manifest location from
 the selected profile. Shared/device-workspace profiles use

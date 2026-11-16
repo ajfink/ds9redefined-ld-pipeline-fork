@@ -12,6 +12,8 @@ from typing import Any
 EPISODE_RE = re.compile(r"S\d{2}E\d{2}", re.IGNORECASE)
 CAPTURE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
 EDGE_BYTES = 4 * 1024 * 1024
+RAW_RF_SUFFIXES = (".lds", ".ldf", ".s16", ".raw")
+AMBIGUOUS_RF_SUFFIXES = (".flac", ".wav")
 
 
 class LocalSourceError(ValueError):
@@ -32,6 +34,14 @@ def _selected_root(path_value: str | Path) -> tuple[Path, Path | None]:
     if selected.is_file() and selected.name.casefold().endswith(
             (".tbc", ".tbc.json", ".efm", ".efm.7z", "download-manifest.csv")):
         return selected.parent, selected
+    if selected.is_file() and selected.suffix.casefold() in RAW_RF_SUFFIXES:
+        raise LocalSourceError(
+            f"raw RF capture detected ({selected.suffix}); this intake currently needs decoded .tbc files. "
+            "Raw-RF decoding is planned but not implemented yet")
+    if selected.is_file() and selected.suffix.casefold() in AMBIGUOUS_RF_SUFFIXES:
+        raise LocalSourceError(
+            f"{selected.suffix} alone does not identify the source format (it may be audio or RF); "
+            "identify its format or select a decoded TBC folder. Raw-RF decoding is not implemented yet")
     raise LocalSourceError(
         "select a folder or one existing TBC, TBC JSON, EFM, or download-manifest.csv file")
 
@@ -43,6 +53,18 @@ def inspect_local_source(path_value: str | Path) -> dict[str, Any]:
                         if p.is_file() and p.suffix.casefold() == ".tbc"),
                        key=lambda p: p.name.casefold())
     if not 2 <= len(tbc_paths) <= 6:
+        raw_rf = sorted(p.name for p in source_dir.iterdir()
+                        if p.is_file() and p.suffix.casefold() in RAW_RF_SUFFIXES)
+        ambiguous = sorted(p.name for p in source_dir.iterdir()
+                           if p.is_file() and p.suffix.casefold() in AMBIGUOUS_RF_SUFFIXES)
+        if raw_rf:
+            raise LocalSourceError(
+                "raw RF capture(s) detected: " + ", ".join(raw_rf[:6]) +
+                ". This intake currently needs decoded .tbc captures; raw-RF decoding is planned but not implemented yet")
+        if not tbc_paths and ambiguous:
+            raise LocalSourceError(
+                "only .flac/.wav files were found and their role is ambiguous (audio vs RF); "
+                "identify the format or select a decoded TBC folder")
         raise LocalSourceError(f"local source needs 2..6 TBC captures for the weighted-stack workflow; found {len(tbc_paths)}")
 
     archive_ids: set[str] = set()
@@ -123,6 +145,8 @@ def inspect_local_source(path_value: str | Path) -> dict[str, Any]:
         known.add(csv_path.name.casefold())
     ignored = sorted(p.name for p in source_dir.iterdir()
                      if p.is_file() and p.name.casefold() not in known)
+    raw_rf_files = sorted(p.name for p in source_dir.iterdir()
+                          if p.is_file() and p.suffix.casefold() in RAW_RF_SUFFIXES)
     return {
         "schema": "ld-pipeline-local-source-scan-v1",
         "source_dir": str(source_dir),
@@ -132,6 +156,7 @@ def inspect_local_source(path_value: str | Path) -> dict[str, Any]:
         "download_manifest_present": csv_path.is_file(),
         "optional_manifest_warning": optional_manifest_warning,
         "captures": captures,
+        "raw_rf_files": raw_rf_files,
         "ignored_files": ignored,
     }
 
@@ -183,5 +208,6 @@ def build_local_source_report(scan: dict[str, Any], *, policy: str = "balanced")
         "verification_method": "local SHA-256 file fingerprint; not proof of Archive origin or authenticity",
         "fingerprint_policy": policy,
         "captures": captured,
+        "raw_rf_files": scan.get("raw_rf_files", []),
         "ignored_files": scan.get("ignored_files", []),
     }

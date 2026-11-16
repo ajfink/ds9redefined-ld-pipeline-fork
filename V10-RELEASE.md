@@ -45,6 +45,9 @@ pull request was created.
   fingerprints are explicitly not Archive-verified, and local mode makes no Archive metadata
   request. URL mode retains the existing Archive metadata/hash verification. URL mode alone
   shows the episode/workspace resolver; local mode uses folder/file pickers.
+- Local intake recognizes likely raw-RF files (`.lds`, `.ldf`, `.s16`, `.raw`) and stops with
+  a decode-required message instead of treating them as TBC. Standalone `.flac`/`.wav` inputs
+  are reported as ambiguous. Raw-RF decoding remains a future workflow capability.
 
 ## Validation and limits
 

@@ -306,7 +306,8 @@ class WorkflowApp:
     def _browse_local_file(self) -> None:
         path = filedialog.askopenfilename(
             title="Select one local LaserDisc capture or sidecar file",
-            filetypes=(("LaserDisc source/evidence files", "*.tbc *.tbc.json *.efm *.efm.7z download-manifest.csv"),
+            filetypes=(("Decoded TBC and possible RF sources",
+                        "*.tbc *.tbc.json *.efm *.efm.7z download-manifest.csv *.lds *.ldf *.s16 *.raw *.flac *.wav"),
                        ("All files", "*.*")))
         if path:
             self._local_source_selected(Path(path))
@@ -316,6 +317,13 @@ class WorkflowApp:
             source = resolve_local_source(path)
         except WorkflowAppError as exc:
             messagebox.showerror("Local source not accepted", str(exc), parent=self.root)
+            return
+        raw_rf = source.get("raw_rf_files") or []
+        if raw_rf and not messagebox.askyesno(
+                "Raw RF files also present",
+                "This folder contains likely raw RF capture(s): " + ", ".join(raw_rf[:6]) +
+                "\n\nRaw RF is not decoded by this intake. Continue using only the decoded TBC captures?",
+                parent=self.root):
             return
         self.source_mode_var.set("local")
         self.values["source_mode"].set("local")

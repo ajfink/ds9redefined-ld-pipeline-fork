@@ -134,6 +134,8 @@ FROM fork Version 9 -> fork Version 10
   default per-user profile, derives the manifest/workspace path, provides tooltips, and supports
   Archive URL or local source inventory without requiring `download-manifest.csv`, exact DVD/no-DVD plan generation,
   preview, execution, resume, and explicit human review approval; the CLI remains supported.
+- Local intake recognizes common raw-RF extensions as “decode required” rather than passing
+  them to the TBC pipeline; raw-RF decoding remains future work.
 - Interim intake policy: AI-prompted URLs, DVD selections/paths, and settings are acceptable
   inputs, but confirmed values must also be persisted and validated in the designated config
   or plan, not left only in chat.

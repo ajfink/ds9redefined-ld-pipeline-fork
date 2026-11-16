@@ -160,6 +160,15 @@ class WorkflowAppPlanTests(unittest.TestCase):
             self.assertEqual(from_folder["episode"], "S01E07")
             self.assertFalse(from_folder["download_manifest_present"])
             self.assertEqual(from_file["source_dir"], str(folder.resolve()))
+            (folder / "DS9-S01E07-raw.lds").write_bytes(b"raw RF fixture")
+            self.assertIn("DS9-S01E07-raw.lds", resolve_local_source(folder)["raw_rf_files"])
+            with self.assertRaisesRegex(WorkflowAppError, "raw RF capture detected"):
+                resolve_local_source(folder / "DS9-S01E07-raw.lds")
+            raw_only = root / "DS9-S01E08-raw"
+            raw_only.mkdir()
+            (raw_only / "DS9-S01E08-raw.ldf").write_bytes(b"raw RF fixture")
+            with self.assertRaisesRegex(WorkflowAppError, r"raw RF capture\(s\) detected"):
+                resolve_local_source(raw_only)
 
     def test_local_intake_plan_skips_download_and_tracks_local_source_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
