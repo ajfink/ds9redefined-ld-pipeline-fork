@@ -20,6 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from ldcommon import Ld, PipelineError, load_episode  # noqa: E402
+from local_source import LocalSourceError, fingerprint_file  # noqa: E402
 
 STAGES = ("manifest", "inputs", "stack", "cadence", "audio", "retime", "encode", "padfix", "deliverable")
 
@@ -65,6 +66,76 @@ def nonnull(data: dict, section: str, key: str) -> bool:
     return isinstance(data.get(section), dict) and data[section].get(key) is not None
 
 
+def validate_local_inventory(checks: Checks, episode_data: dict, captures: list[dict],
+                             downloads: Path, report: dict | None) -> None:
+    if not isinstance(report, dict):
+        checks.add("FAIL", "local-source-inventory", "manifest has no embedded local inventory evidence")
+        return
+    provenance = episode_data.get("source_provenance") or {}
+    checks.require(provenance.get("mode") == "local-inventory" and
+                   provenance.get("archive_verified") is False,
+                   "source-provenance", "local inventory is not Archive-verified")
+    checks.require(report.get("schema") == "ld-pipeline-local-source-inventory-v1" and
+                   report.get("source_mode") == "local-inventory" and
+                   report.get("archive_verified") is False,
+                   "local-source-inventory-schema", str(report.get("schema")))
+    checks.require(report.get("episode") == episode_data.get("episode"),
+                   "local-source-inventory-episode", str(report.get("episode")))
+    policy = report.get("fingerprint_policy")
+    checks.require(policy in ("balanced", "full"), "local-source-fingerprint-policy", str(policy))
+    report_captures = report.get("captures")
+    if not isinstance(report_captures, list):
+        checks.add("FAIL", "local-source-capture-inventory", "inventory captures must be an array")
+        return
+    by_label = {str(row.get("label", "")): row for row in report_captures if isinstance(row, dict)}
+    labels = [str(row.get("label", "")) for row in report_captures if isinstance(row, dict)]
+    checks.require(len(by_label) == len(report_captures) and len(labels) == len(set(labels)),
+                   "local-source-capture-labels", f"labels={labels}")
+    checks.require(set(by_label) == {str(row.get("label", "")) for row in captures},
+                   "local-source-capture-match", f"inventory={sorted(by_label)} manifest={[row.get('label') for row in captures]}")
+
+    for capture in captures:
+        label = str(capture.get("label", ""))
+        recorded = by_label.get(label)
+        if not recorded:
+            continue
+        files = recorded.get("files") or {}
+        for role, key, bytes_key in (("TBC", "tbc", "tbc_bytes"),
+                                     ("TBC JSON", "json", "json_bytes"),
+                                     ("EFM", "efm", "efm_bytes")):
+            name = str(capture.get(f"{key}_file") or "")
+            if not name:
+                if role == "EFM":
+                    checks.add("WARN", f"{label}:{role}", "no raw EFM recorded for this capture")
+                else:
+                    checks.add("FAIL", f"{label}:{role}", "filename not identified")
+                continue
+            entry = files.get(key) if isinstance(files, dict) else None
+            if not isinstance(entry, dict):
+                checks.add("FAIL", f"{label}:{role}:fingerprint", "file is missing from local inventory report")
+                continue
+            checks.require(entry.get("name") == name, f"{label}:{role}:name",
+                           f"inventory={entry.get('name')!r}; manifest={name!r}")
+            path = downloads / name
+            okay = checks.file(path, f"{label}:{role}")
+            if not okay:
+                continue
+            expected_size = capture.get(bytes_key)
+            if expected_size is not None:
+                checks.require(path.stat().st_size == int(expected_size) == int(entry.get("size_bytes", -1)),
+                               f"{label}:{role}:size",
+                               f"actual={path.stat().st_size}; manifest={expected_size}; inventory={entry.get('size_bytes')}")
+            try:
+                actual = fingerprint_file(path, str(policy))
+            except (LocalSourceError, OSError) as exc:
+                checks.add("FAIL", f"{label}:{role}:fingerprint", str(exc))
+                continue
+            expected = {key: entry.get(key) for key in ("size_bytes", "mtime_ns", "sha256", "hash_scope")}
+            checks.require(actual == expected, f"{label}:{role}:fingerprint",
+                           f"policy={policy}; local source fingerprint changed" if actual != expected else
+                           f"policy={policy}; {actual['hash_scope']} SHA-256 matches")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--episode", required=True)
@@ -106,56 +177,62 @@ def main() -> int:
     if args.stage in ("inputs", "manifest"):
         downloads = ep.downloads()
         c.require(downloads.is_dir(), "download-folder", str(downloads))
-        manifest_path = downloads / "download-manifest.csv"
-        c.file(manifest_path, "download-manifest")
-        rows = {}
-        if manifest_path.is_file():
-            try:
-                with manifest_path.open(newline="", encoding="utf-8-sig") as f:
-                    rows = {r.get("Name", ""): r for r in csv.DictReader(f)}
-            except (OSError, csv.Error) as e:
-                c.add("FAIL", "download-manifest", str(e))
-        for cap in captures:
-            label = cap.get("label", "")
-            tbc_name = cap.get("tbc_file")
-            json_name = cap.get("json_file")
-            if not tbc_name:
-                hits = list(downloads.glob(f"*-{label}.tbc"))
-                tbc_name = hits[0].name if len(hits) == 1 else None
-            if not json_name and tbc_name:
-                json_name = f"{tbc_name}.json"
-            efm_name = cap.get("efm_file")
-            if not efm_name and tbc_name:
-                base = tbc_name[:-4]
-                efm_hits = [n for n in rows if n.casefold() in (f"{base}.efm".casefold(), f"{base}.efm.7z".casefold())]
-                if len(efm_hits) == 1:
-                    efm_name = efm_hits[0]
-            for role, name, bytes_key, hash_key in (
-                ("TBC", tbc_name, "tbc_bytes", "tbc_md5"),
-                ("TBC JSON", json_name, "json_bytes", "json_md5"),
-                ("EFM", efm_name, "efm_bytes", "efm_md5"),
-            ):
-                if not name:
-                    if role == "EFM":
-                        c.add("WARN", f"{label}:{role}", "no raw EFM recorded for this capture")
+        provenance = d.get("source_provenance") or {}
+        if provenance.get("mode") == "local-inventory":
+            inventory = provenance.get("inventory")
+            validate_local_inventory(c, d, captures, downloads, inventory)
+            c.add("WARN", "source-origin", "local inventory fingerprints do not establish Archive origin/authenticity")
+        else:
+            manifest_path = downloads / "download-manifest.csv"
+            c.file(manifest_path, "download-manifest")
+            rows = {}
+            if manifest_path.is_file():
+                try:
+                    with manifest_path.open(newline="", encoding="utf-8-sig") as f:
+                        rows = {r.get("Name", ""): r for r in csv.DictReader(f)}
+                except (OSError, csv.Error) as e:
+                    c.add("FAIL", "download-manifest", str(e))
+            for cap in captures:
+                label = cap.get("label", "")
+                tbc_name = cap.get("tbc_file")
+                json_name = cap.get("json_file")
+                if not tbc_name:
+                    hits = list(downloads.glob(f"*-{label}.tbc"))
+                    tbc_name = hits[0].name if len(hits) == 1 else None
+                if not json_name and tbc_name:
+                    json_name = f"{tbc_name}.json"
+                efm_name = cap.get("efm_file")
+                if not efm_name and tbc_name:
+                    base = tbc_name[:-4]
+                    efm_hits = [n for n in rows if n.casefold() in (f"{base}.efm".casefold(), f"{base}.efm.7z".casefold())]
+                    if len(efm_hits) == 1:
+                        efm_name = efm_hits[0]
+                for role, name, bytes_key, hash_key in (
+                    ("TBC", tbc_name, "tbc_bytes", "tbc_md5"),
+                    ("TBC JSON", json_name, "json_bytes", "json_md5"),
+                    ("EFM", efm_name, "efm_bytes", "efm_md5"),
+                ):
+                    if not name:
+                        if role == "EFM":
+                            c.add("WARN", f"{label}:{role}", "no raw EFM recorded for this capture")
+                        else:
+                            c.add("FAIL", f"{label}:{role}", "filename not identified")
+                        continue
+                    path = downloads / name
+                    okay = c.file(path, f"{label}:{role}")
+                    row = rows.get(name)
+                    if row:
+                        c.require(row.get("Status") == "verified", f"{label}:{role}:download-status", str(row.get("Status")))
                     else:
-                        c.add("FAIL", f"{label}:{role}", "filename not identified")
-                    continue
-                path = downloads / name
-                ok = c.file(path, f"{label}:{role}")
-                row = rows.get(name)
-                if row:
-                    c.require(row.get("Status") == "verified", f"{label}:{role}:download-status", str(row.get("Status")))
-                else:
-                    c.add("FAIL", f"{label}:{role}:download-status", f"not present in {manifest_path.name}")
-                expected_size, expected_hash = cap.get(bytes_key), cap.get(hash_key)
-                if expected_size is not None and ok:
-                    c.require(path.stat().st_size == int(expected_size), f"{label}:{role}:size",
-                              f"actual={path.stat().st_size} expected={expected_size}")
-                if args.check_hashes and expected_hash and ok:
-                    actual = md5(path)
-                    c.require(actual.lower() == str(expected_hash).lower(), f"{label}:{role}:md5",
-                              f"actual={actual} expected={expected_hash}")
+                        c.add("FAIL", f"{label}:{role}:download-status", f"not present in {manifest_path.name}")
+                    expected_size, expected_hash = cap.get(bytes_key), cap.get(hash_key)
+                    if expected_size is not None and okay:
+                        c.require(path.stat().st_size == int(expected_size), f"{label}:{role}:size",
+                                  f"actual={path.stat().st_size} expected={expected_size}")
+                    if args.check_hashes and expected_hash and okay:
+                        actual = md5(path)
+                        c.require(actual.lower() == str(expected_hash).lower(), f"{label}:{role}:md5",
+                                  f"actual={actual} expected={expected_hash}")
 
     if args.stage in ("stack", "cadence", "audio", "retime", "encode", "padfix", "deliverable"):
         c.require(ref in labels, "stack-reference", f"reference capture {ref!r} must be declared")

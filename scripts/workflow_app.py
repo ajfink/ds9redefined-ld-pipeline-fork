@@ -43,9 +43,9 @@ FIELD_LABELS = {
 }
 
 FIELD_HELP = {
-    "source_mode": ("Archive URL mode downloads verified Archive files. Open local skips downloading but requires a "
-                    "previously downloaded folder/file with a verified download-manifest.csv; it still checks that "
-                    "inventory against Archive metadata."),
+    "source_mode": ("Archive URL mode downloads and verifies Archive files. Open local skips downloading and "
+                    "needs matching TBC/JSON capture files; download-manifest.csv is optional. Local fingerprints "
+                    "record files but do not prove Archive origin/authenticity."),
     "archive_url": ("Paste the canonical HTTPS archive.org/details/<item> URL. The app derives the episode code "
                     "from the item ID when possible, otherwise it can inspect Archive metadata."),
     "confirmed_title": ("The title written into the new episode manifest and audit record. Confirm it against "
@@ -62,9 +62,9 @@ FIELD_HELP = {
     "manifest_path": ("Automatically selected new manifest output. Shared/device-workspace profiles use the "
                        "collision-safe devices/<device-instance>/episodes/<code>/manifest layout; local profiles "
                        "use the existing local manifest location. The manifest is never overwritten."),
-    "local_source_path": ("Select an existing folder or one file from a previously downloaded Archive item. "
-                          "The folder must contain download-manifest.csv with verified rows and one ArchiveId; "
-                          "the initializer will recheck that inventory against Archive metadata."),
+    "local_source_path": ("Select an existing folder or one TBC/JSON/EFM file in it. The app checks capture/sidecar "
+                          "pairing and fingerprints local files; a download manifest is not required. This records "
+                          "local provenance, not Archive authenticity."),
     "episode": ("Detected from the Archive item ID or its metadata. Confirm the URL/item is the intended episode; "
                 "the code is not manually entered."),
     "profile": ("Machine profile used by the workflow. Existing profiles in the default per-user profile folder "
@@ -222,7 +222,7 @@ class WorkflowApp:
                 self.resolve_button.grid(row=row, column=2, padx=(6, 0), pady=3)
             browse = self._browse_handler(key)
             if browse:
-                button = ttk.Button(form, text="Browse…", command=browse)
+                button = ttk.Button(form, text="Select DVD…", command=browse)
                 button.grid(row=row, column=2, padx=(6, 0), pady=3)
                 self.browse_buttons[key] = button
         self.local_source_frame = ttk.Frame(form)
@@ -298,15 +298,15 @@ class WorkflowApp:
         return handlers.get(key)
 
     def _browse_local_folder(self) -> None:
-        path = filedialog.askdirectory(title="Select an existing verified Archive download folder",
+        path = filedialog.askdirectory(title="Select an existing local LaserDisc capture folder",
                                        mustexist=True)
         if path:
             self._local_source_selected(Path(path))
 
     def _browse_local_file(self) -> None:
         path = filedialog.askopenfilename(
-            title="Select a file from an existing verified Archive download folder",
-            filetypes=(("LaserDisc source/evidence files", "download-manifest.csv *.tbc *.tbc.json *.efm *.efm.7z"),
+            title="Select one local LaserDisc capture or sidecar file",
+            filetypes=(("LaserDisc source/evidence files", "*.tbc *.tbc.json *.efm *.efm.7z download-manifest.csv"),
                        ("All files", "*.*")))
         if path:
             self._local_source_selected(Path(path))
@@ -323,11 +323,10 @@ class WorkflowApp:
         self.values["local_source_path"].set(source["selected_path"])
         self.values["downloads_dir"].set(source["source_dir"])
         self._suppress_archive_trace = True
-        self.values["archive_url"].set(source["archive_url"])
+        self.values["archive_url"].set("")
         self._suppress_archive_trace = False
         self._update_source_controls()
-        self._finish_episode_resolution(source["archive_url"], source["episode"],
-                                        "local verified download manifest")
+        self._finish_episode_resolution(f"local:{source['selected_path']}", source["episode"], "local source inventory")
 
     def _source_mode_changed(self) -> None:
         mode = self.source_mode_var.get()
@@ -629,11 +628,20 @@ class WorkflowApp:
         for key, button in self.browse_buttons.items():
             enabled = self.form_editable and (key != "dvd_path" or mode == "dvd-backed")
             button.configure(state="normal" if enabled else "disabled")
+        dvd_visible = mode == "dvd-backed"
+        for widget in (self.field_labels["dvd_path"], self.entries["dvd_path"],
+                       self.browse_buttons.get("dvd_path")):
+            if widget is None:
+                continue
+            if dvd_visible:
+                widget.grid()
+            else:
+                widget.grid_remove()
         if hasattr(self, "resolve_button"):
             enabled = self.form_editable and bool(self.values["archive_url"].get().strip()) and not self.resolving_episode
             self.resolve_button.configure(state="normal" if enabled else "disabled")
         if self.source_mode_var.get() == "local":
-            self.mode_note.configure(text="Open local uses the selected folder/file and its verified download-manifest.csv; it skips downloading but still checks the inventory against Archive metadata.")
+            self.mode_note.configure(text="Open local skips downloading. It inventories matching TBC/JSON/optional EFM files and records local fingerprints; Archive origin/authenticity is not asserted.")
         elif mode == "dvd-backed":
             self.mode_note.configure(text="DVD-backed mode passes the selected exact file to initialization. Verify it is the matching episode. The new manifest path must be in the selected profile/workspace's expected manifest folder.")
         elif mode == "no-dvd":
@@ -682,11 +690,13 @@ class WorkflowApp:
         if not self.template or not self.template_path:
             messagebox.showerror("No intake template", "Load an intake template first.", parent=self.root)
             return
-        archive_url = self.values["archive_url"].get().strip()
-        if (not self.values["episode"].get() or self.resolved_archive_url != archive_url or
+        source_mode = self.values["source_mode"].get()
+        source_key = (self.values["archive_url"].get().strip() if source_mode == "archive-url" else
+                      f"local:{self.values['local_source_path'].get().strip()}")
+        if (not self.values["episode"].get() or self.resolved_archive_url != source_key or
                 not self.values["manifest_path"].get()):
             messagebox.showwarning("Resolve episode first",
-                                   "Resolve the Archive URL and automatic manifest/workspace location before saving the plan.",
+                                   "Resolve the selected source and automatic manifest/workspace location before saving the plan.",
                                    parent=self.root)
             return
         destination = filedialog.asksaveasfilename(title="Save a new immutable workflow plan",

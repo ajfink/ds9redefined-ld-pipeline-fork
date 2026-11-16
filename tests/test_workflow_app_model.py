@@ -74,21 +74,26 @@ def values_for(root: Path) -> dict[str, str]:
     }
 
 
-def create_local_download(root: Path) -> tuple[Path, Path]:
+def create_local_download(root: Path, *, include_manifest: bool = True) -> tuple[Path, Path]:
     source = root / "DS9 S01E07 LaserDisc"
     source.mkdir(parents=True)
     files = [
         ("DS9-S01E07-Q-Less-L1.tbc", b"small TBC fixture"),
         ("DS9-S01E07-Q-Less-L1.tbc.json", b"small metadata fixture"),
+        ("DS9-S01E07-Q-Less-M1.tbc", b"second TBC fixture"),
+        ("DS9-S01E07-Q-Less-M1.tbc.json", b"second metadata fixture"),
     ]
     manifest = source / "download-manifest.csv"
-    with manifest.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=("ArchiveId", "Status", "Name", "Bytes", "MD5"))
-        writer.writeheader()
-        for name, payload in files:
-            (source / name).write_bytes(payload)
-            writer.writerow({"ArchiveId": "DS9-S01E07-LaserDisc-Copies", "Status": "verified",
-                             "Name": name, "Bytes": len(payload), "MD5": "0" * 32})
+    rows = []
+    for name, payload in files:
+        (source / name).write_bytes(payload)
+        rows.append({"ArchiveId": "DS9-S01E07-LaserDisc-Copies", "Status": "verified",
+                     "Name": name, "Bytes": len(payload), "MD5": "0" * 32})
+    if include_manifest:
+        with manifest.open("w", encoding="utf-8", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=("ArchiveId", "Status", "Name", "Bytes", "MD5"))
+            writer.writeheader()
+            writer.writerows(rows)
     return source, source / files[0][0]
 
 
@@ -146,39 +151,38 @@ class WorkflowAppPlanTests(unittest.TestCase):
             resolve_episode_code("https://archive.org/details/DS9-Copies", metadata_reader=lambda _item: {
                 "metadata": {"title": "S01E07 and S01E08"}, "files": []})
 
-    def test_local_source_requires_verified_manifest_and_resolves_folder_or_file(self):
+    def test_local_source_does_not_require_download_manifest_and_resolves_folder_or_file(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            folder, tbc = create_local_download(root)
+            folder, tbc = create_local_download(root, include_manifest=False)
             from_folder = resolve_local_source(folder)
             from_file = resolve_local_source(tbc)
             self.assertEqual(from_folder["episode"], "S01E07")
-            self.assertEqual(from_folder["archive_url"],
-                             "https://archive.org/details/DS9-S01E07-LaserDisc-Copies")
+            self.assertFalse(from_folder["download_manifest_present"])
             self.assertEqual(from_file["source_dir"], str(folder.resolve()))
-            bad = root / "unverified"
-            bad.mkdir()
-            with self.assertRaisesRegex(WorkflowAppError, "lacks download-manifest.csv"):
-                resolve_local_source(bad)
 
     def test_local_intake_plan_skips_download_and_tracks_local_source_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            folder, tbc = create_local_download(root)
+            folder, tbc = create_local_download(root, include_manifest=False)
             values = values_for(root)
-            Path(values["profile"]).write_text(json.dumps({"shared": {"enabled": False}}), encoding="utf-8")
+            probe = root / "probe"
+            probe.mkdir()
+            Path(values["profile"]).write_text(json.dumps({
+                "shared": {"enabled": False}, "roots": {"probe": str(probe)}}), encoding="utf-8")
             values.update({"source_mode": "local", "local_source_path": str(tbc),
                            "episode": "S01E07", "archive_url": "", "downloads_dir": ""})
             plan = build_intake_plan(intake_template(), values)
             self.assertEqual([step["stage"] for step in plan["steps"]],
-                             ["init-episode", "validate-inputs"])
-            self.assertEqual(plan["steps"][0]["args"][plan["steps"][0]["args"].index("--downloads") + 1],
-                             "${input:downloads_dir}")
+                             ["init-local-episode", "validate-inputs"])
+            self.assertEqual(plan["steps"][0]["args"][plan["steps"][0]["args"].index("--local-source") + 1],
+                             "${input:local_source_path}")
             self.assertIn(str(folder.resolve()), plan["_operator_inputs_EDIT"]["downloads_dir"]["value"])
             self.assertIn(str(tbc.resolve()), plan["steps"][0]["inputs"])
+            self.assertEqual(plan["steps"][0]["outputs"], ["${input:manifest_path}"])
             saved = write_new_plan(root / "local-plan.json", plan)
             loaded, _ = load_plan(saved)
-            self.assertEqual(loaded["steps"][0]["stage"], "init-episode")
+            self.assertEqual(loaded["steps"][0]["stage"], "init-local-episode")
 
     def test_real_intake_template_builds_without_modifying_source(self):
         template_path = ROOT / "CONFIGURE HERE FIRST.example.json"

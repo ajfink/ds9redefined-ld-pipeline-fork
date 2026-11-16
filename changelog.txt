@@ -132,12 +132,12 @@ FROM fork Version 9 -> fork Version 10
 - Added the optional FromStunToKill Tk cockpit prototype over the same saved-plan/CLI
   contract. It derives episode code from the Archive URL/metadata, reuses or creates the
   default per-user profile, derives the manifest/workspace path, provides tooltips, and supports
-  Archive URL or existing local verified-download intake, exact DVD/no-DVD plan generation,
+  Archive URL or local source inventory without requiring `download-manifest.csv`, exact DVD/no-DVD plan generation,
   preview, execution, resume, and explicit human review approval; the CLI remains supported.
 - Interim intake policy: AI-prompted URLs, DVD selections/paths, and settings are acceptable
   inputs, but confirmed values must also be persisted and validated in the designated config
   or plan, not left only in chat.
-- Validation: **129 passed, 7 VapourSynth-only skipped**; Python compilation, generated-runbook
+- Validation: **130 passed, 7 VapourSynth-only skipped**; Python compilation, generated-runbook
   check, whitespace check, warning-as-error import, PowerShell parsing, and stage-list check
   passed. See `V10-RELEASE.md`. The existing S01E08 canary predates this port and does not
   validate new V10 retime/measurement behavior.

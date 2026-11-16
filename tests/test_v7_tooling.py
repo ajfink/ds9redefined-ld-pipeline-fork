@@ -96,6 +96,7 @@ class StageRunnerTests(unittest.TestCase):
                    "tools": {"pwsh": sys.executable}}
         self.assertIn("build-ld-synced", STAGES)
         self.assertIn("retime-assets", STAGES)
+        self.assertIn("init-local-episode", STAGES)
         self.assertIn("measure-pad-audio", STAGES)
         self.assertIn("measure-ld-black", STAGES)
         master = make_action("master-descriptors", "S01E99", profile, ["--input-fps", "30000/1001"], None)

@@ -190,82 +190,12 @@ def resolve_episode_code(url: str, metadata_reader=None) -> tuple[str, str]:
 
 
 def resolve_local_source(path_value: str | Path) -> dict[str, Any]:
-    """Resolve a local Archive download folder/file through its verified sidecar manifest.
-
-    The local path is not trusted by itself: this requires a downloader-produced
-    ``download-manifest.csv`` with verified rows and a single ArchiveId. The normal
-    initializer will still compare that inventory with Archive metadata before it
-    creates an episode manifest.
-    """
-    selected = Path(path_value).expanduser()
-    if not selected.is_absolute():
-        raise WorkflowAppError("local source selection must be an absolute path")
-    selected = selected.resolve(strict=False)
-    if not selected.exists():
-        raise WorkflowAppError(f"selected local source does not exist: {selected}")
-    if selected.is_dir():
-        source_dir = selected
-        selected_file = None
-    elif selected.is_file():
-        if selected.name.casefold() != "download-manifest.csv" and not selected.name.casefold().endswith(
-                (".tbc", ".tbc.json", ".efm", ".efm.7z")):
-            raise WorkflowAppError("select a download folder, download-manifest.csv, or an existing TBC/JSON/EFM file")
-        source_dir = selected.parent
-        selected_file = selected
-    else:
-        raise WorkflowAppError(f"selected local source is not a regular file or folder: {selected}")
-
-    manifest_csv = source_dir / "download-manifest.csv"
-    if not manifest_csv.is_file():
-        raise WorkflowAppError(
-            f"local source folder lacks download-manifest.csv: {source_dir}; "
-            "choose URL mode or use an Archive-verified download folder")
+    """Inspect a local rip without requiring an Archive download manifest."""
+    from local_source import LocalSourceError, inspect_local_source
     try:
-        with manifest_csv.open(newline="", encoding="utf-8-sig") as stream:
-            reader = csv.DictReader(stream)
-            required_columns = {"ArchiveId", "Status", "Name", "Bytes", "MD5"}
-            if not required_columns.issubset(set(reader.fieldnames or [])):
-                raise WorkflowAppError("download-manifest.csv lacks the ArchiveId/Status/Name/Bytes/MD5 columns")
-            rows = list(reader)
-    except (OSError, UnicodeDecodeError, csv.Error) as exc:
-        raise WorkflowAppError(f"cannot read local download manifest {manifest_csv}: {exc}") from exc
-    if not rows or any(str(row.get("Status", "")).casefold() != "verified" for row in rows):
-        raise WorkflowAppError("local download manifest must contain files marked verified")
-    archive_ids = {str(row.get("ArchiveId", "")).strip() for row in rows}
-    if "" in archive_ids or len(archive_ids) != 1:
-        raise WorkflowAppError("local download manifest must identify exactly one Archive item")
-    item = next(iter(archive_ids))
-    if not re.fullmatch(r"[A-Za-z0-9._-]+", item):
-        raise WorkflowAppError(f"local download manifest has an unsafe ArchiveId: {item!r}")
-    codes = {match.upper() for match in EPISODE_SEARCH_RE.findall(item)}
-    if len(codes) != 1:
-        raise WorkflowAppError(f"cannot uniquely derive an episode code from local ArchiveId {item!r}")
-    listed_names = set()
-    for row in rows:
-        name = str(row.get("Name", ""))
-        if not name or Path(name).name != name:
-            raise WorkflowAppError(f"unsafe file name in local download manifest: {name!r}")
-        try:
-            expected_size = int(row.get("Bytes", ""))
-        except (TypeError, ValueError) as exc:
-            raise WorkflowAppError(f"invalid byte count for {name!r} in local download manifest") from exc
-        candidate = source_dir / name
-        if not candidate.is_file() or candidate.stat().st_size != expected_size:
-            raise WorkflowAppError(f"local source is missing or size-mismatched: {candidate}")
-        if not re.fullmatch(r"[0-9a-fA-F]{32}", str(row.get("MD5", ""))):
-            raise WorkflowAppError(f"invalid recorded MD5 for {name!r} in local download manifest")
-        listed_names.add(name.casefold())
-    if selected_file and selected_file.name.casefold() != "download-manifest.csv" and selected_file.name.casefold() not in listed_names:
-        raise WorkflowAppError(f"selected file is not listed in download-manifest.csv: {selected_file}")
-    return {
-        "selected_path": str(selected),
-        "source_dir": str(source_dir),
-        "download_manifest": str(manifest_csv),
-        "archive_id": item,
-        "archive_url": f"https://archive.org/details/{item}",
-        "episode": next(iter(codes)),
-        "listed_names": sorted(listed_names),
-    }
+        return inspect_local_source(path_value)
+    except LocalSourceError as exc:
+        raise WorkflowAppError(str(exc)) from exc
 
 
 def read_intake_template(path: Path) -> dict[str, Any]:
@@ -326,10 +256,12 @@ def build_intake_plan(template: dict[str, Any], values: dict[str, str]) -> dict[
     if local_info and values.get("episode") and values["episode"].strip().upper() != episode:
         raise WorkflowAppError("local source ArchiveId episode does not match the detected episode")
     title = values["confirmed_title"].strip()
-    archive_url = local_info["archive_url"] if local_info else values["archive_url"].strip()
-    parsed_url = urlparse(archive_url)
-    if parsed_url.scheme != "https" or parsed_url.hostname not in ("archive.org", "www.archive.org") or not parsed_url.path.startswith("/details/"):
-        raise WorkflowAppError("archive URL must be an HTTPS archive.org/details/<item> URL")
+    archive_url = values["archive_url"].strip() if not local_info else "not-applicable"
+    if not local_info:
+        parsed_url = urlparse(archive_url)
+        if (parsed_url.scheme != "https" or parsed_url.hostname not in ("archive.org", "www.archive.org") or
+                not parsed_url.path.startswith(("/details/", "/download/"))):
+            raise WorkflowAppError("archive URL must be an HTTPS archive.org/details/<item> URL")
 
     profile_path = _absolute(values["profile"], "profile")
     downloads = (Path(local_info["source_dir"]).resolve() if local_info else
@@ -392,6 +324,7 @@ def build_intake_plan(template: dict[str, Any], values: dict[str, str]) -> dict[
         "downloads_dir": str(downloads),
         "source_mode": source_mode,
         "local_source_path": local_info["selected_path"] if local_info else "not-applicable",
+        "fingerprint_policy": policy,
         "confirmed_title": title,
         "dvd_mode": dvd_mode,
         "cut_pad_images": cut_pad_choice,
@@ -416,7 +349,7 @@ def build_intake_plan(template: dict[str, Any], values: dict[str, str]) -> dict[
     _set_decision(decisions, "cut-pad-images", cut_pad_choice)
     _set_decision(decisions, "source-mode", source_mode)
     if local_info:
-        _set_decision(decisions, "archive-item-confirmed", f"Local verified manifest: {local_info['archive_id']}")
+        _set_decision(decisions, "archive-item-confirmed", "not supplied; local inventory provenance")
         _set_decision(decisions, "local-source", local_info["selected_path"])
     else:
         _set_decision(decisions, "archive-item-confirmed", archive_url)
@@ -431,11 +364,14 @@ def build_intake_plan(template: dict[str, Any], values: dict[str, str]) -> dict[
             "download", "init-episode", "validate-inputs"]:
         raise WorkflowAppError("GUI intake currently supports download/init/validate templates")
     download_step, init_step, validate_step = steps
-    init_args = ["--url", "${input:archive_url}", "--downloads", "${input:downloads_dir}"]
+    init_args = (["--local-source", "${input:local_source_path}",
+                  "--fingerprint-policy", "${input:fingerprint_policy}",
+                  "--confirmed-title", "${input:confirmed_title}"] if local_info else
+                 ["--url", "${input:archive_url}", "--downloads", "${input:downloads_dir}"])
     init_inputs = ["${input:downloads_dir}"]
     validate_inputs = ["${input:downloads_dir}", "${input:manifest_path}"]
     if local_info:
-        for evidence in (local_info["selected_path"], local_info["download_manifest"]):
+        for evidence in (local_info["source_dir"], local_info["selected_path"]):
             if Path(evidence).resolve() != downloads.resolve():
                 init_inputs.append(evidence)
                 validate_inputs.append(evidence)
@@ -448,12 +384,9 @@ def build_intake_plan(template: dict[str, Any], values: dict[str, str]) -> dict[
     init_args.extend(("--manifest-out", "${input:manifest_path}"))
 
     if local_info:
-        source_evidence = [local_info["selected_path"], local_info["download_manifest"]]
-        for evidence in source_evidence:
-            if Path(evidence).resolve() != downloads.resolve() and evidence not in init_inputs:
-                init_inputs.append(evidence)
-            if Path(evidence).resolve() != downloads.resolve() and evidence not in validate_inputs:
-                validate_inputs.append(evidence)
+        init_step["id"] = "initialize-local-episode"
+        init_step["stage"] = "init-local-episode"
+        init_step["outputs"] = ["${input:manifest_path}"]
         plan["steps"] = [init_step, validate_step]
     else:
         download_step["args"] = ["-Url", "${input:archive_url}", "-Destination", "${input:downloads_dir}"]
@@ -461,13 +394,19 @@ def build_intake_plan(template: dict[str, Any], values: dict[str, str]) -> dict[
         download_step["outputs"] = ["${input:downloads_dir}"]
     init_step["args"] = init_args
     init_step["inputs"] = init_inputs
-    init_step["outputs"] = ["${input:manifest_path}"]
+    if not local_info:
+        init_step["outputs"] = ["${input:manifest_path}"]
     validate_step["inputs"] = validate_inputs
     validate_step["outputs"] = []
     if local_info:
         plan.setdefault("_instructions_DO_NOT_EDIT", []).append(
-            "Local intake skips download. The selected folder/file must belong to a verified download-manifest.csv "
-            "with one ArchiveId; initialization rechecks its inventory against Archive metadata before creating the manifest.")
+            "Local intake skips download and creates a clearly labeled local inventory. Archive origin/authenticity "
+            "is not asserted; inspect the selected capture set and the inventory evidence before proceeding.")
+        for instruction_index, instruction in enumerate(plan.get("_instructions_DO_NOT_EDIT", [])):
+            if isinstance(instruction, str) and "This is an S01E07, no-DVD example." in instruction:
+                plan["_instructions_DO_NOT_EDIT"][instruction_index] = (
+                    "This plan was generated from an existing local source selection; confirm its inferred episode identity "
+                    "and local-only provenance before processing.")
     for instruction_index, instruction in enumerate(plan.get("_instructions_DO_NOT_EDIT", [])):
         if isinstance(instruction, str) and "initialize command is hardcoded to --no-dvd" in instruction:
             plan["_instructions_DO_NOT_EDIT"][instruction_index] = (

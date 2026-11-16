@@ -537,7 +537,8 @@ permission.
 | `scripts/download_archive.ps1` | Metadata-verified, resumable source download; checks profile curl (>=7.71.0), and ListOnly prints inventory, integrity metadata, aggregate bytes, and projected free space |
 | `scripts/check_space_budget.py` | Projected per-stage free-space gate that preserves the configured reserve |
 | `scripts/init_episode.py` | Verified Archive/download + optional DVD -> draft manifest; `--no-dvd` records explicit approval, and macOS gets `.vpy` script paths |
-| `scripts/validate_episode.py` | Stage-specific manifest/artifact prerequisites; optional expensive source MD5 recheck |
+| `scripts/init_local_episode.py` / `scripts/local_source.py` | Locally inventory TBC/JSON/optional EFM captures without a download manifest; record local fingerprints and explicitly mark Archive origin unverified |
+| `scripts/validate_episode.py` | Stage-specific manifest/artifact prerequisites for Archive-verified or locally inventoried sources; optional full/MD5 checks |
 | `scripts/select_stack_reference.py` | Orc refresh loop that chooses/stabilizes the reference and writes a refreshed project; never renders |
 | `scripts/build_stack_project.py` | Manifest-driven Orc graph skeleton; scratch `--reference-override` does not edit the manifest |
 | `scripts/efm_paths.py` | Plan episode-scoped EFMSink WAV/report paths and refuse existing outputs |
@@ -581,8 +582,9 @@ existing intake JSON by default, but **never edits that file**: `Save new planâ€
 separate no-overwrite plan. A radio selector chooses between Archive URL and Open local.
 URL mode derives the episode code from the item ID, or looks it up in Archive metadata; it
 does not ask the user to type the code. Open local accepts a folder or listed source file
-from a previous Archive download, requires its verified `download-manifest.csv`, and skips
-the download stage; initialization still checks that inventory against Archive metadata.
+from a local rip, checks TBC/JSON/optional EFM pairing, and skips the download stage. It
+creates local fingerprint evidence without claiming Archive authenticity; an existing
+`download-manifest.csv` is useful provenance but is not required.
 The **Resolve episode/workspace** button appears only for URL mode; local selection resolves
 the episode from its manifest automatically. Both flows derive the manifest location from
 the selected profile. Shared/device-workspace profiles use

@@ -43,6 +43,7 @@ STAGES = {
     "validate-padfix": {"kind": "validate", "manifest_stage": "padfix", "write": False},
     "validate-deliverable": {"kind": "validate", "manifest_stage": "deliverable", "write": False},
     "stack-reference": {"kind": "python", "script": "select_stack_reference.py", "gate": "inputs", "write": True},
+    "init-local-episode": {"kind": "python", "script": "init_local_episode.py", "write": True},
     "render-stack": {"kind": "python", "script": "render_stack.py", "gate": "inputs", "review_gate": True, "write": True},
     "tfm-log": {"kind": "python", "script": "generate_tfm_log.py", "gate": "stack", "write": True},
     "cadence-analysis": {"kind": "python", "script": "cadence_analysis_mac.py", "gate": "stack", "review_gate": True, "write": True},
@@ -325,7 +326,7 @@ def main() -> int:
         doctor = None
         if requires_doctor(args.stage):
             doctor = [py(profile), str(SCRIPTS / "doctor.py"), "--profile", str(profile_path), "--json"]
-            if args.stage != "init-episode":
+            if args.stage not in ("init-episode", "init-local-episode"):
                 doctor += ["--episode", args.episode]
             if instance:
                 doctor += ["--instance-root", str(instance)]

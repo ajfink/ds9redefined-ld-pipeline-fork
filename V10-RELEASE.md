@@ -40,14 +40,16 @@ pull request was created.
   help for the intake fields. It does not ask users to type an episode code or locate a
   profile/manifest path.
 - Intake source is a radio choice: Archive URL mode downloads as before; Open local accepts
-  a prior downloaded folder or listed file with a verified `download-manifest.csv`, skips
-  the download stage, and retains the initializer's Archive metadata/hash verification.
-  URL mode alone shows the episode/workspace resolver; local mode uses folder/file pickers.
+  a prior local folder or listed file, scans matching TBC/JSON/optional EFM files, and skips
+  the download stage. `download-manifest.csv` is optional in local mode. The generated local
+  fingerprints are explicitly not Archive-verified, and local mode makes no Archive metadata
+  request. URL mode retains the existing Archive metadata/hash verification. URL mode alone
+  shows the episode/workspace resolver; local mode uses folder/file pickers.
 
 ## Validation and limits
 
 - Mainline V10 reported 105 passed and 7 VapourSynth-only skipped. This fork's expanded suite
-  passes **129 tests, with 7 VapourSynth-only skipped**.
+  passes **130 tests, with 7 VapourSynth-only skipped**.
 - Fork checks passed: Python `compileall`, generated-runbook `--check`, `git diff --check`,
   `av_check_output.py` import with `SyntaxWarning` treated as an error, PowerShell AST parsing
   of 8 scripts, and `run_stage.py --list` with both new diagnostics registered.
@@ -74,9 +76,10 @@ pull request was created.
 - The fork retains the approved prompt-to-configuration intake policy: confirmed URLs, DVD
   selections/paths, and settings may arrive through an AI prompt but must be persisted to
   the designated config/plan and validated, not left only in chat.
-- The GUI tests cover real-template immutability, DVD/no-DVD argument generation, Archive
-  episode inference, local-source manifest validation and no-download plan generation, default
-  profile location/creation and legacy-profile reuse, plan validation, and overwrite refusal.
+- The GUI/local intake tests cover real-template immutability, DVD/no-DVD argument generation,
+  Archive episode inference, local-source inventory and no-download plan generation without a
+  download manifest, default profile location/creation and legacy-profile reuse, plan validation,
+  and overwrite refusal.
   Field-label tooltips explain the decisions. The desktop window itself still needs an
   interactive user acceptance pass; the V10 plan/runner contract is unchanged.
 - GitHub preparation check: `main` remains the V10 baseline and `fromstuntokill-app` holds
