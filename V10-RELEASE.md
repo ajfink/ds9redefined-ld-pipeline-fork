@@ -36,8 +36,9 @@ pull request was created.
   measurement checklist to the canonical and generated runbooks.
 - The FromStunToKill GUI now derives episode codes from the Archive item ID or metadata,
   automatically reuses the default per-user machine profile or creates one when absent,
-  and provides hover help for the intake fields. It does not ask users to type an episode
-  code or locate a profile file.
+  resolves the manifest path from the selected profile/episode workspace, and provides hover
+  help for the intake fields. It does not ask users to type an episode code or locate a
+  profile/manifest path.
 
 ## Validation and limits
 

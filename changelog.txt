@@ -131,8 +131,9 @@ FROM fork Version 9 -> fork Version 10
   added the new analysis helpers to the allowlisted stage runner and preflight inventories.
 - Added the optional FromStunToKill Tk cockpit prototype over the same saved-plan/CLI
   contract. It derives episode code from the Archive URL/metadata, reuses or creates the
-  default per-user profile, provides tooltips, and supports exact DVD/no-DVD plan generation,
-  preview, execution, resume, and explicit human review approval; the CLI remains supported.
+  default per-user profile, derives the manifest/workspace path, provides tooltips, and supports
+  exact DVD/no-DVD plan generation, preview, execution, resume, and explicit human review
+  approval; the CLI remains supported.
 - Interim intake policy: AI-prompted URLs, DVD selections/paths, and settings are acceptable
   inputs, but confirmed values must also be persisted and validated in the designated config
   or plan, not left only in chat.

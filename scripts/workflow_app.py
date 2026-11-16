@@ -40,7 +40,6 @@ FIELD_LABELS = {
     "dvd_mode": "DVD mode",
     "dvd_path": "Exact matching DVD file",
     "cut_pad_images": "No-DVD cut-PAD images",
-    "manifest_path": "New manifest path",
 }
 
 FIELD_HELP = {
@@ -56,8 +55,9 @@ FIELD_HELP = {
                  "and recorded in the manifest; it is not a substitute for verifying episode identity."),
     "cut_pad_images": ("Only applies to no-DVD intake when verified shared cut-PAD stills are available. 'use' "
                        "allows a uniquely verified still for a confirmed cut-PAD; 'skip' forbids those stills."),
-    "manifest_path": ("New manifest output path. Its filename must match the episode code, it must not already "
-                      "exist, and in shared mode it must be in the selected episode workspace's manifest folder."),
+    "manifest_path": ("Automatically selected new manifest output. Shared/device-workspace profiles use the "
+                       "collision-safe devices/<device-instance>/episodes/<code>/manifest layout; local profiles "
+                       "use the existing local manifest location. The manifest is never overwritten."),
     "episode": ("Detected from the Archive item ID or its metadata. Confirm the URL/item is the intended episode; "
                 "the code is not manually entered."),
     "profile": ("Machine profile used by the workflow. Existing profiles in the default per-user profile folder "
@@ -109,9 +109,11 @@ class WorkflowApp:
         self.root.title("FromStunToKill – LaserDisc Workflow")
         self.root.geometry("1000x780")
         self.root.minsize(820, 640)
-        self.values = {key: tk.StringVar() for key in (*FIELD_LABELS, "episode", "profile")}
+        self.values = {key: tk.StringVar() for key in
+                       (*FIELD_LABELS, "episode", "profile", "manifest_path", "instance_root")}
         self.values["fingerprint_policy"] = tk.StringVar(value="balanced")
         self.episode_display = tk.StringVar(value="Not resolved from Archive URL")
+        self.manifest_display = tk.StringVar(value="Resolve the Archive URL to select the episode manifest location")
         self.resolved_archive_url = ""
         self.resolving_episode = False
         self._suppress_archive_trace = False
@@ -184,14 +186,21 @@ class WorkflowApp:
             self.entries[key] = widget
             self.field_widgets[key] = widget
             if key == "archive_url":
-                self.resolve_button = ttk.Button(form, text="Resolve episode", command=self._resolve_episode)
+                self.resolve_button = ttk.Button(form, text="Resolve episode/workspace", command=self._resolve_episode)
                 self.resolve_button.grid(row=row, column=2, padx=(6, 0), pady=3)
             browse = self._browse_handler(key)
             if browse:
                 button = ttk.Button(form, text="Browse…", command=browse)
                 button.grid(row=row, column=2, padx=(6, 0), pady=3)
                 self.browse_buttons[key] = button
-        policy_row = len(FIELD_LABELS) + 1
+        manifest_row = len(FIELD_LABELS) + 1
+        manifest_label = ttk.Label(form, text="Manifest path (automatic)")
+        manifest_label.grid(row=manifest_row, column=0, sticky="w", padx=(0, 8), pady=3)
+        manifest_value = ttk.Label(form, textvariable=self.manifest_display, wraplength=680)
+        manifest_value.grid(row=manifest_row, column=1, sticky="w", pady=3)
+        ToolTip(manifest_label, FIELD_HELP["manifest_path"])
+        ToolTip(manifest_value, FIELD_HELP["manifest_path"])
+        policy_row = manifest_row + 1
         fingerprint_label = ttk.Label(form, text="Fingerprint policy")
         fingerprint_label.grid(row=policy_row, column=0, sticky="w", padx=(0, 8), pady=3)
         ToolTip(fingerprint_label, FIELD_HELP["fingerprint_policy"])
@@ -236,7 +245,6 @@ class WorkflowApp:
         handlers = {
             "downloads_dir": self._browse_downloads,
             "dvd_path": self._browse_dvd,
-            "manifest_path": self._browse_manifest,
         }
         return handlers.get(key)
 
@@ -252,13 +260,6 @@ class WorkflowApp:
                                                      ("All files", "*.*")))
         if path:
             self.values["dvd_path"].set(path)
-
-    def _browse_manifest(self) -> None:
-        path = filedialog.asksaveasfilename(title="Choose a new manifest path (not created yet)",
-                                            defaultextension=".json",
-                                            filetypes=(("JSON files", "*.json"),))
-        if path:
-            self.values["manifest_path"].set(path)
 
     def _prepare_default_profile(self, template: dict[str, Any]) -> Path:
         default = default_profile_path()
@@ -322,8 +323,10 @@ class WorkflowApp:
         self.profile_path = self._prepare_default_profile(template)
         self._suppress_archive_trace = True
         self.values["episode"].set("")
+        self.values["manifest_path"].set("")
+        self.values["instance_root"].set("")
         for key, setting in template["_operator_inputs_EDIT"].items():
-            if key in self.values and key not in ("episode", "profile") and isinstance(setting, dict):
+            if key in self.values and key not in ("episode", "profile", "manifest_path", "instance_root") and isinstance(setting, dict):
                 self.values[key].set(str(setting.get("value", "")))
         self.values["dvd_path"].set("")
         self.values["fingerprint_policy"].set(template.get("fingerprint_policy", "balanced"))
@@ -343,6 +346,9 @@ class WorkflowApp:
         url = self.values["archive_url"].get().strip()
         self.resolved_archive_url = ""
         self.values["episode"].set("")
+        self.values["manifest_path"].set("")
+        self.values["instance_root"].set("")
+        self.manifest_display.set("Resolve the Archive URL to select the episode manifest location")
         if not url:
             self.episode_display.set("Enter an Archive URL to detect the episode")
         else:
@@ -353,7 +359,6 @@ class WorkflowApp:
             else:
                 if episode:
                     self.values["episode"].set(episode)
-                    self.resolved_archive_url = url
                     self.episode_display.set(f"{episode} (from Archive item URL)")
                 else:
                     self.episode_display.set("Not in item URL; click Resolve episode to inspect Archive metadata")
@@ -365,8 +370,15 @@ class WorkflowApp:
         if not url:
             messagebox.showwarning("Archive URL required", "Enter the Archive item URL first.", parent=self.root)
             return
-        if self.resolved_archive_url == url and self.values["episode"].get():
-            self.status.set("Episode code was detected in the Archive item URL.")
+        if self.resolving_episode:
+            return
+        try:
+            direct = episode_code_from_url_identifier(url)
+        except WorkflowAppError as exc:
+            messagebox.showerror("Archive URL invalid", str(exc), parent=self.root)
+            return
+        if direct:
+            self._finish_episode_resolution(url, direct, "Archive item URL")
             return
         self.resolving_episode = True
         self._update_mode_controls()
@@ -382,6 +394,50 @@ class WorkflowApp:
                 self.output_queue.put("__EPISODE_RESOLVE_ERROR__" + json.dumps(payload))
 
         threading.Thread(target=resolve, daemon=True).start()
+
+    def _manifest_for_episode(self, episode: str) -> tuple[Path, str]:
+        if not self.profile_path or not self.profile_path.is_file():
+            raise WorkflowAppError("default machine profile is unavailable; use Open machine profile to configure it")
+        from ldcommon import Ld, device_workspace_enabled, episode_manifest_path
+
+        keys = ("LDP_PROFILE", "LDP_EPISODE", "LDP_INSTANCE_ROOT", "LDP_MANIFEST_DIR",
+                "LDP_INSTANCE_MODE", "LDP_INSTANCE_LOGS", "LDP_CUT_PAD_IMAGES")
+        prior = {key: os.environ.get(key) for key in keys}
+        try:
+            os.environ["LDP_PROFILE"] = str(self.profile_path)
+            os.environ["LDP_EPISODE"] = episode
+            for key in keys[2:]:
+                os.environ.pop(key, None)
+            ld = Ld(self.profile_path)
+            manifest = episode_manifest_path(episode, ld)
+            instance_root = (os.environ.get("LDP_INSTANCE_ROOT", "")
+                             if device_workspace_enabled(ld.profile) else "")
+            return manifest.resolve(strict=False), instance_root
+        finally:
+            for key, value in prior.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+    def _finish_episode_resolution(self, url: str, episode: str, source: str) -> None:
+        try:
+            manifest, instance_root = self._manifest_for_episode(episode)
+        except Exception as exc:
+            self.resolving_episode = False
+            self.status.set(f"Episode resolved, but manifest workspace could not be prepared: {exc}")
+            messagebox.showerror("Manifest workspace unavailable", str(exc), parent=self.root)
+            self._update_mode_controls()
+            return
+        self.values["episode"].set(episode)
+        self.values["manifest_path"].set(str(manifest))
+        self.values["instance_root"].set(instance_root)
+        self.manifest_display.set(str(manifest))
+        self.resolved_archive_url = url
+        self.resolving_episode = False
+        self.episode_display.set(f"{episode} (from {source})")
+        self.status.set("Episode and manifest location resolved. Confirm the item/title, then save a new plan.")
+        self._update_mode_controls()
 
     def _choose_plan(self) -> None:
         path = filedialog.askopenfilename(title="Open an existing workflow plan",
@@ -414,6 +470,12 @@ class WorkflowApp:
         archive_input = operator.get("archive_url")
         self.resolved_archive_url = (str(archive_input.get("value", ""))
                                      if isinstance(archive_input, dict) else "")
+        manifest_input = operator.get("manifest_path")
+        manifest_path = (str(manifest_input.get("value", ""))
+                         if isinstance(manifest_input, dict) else "")
+        self.values["manifest_path"].set(manifest_path)
+        self.values["instance_root"].set(str(data.get("instance_root", "")))
+        self.manifest_display.set(manifest_path or "No manifest path recorded in this plan")
         self.source_label.configure(text=f"Workflow plan: {self.plan_path}")
         self.status.set("Existing plan loaded. Preview before running or resuming it.")
         self._set_form_editable(False)
@@ -457,9 +519,10 @@ class WorkflowApp:
             messagebox.showerror("No intake template", "Load an intake template first.", parent=self.root)
             return
         archive_url = self.values["archive_url"].get().strip()
-        if not self.values["episode"].get() or self.resolved_archive_url != archive_url:
+        if (not self.values["episode"].get() or self.resolved_archive_url != archive_url or
+                not self.values["manifest_path"].get()):
             messagebox.showwarning("Resolve episode first",
-                                   "The episode code is derived from the Archive URL. Resolve it before saving the plan.",
+                                   "Resolve the Archive URL and automatic manifest/workspace location before saving the plan.",
                                    parent=self.root)
             return
         destination = filedialog.asksaveasfilename(title="Save a new immutable workflow plan",
@@ -587,12 +650,10 @@ class WorkflowApp:
                 break
             if line.startswith("__EPISODE_RESOLVED__"):
                 payload = json.loads(line.removeprefix("__EPISODE_RESOLVED__"))
-                self.resolving_episode = False
                 if payload.get("url") == self.values["archive_url"].get().strip():
-                    self.values["episode"].set(payload["episode"])
-                    self.resolved_archive_url = payload["url"]
-                    self.episode_display.set(f"{payload['episode']} (from {payload['source']})")
-                    self.status.set("Episode code resolved. Confirm the Archive item/title before saving the plan.")
+                    self._finish_episode_resolution(payload["url"], payload["episode"], payload["source"])
+                else:
+                    self.resolving_episode = False
                 self._update_mode_controls()
             elif line.startswith("__EPISODE_RESOLVE_ERROR__"):
                 payload = json.loads(line.removeprefix("__EPISODE_RESOLVE_ERROR__"))

@@ -579,7 +579,11 @@ python scripts/generate_runbooks.py --check
 Launch the local desktop cockpit with `python scripts/workflow_app.py`. It loads the
 existing intake JSON by default, but **never edits that file**: `Save new plan…` writes a
 separate no-overwrite plan. The app derives the episode code from the Archive item ID, or
-looks it up in Archive metadata when needed; it does not ask the user to type the code. It
+looks it up in Archive metadata when needed; it does not ask the user to type the code. The
+**Resolve episode/workspace** button also derives the manifest location from the selected
+profile. Shared/device-workspace profiles use
+`devices/<device-instance>/episodes/<code>/manifest/<code>.json`; local profiles use their
+existing manifest location.
 uses the default per-user machine-profile folder (`%LOCALAPPDATA%\ld-pipeline\profiles`
 on Windows, `~/Library/Application Support/ld-pipeline/profiles` on macOS, and
 `$XDG_CONFIG_HOME/ld-pipeline/profiles` on Linux). It reuses the default or a unique
@@ -588,8 +592,8 @@ portable platform template (Windows also runs best-effort preflight discovery). 
 **Open machine profile…** to configure unresolved roots/tools; the profile path is not an
 intake question.
 The form includes the Archive URL, download folder, exact DVD selection or explicit no-DVD
-mode, the no-DVD cut-PAD choice, and a new manifest path. Field-label tooltips describe the
-choices. DVD-backed plans pass the selected file to `init_episode.py`; no-DVD plans retain
+mode, the no-DVD cut-PAD choice, and an automatically resolved manifest/workspace path.
+Field-label tooltips describe the choices. DVD-backed plans pass the selected file to `init_episode.py`; no-DVD plans retain
 the explicit `--no-dvd` choice. Preview runs the existing read-only `run_workflow.py` plan
 path. Run, resume, and review approval call the same allowlisted CLI; approvals are never
 automatic, and plans containing final encode/remux receive an extra confirmation prompt.
@@ -617,8 +621,9 @@ shows the intake path with separate `_instructions_DO_NOT_EDIT` and
 references each setting's `value`; its adjacent `_comment` explains that value and is not
 an input. The runner creates the job ID from the episode code, confirmed title, and UTC
 start time; no job ID is requested. It refuses to load the example while `REPLACE_` or `YOUR_ACCOUNT`
-placeholders remain. This sample is specifically a no-DVD intake. For shared mode, resolve
-the episode workspace first and set `manifest_path` to that workspace's manifest. The
+placeholders remain. This sample is specifically a no-DVD intake. For shared mode, the GUI
+resolves/reuses the device-instance episode workspace and sets `manifest_path`; hand-authored
+CLI plans should do the same explicitly. The
 `decisions` array records choices; it does not apply them, so make sure the stage arguments
 express the same choices. The runner records `approved_by` from the current local account
 and `approved_at_utc` from the run start; neither is an operator input.

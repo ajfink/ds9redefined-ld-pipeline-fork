@@ -292,6 +292,11 @@ def build_intake_plan(template: dict[str, Any], values: dict[str, str]) -> dict[
         operator_inputs[key] = {"value": value, "_comment": comment}
 
     plan["fingerprint_policy"] = policy
+    instance_root_value = str(values.get("instance_root", "")).strip()
+    if instance_root_value:
+        plan["instance_root"] = str(_absolute(instance_root_value, "instance_root"))
+    else:
+        plan.pop("instance_root", None)
     decisions = plan.get("decisions")
     if not isinstance(decisions, list):
         raise WorkflowAppError("template decisions must be an array")
