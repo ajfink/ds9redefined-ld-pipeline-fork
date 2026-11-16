@@ -230,8 +230,22 @@ def load_plan(path: Path) -> tuple[dict, bytes]:
     if job_id is not None and (not isinstance(job_id, str) or not JOB_ID_RE.fullmatch(job_id)):
         raise WorkflowError("job_id, when supplied, must use 1-64 letters, digits, dots, underscores, or hyphens")
     episode = plan.get("episode")
-    if not isinstance(episode, str) or not re.fullmatch(r"S\d{2}E\d{2}", episode, re.IGNORECASE):
-        raise WorkflowError("episode must be an SxxExx code")
+    if not isinstance(episode, str):
+        raise WorkflowError("episode must be an SxxExx code or SERIES:SxxExx identity")
+    embedded_series = None
+    if ":" in episode:
+        embedded_series, episode = episode.split(":", 1)
+    if not re.fullmatch(r"S\d{2}E\d{2}", episode, re.IGNORECASE):
+        raise WorkflowError("episode must be an SxxExx code or SERIES:SxxExx identity")
+    requested_series = plan.get("series")
+    if embedded_series and requested_series and embedded_series.upper() != str(requested_series).upper():
+        raise WorkflowError("qualified episode identity conflicts with plan.series")
+    series = str(requested_series or embedded_series or "DS9").upper()
+    if series not in ("DS9", "VOY"):
+        raise WorkflowError("series, when supplied, must be 'DS9' or 'VOY'")
+    plan["series"] = series
+    plan["episode"] = episode.upper()
+    plan["identity"] = f"{series}:{episode.upper()}"
     if job_id is None and (not isinstance(plan.get("episode_title"), str) or not plan["episode_title"].strip()):
         raise WorkflowError("episode_title is required when job_id is omitted; the runner generates an ID from it")
     profile = plan.get("profile")
@@ -296,7 +310,7 @@ def workflow_logs(profile_path: Path, profile: dict, plan: dict,
     if device_workspace_enabled(profile):
         workspace, warning = resolve_instance_workspace(
             profile_path, profile, plan["episode"], instance_root,
-            create=create_workspace)
+            create=create_workspace, series=plan.get("series", "DS9"))
         if workspace:
             instance_root = str(Path(workspace["instance_root"]).resolve())
             env_exports = {str(k): str(v) for k, v in workspace.get("shell_exports", {}).items()}
@@ -307,9 +321,14 @@ def workflow_logs(profile_path: Path, profile: dict, plan: dict,
     if not raw_logs:
         raise WorkflowError("profile roots.logs must be set for durable workflow status")
     logs = Path(os.path.expandvars(os.path.expanduser(str(raw_logs)))).resolve()
+    if plan.get("series", "DS9") != "DS9":
+        logs = logs / plan["series"]
     if create_workspace:
-        if not logs.is_dir():
-            raise WorkflowError(f"profile roots.logs must already exist for workflow state: {logs}")
+        if not logs.parent.is_dir():
+            raise WorkflowError(f"profile roots.logs must already exist for workflow state: {logs.parent}")
+        logs.mkdir(exist_ok=True)
+    elif not logs.parent.is_dir():
+        raise WorkflowError(f"profile roots.logs must already exist for workflow state: {logs.parent}")
     return logs, None, env_exports, warning
 
 
@@ -374,16 +393,18 @@ def _plan_digest(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-def generate_job_id(episode: str, title: str, when: datetime | None = None) -> str:
+def generate_job_id(episode: str, title: str, when: datetime | None = None,
+                    series: str = "DS9") -> str:
     stamp = (when or datetime.now(timezone.utc)).astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     slug = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii").casefold()
     slug = re.sub(r"[^a-z0-9]+", "-", slug).strip("-") or "episode"
     slug = slug[:24].strip("-") or "episode"
-    return f"{episode.upper()}-{slug}-{stamp}"
+    prefix = episode.upper() if series.upper() == "DS9" else f"{series.upper()}-{episode.upper()}"
+    return f"{prefix}-{slug}-{stamp}"
 
 
 def find_resume_state(logs: Path, plan_digest: str, profile_digest: str,
-                      episode: str) -> Path:
+                      episode: str, series: str = "DS9") -> Path:
     matches = []
     for path in logs.glob("workflow-*.json"):
         try:
@@ -393,7 +414,9 @@ def find_resume_state(logs: Path, plan_digest: str, profile_digest: str,
         if (state.get("schema") == STATE_SCHEMA and
                 state.get("plan_sha256") == plan_digest and
                 state.get("profile_sha256") == profile_digest and
-                state.get("episode") == episode):
+                state.get("episode") == episode and
+                str(state.get("series", "DS9")).upper() == series.upper() and
+                state.get("identity", f"DS9:{state.get('episode', '')}") == f"{series.upper()}:{episode.upper()}"):
             matches.append((path, state))
     if not matches:
         raise WorkflowError("--resume found no saved job matching this plan, profile, and episode")
@@ -426,6 +449,8 @@ def _fresh_state(plan: dict, plan_digest: str, profile_digest: str) -> dict:
         "schema": STATE_SCHEMA,
         "job_id": plan["job_id"],
         "episode": plan["episode"],
+        "series": plan.get("series", "DS9"),
+        "identity": plan.get("identity", f"DS9:{plan['episode']}"),
         "workflow_version": (ROOT / "WORKFLOW_VERSION").read_text(encoding="ascii").strip(),
         "plan_sha256": plan_digest,
         "profile_sha256": profile_digest,
@@ -447,12 +472,22 @@ def validate_resume_state(state: dict, plan: dict, plan_digest: str,
     expected = {
         "job_id": plan["job_id"],
         "episode": plan["episode"],
+        "series": plan.get("series", "DS9"),
+        "identity": plan.get("identity", f"DS9:{plan['episode']}"),
         "workflow_version": (ROOT / "WORKFLOW_VERSION").read_text(encoding="ascii").strip(),
         "plan_sha256": plan_digest,
         "profile_sha256": profile_digest,
         "fingerprint_policy": plan.get("fingerprint_policy", "balanced"),
     }
-    changed = [key for key, value in expected.items() if state.get(key) != value]
+    changed = []
+    for key, value in expected.items():
+        actual = state.get(key)
+        if key == "series" and actual is None:
+            actual = "DS9"
+        elif key == "identity" and actual is None:
+            actual = f"DS9:{state.get('episode', '')}"
+        if actual != value:
+            changed.append(key)
     if changed:
         raise WorkflowError("cannot resume: plan/profile/workflow identity changed: " + ", ".join(changed))
     recorded = [(row.get("id"), row.get("stage")) for row in state.get("steps", [])]
@@ -486,6 +521,8 @@ def _command(plan: dict, step: dict, profile_path: Path,
              instance_root: str | None) -> list[str]:
     command = [sys.executable, str(RUN_STAGE), "--stage", step["stage"],
                "--episode", plan["episode"], "--profile", str(profile_path), "--execute"]
+    if plan.get("series", "DS9") != "DS9":
+        command += ["--series", plan["series"]]
     if instance_root:
         command += ["--instance-root", instance_root]
     if step.get("report_out"):
@@ -623,7 +660,7 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool) -> int:
 
     if not execute:
         job_label = plan.get("job_id") or f"auto-generated from {plan['episode_title']!r} at execution time"
-        print(f"PLAN {job_label} V{(ROOT / 'WORKFLOW_VERSION').read_text(encoding='ascii').strip()} episode={plan['episode']}")
+        print(f"PLAN {job_label} V{(ROOT / 'WORKFLOW_VERSION').read_text(encoding='ascii').strip()} episode={plan['identity']}")
         print(f"profile: {redact_shared_text(str(profile_path), redactions)}")
         if shared and not instance_root:
             print("status/log destination: resolved device workspace on execution (or profile roots.logs fallback); dry-run creates neither")
@@ -648,7 +685,7 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool) -> int:
             if not state_path.is_file():
                 raise WorkflowError(f"--resume requested but state does not exist: {state_path}")
         else:
-            state_path = find_resume_state(logs, digest, profile_digest, plan["episode"])
+            state_path = find_resume_state(logs, digest, profile_digest, plan["episode"], plan["series"])
             job_id = _load_state(state_path).get("job_id")
             if not isinstance(job_id, str) or not JOB_ID_RE.fullmatch(job_id):
                 raise WorkflowError(f"saved workflow state has an invalid generated job ID: {state_path}")
@@ -656,10 +693,10 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool) -> int:
     else:
         job_id = plan.get("job_id")
         if job_id is None:
-            job_id = generate_job_id(plan["episode"], plan["episode_title"])
+            job_id = generate_job_id(plan["episode"], plan["episode_title"], series=plan["series"])
             while ((logs / f"workflow-{job_id}.json").exists() or
-                   (logs / f"workflow-{job_id}.log").exists()):
-                job_id = generate_job_id(plan["episode"], plan["episode_title"])
+                 (logs / f"workflow-{job_id}.log").exists()):
+                job_id = generate_job_id(plan["episode"], plan["episode_title"], series=plan["series"])
             plan["job_id"] = job_id
     state_path = logs / f"workflow-{job_id}.json"
     log_path = logs / f"workflow-{job_id}.log"
@@ -680,7 +717,8 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool) -> int:
             with state_path.open("x", encoding="utf-8"):
                 pass
             with log_path.open("x", encoding="utf-8") as log:
-                log.write(f"workflow={plan['job_id']} episode={plan['episode']} version={state['workflow_version']}\n")
+                log.write(f"workflow={plan['job_id']} episode={plan['episode']} series={plan['series']} "
+                          f"identity={plan['identity']} version={state['workflow_version']}\n")
                 log.write(f"plan_sha256={digest}\nprofile_sha256={profile_digest}\n")
                 decisions = redact_shared_text(json.dumps(state.get("decisions", []), ensure_ascii=False), redactions)
                 log.write("explicit_decisions=" + decisions + "\n")
@@ -690,6 +728,9 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool) -> int:
 
         env = os.environ.copy()
         env["LDP_PROFILE"] = str(profile_path)
+        env["LDP_SERIES"] = plan["series"]
+        env["LDP_EPISODE"] = plan["episode"]
+        env["LDP_IDENTITY"] = plan["identity"]
         env.update(shell_exports)
         if instance_root:
             env["LDP_INSTANCE_ROOT"] = instance_root

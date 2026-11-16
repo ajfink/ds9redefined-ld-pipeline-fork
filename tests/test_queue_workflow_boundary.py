@@ -12,7 +12,7 @@ from generate_runbooks import OUTPUTS, generated_text  # noqa: E402
 
 class QueueWorkflowBoundaryTests(unittest.TestCase):
     def test_all_queue_documents_start_with_a_live_workflow_warning(self):
-        for name in ("V9-QUEUE.md", "V10-QUEUE.md", "V11-QUEUE.md", "V12-QUEUE.md", "V13-QUEUE.md"):
+        for name in ("V9-QUEUE.md", "V10-QUEUE.md", "V11-QUEUE.md", "V12-QUEUE.md", "V13-QUEUE.md", "V14-QUEUE.md"):
             with self.subTest(name=name):
                 lines = (ROOT / name).read_text(encoding="utf-8").splitlines()
                 self.assertTrue(lines[0].startswith("> **NOT FOR LIVE WORKFLOW USE.**"))

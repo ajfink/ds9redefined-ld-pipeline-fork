@@ -178,3 +178,22 @@ FROM Version 12 -> Version 13
   device evidence; the Z implementation itself was tested synthetically. No real-media run,
   S01E12 break-edge adjudication, new Mac VapourSynth validation, or Linux support claim.
   See `V13-RELEASE.md` and `V13-QUEUE.md`.
+
+Version 14
+FROM Version 13 -> Version 14
+- Added an included metadata-only tree snapshot of the public Section 31 Archive uploads and
+  per-item file listings; the builder refreshes metadata only and downloads no media.
+- Added natural-language DS9/VOY/TNG alias resolution to exact standalone episode-copy items.
+  The resolver refuses missing items and multi-episode/stack substitutions, and requires the
+  existing live `-ListOnly` download gate.
+- Added canonical `SERIES:SxxExx` episode identity. Voyager manifests, shared/local workspaces,
+  generated output roots, workflow logs/locks/state/resume, and PowerShell/Python stages are
+  series-isolated. Bare legacy episode codes and absent manifest series fields remain DS9;
+  historical DS9 paths/plans and DS9 Emissary special handling are preserved.
+- Coverage in this snapshot is DS9/VOY seasons 1–5. TNG has only a partial multi-episode extra
+  and remains blocked from single-episode processing. Existing Voyager staging data are not
+  migrated automatically; review them before using the new `VOY/` namespace.
+- Validation: **188 passed, 7 skipped** (195 tests), compilation/imports, generated-doc and
+  PowerShell parsing checks passed. The metadata snapshot was read-only; no media was downloaded. See `V14-QUEUE.md` and
+  `V14-RELEASE.md`. GitHub is at V14; W's source files are synchronized without changing its
+  stale Git metadata or unrelated local changes.

@@ -65,8 +65,12 @@ class WorkflowPlanTests(unittest.TestCase):
         self.temp.cleanup()
 
     def write_plan(self, *, job_id="test-job", stage="validate-inputs",
-                   resume_policy="inspect", outputs=None, inputs=None):
+                   resume_policy="inspect", outputs=None, inputs=None,
+                   series=None):
         plan_path = self.root / f"{job_id}.json"
+        output_paths = outputs if outputs is not None else [str(self.output)]
+        output_target = Path(output_paths[0])
+        output_target.parent.mkdir(parents=True, exist_ok=True)
         plan = {
             "schema": PLAN_SCHEMA,
             "episode": "S01E99",
@@ -75,14 +79,16 @@ class WorkflowPlanTests(unittest.TestCase):
             "decisions": [{"choice": "test fixture"}],
             "steps": [{
                 "id": "step-1", "stage": stage,
-                "args": [f"--emit={self.output}", f"--counter={self.counter}"],
-                "inputs": inputs if inputs is not None else [str(self.input)],
-                "outputs": outputs if outputs is not None else [str(self.output)],
+                 "args": [f"--emit={output_target}", f"--counter={self.counter}"],
+                 "inputs": inputs if inputs is not None else [str(self.input)],
+                 "outputs": output_paths,
                 "resume_policy": resume_policy,
             }],
         }
         if job_id is not None:
             plan["job_id"] = job_id
+        if series is not None:
+            plan["series"] = series
         plan_path.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
         return plan_path
 
@@ -91,6 +97,55 @@ class WorkflowPlanTests(unittest.TestCase):
         generated = generate_job_id("S01E99", "Q-Less: The Return!",
                                     datetime(2026, 11, 15, 12, 30, 0, 123456, tzinfo=timezone.utc))
         self.assertEqual(generated, "S01E99-q-less-the-return-20261115T123000123456Z")
+
+    def test_legacy_plan_defaults_to_ds9_and_keeps_legacy_stage_cli(self):
+        from run_workflow import _command
+        path = self.write_plan(job_id="legacy-ds9")
+        plan, _ = load_plan(path)
+        self.assertEqual(plan["series"], "DS9")
+        self.assertEqual(plan["identity"], "DS9:S01E99")
+        command = _command(plan, plan["steps"][0], self.profile, None)
+        self.assertIn("--episode", command)
+        self.assertIn("S01E99", command)
+        self.assertNotIn("--series", command)
+
+        path = self.write_plan(job_id="qualified-voy")
+        qualified = json.loads(path.read_text(encoding="utf-8"))
+        qualified["episode"] = "VOY:S01E99"
+        path.write_text(json.dumps(qualified), encoding="utf-8")
+        plan, _ = load_plan(path)
+        self.assertEqual((plan["series"], plan["episode"], plan["identity"]),
+                         ("VOY", "S01E99", "VOY:S01E99"))
+        self.assertIn("--series", _command(plan, plan["steps"][0], self.profile, None))
+
+    def test_same_code_ds9_and_voy_workflows_have_separate_logs_locks_and_resume(self):
+        ds9_output = self.root / "ds9-output.dat"
+        voy_output = self.root / "voy-output.dat"
+        ds9_plan = self.write_plan(job_id="same-code-ds9", outputs=[str(ds9_output)])
+        voy_plan = self.write_plan(job_id="same-code-voy", series="VOY", outputs=[str(voy_output)])
+        with patch.object(run_workflow, "RUN_STAGE", self.fake):
+            self.assertEqual(run_plan(ds9_plan, execute=True, resume=False), 0)
+            self.assertEqual(run_plan(voy_plan, execute=True, resume=False), 0)
+            self.assertEqual(run_plan(voy_plan, execute=True, resume=True), 0)
+        ds9_state = self.root / "logs" / "workflow-same-code-ds9.json"
+        voy_state = self.root / "logs" / "VOY" / "workflow-same-code-voy.json"
+        self.assertTrue(ds9_state.is_file())
+        self.assertTrue(voy_state.is_file())
+        self.assertEqual(json.loads(ds9_state.read_text(encoding="utf-8"))["identity"], "DS9:S01E99")
+        self.assertEqual(json.loads(voy_state.read_text(encoding="utf-8"))["identity"], "VOY:S01E99")
+        self.assertTrue((self.root / "logs" / "workflow-same-code-ds9.lock").is_file())
+        self.assertTrue((self.root / "logs" / "VOY" / "workflow-same-code-voy.lock").is_file())
+
+    def test_legacy_ds9_state_without_series_fields_remains_resumable(self):
+        path = self.write_plan(job_id=None)
+        with patch.object(run_workflow, "RUN_STAGE", self.fake):
+            self.assertEqual(run_plan(path, execute=True, resume=False), 0)
+            state_path = next((self.root / "logs").glob("workflow-*.json"))
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state.pop("series", None)
+            state.pop("identity", None)
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            self.assertEqual(run_plan(path, execute=True, resume=True), 0)
 
     def test_plan_rejects_non_allowlisted_stages_and_bad_resume_policy(self):
         path = self.write_plan(stage="arbitrary-shell")
@@ -127,6 +182,30 @@ class WorkflowPlanTests(unittest.TestCase):
         self.assertEqual(plan["episode_title"], "Q-Less")
         self.assertTrue(all("_comment" in field for field in data["_operator_inputs_EDIT"].values()))
 
+    def test_intake_voy_series_routes_to_series_aware_init_and_stage(self):
+        from run_workflow import _command
+        data = json.loads((ROOT / "CONFIGURE HERE FIRST.json").read_text(encoding="utf-8"))
+        replacements = {
+            "series": "VOY",
+            "episode": "S01E01",
+            "profile": str(self.profile),
+            "archive_url": "https://archive.org/details/VOY-S01E01-LaserDisc-Copies",
+            "downloads_dir": str(self.root / "VOY S01E01 LaserDisc"),
+            "confirmed_title": "Caretaker",
+            "dvd_mode": "no-dvd",
+            "cut_pad_images": "skip",
+            "manifest_path": str(self.root / "episodes" / "VOY" / "S01E01.json"),
+        }
+        for key, value in replacements.items():
+            data["_operator_inputs_EDIT"][key]["value"] = value
+        plan_path = self.root / "voy-intake.json"
+        plan_path.write_text(json.dumps(data), encoding="utf-8")
+        plan, _ = load_plan(plan_path)
+        self.assertEqual(plan["identity"], "VOY:S01E01")
+        init_command = _command(plan, plan["steps"][1], self.profile, None)
+        self.assertIn("--series", init_command)
+        self.assertIn("VOY", init_command)
+
     def test_root_intake_template_is_sanitized_and_keeps_per_setting_comments(self):
         template_path = ROOT / "CONFIGURE HERE FIRST.json"
         raw = template_path.read_text(encoding="utf-8")
@@ -136,7 +215,10 @@ class WorkflowPlanTests(unittest.TestCase):
         for setting in data["_operator_inputs_EDIT"].values():
             self.assertEqual(set(setting), {"value", "_comment"})
             self.assertTrue(setting["_comment"].strip())
-            self.assertIn("REPLACE_", setting["value"])
+            if setting is data["_operator_inputs_EDIT"]["series"]:
+                self.assertEqual(setting["value"], "DS9")
+            else:
+                self.assertIn("REPLACE_", setting["value"])
         self.assertNotRegex(raw, r"(?i)(?:[A-Z]:\\|\\\\)[^\s\"]+")
         self.assertIn("${input:profile}", data["profile"])
 

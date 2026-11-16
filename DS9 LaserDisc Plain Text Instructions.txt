@@ -47,9 +47,11 @@ Start with README.md in this folder. It is the current OpenCode entry point and
 machine setup contract. This document remains the detailed procedure; the Qwen
 variants are alternate presentation styles, not separate workflows.
 
-The user supplies the verified Archive item URL, the destination folder for source
-files, and a matching DVD episode/version if available. Verify episode/title from the
-Archive/capture evidence and DVD when present; ask if they disagree. If no DVD is
+The user supplies a verified Archive item URL or a show/season/episode request, the
+destination folder for source files, and a matching DVD episode/version if available. For
+a series request, use scripts/resolve_archive_episode.py; accept only one exact standalone
+episode-copy match. Verify episode/title from capture evidence and DVD when present; ask if
+they disagree. If no DVD is
 available, ask whether the user explicitly wants the LD-only timing path. The final
 output folder defaults to roots.out in machine.json; record any override.
 
@@ -90,7 +92,7 @@ Record WORKFLOW_VERSION in the device/job log before starting. Confirm it has no
 before every stage; if core files or the version change mid-job, pause before the next
 stage, re-read its current instructions, and reconcile rather than mixing procedures.
 
-Per-device workspace and logs (every README location, V13)
+Per-device workspace and logs (every README location, V14)
 
 The workspace belongs beside the README that started this episode, not to a hard-coded W:
 share. In the device-local profile set shared.enabled=true and shared.release_root to
@@ -100,7 +102,8 @@ Images/, episodes/_template.json, and other devices' workspaces are not episode 
 locations. The permitted data subtree is:
 
 <folder containing the selected README.md>/
-  devices/<device>-<stable-id>/episodes/<code>/
+  devices/<device>-<stable-id>/episodes/<code>/       # legacy/default DS9
+  devices/<device>-<stable-id>/episodes/VOY-<code>/    # Voyager
     manifest/  logs/  references/  cut-pad-images/
 
 Creating/reusing this stable device folder and episode workspace is a required setup instruction, but
@@ -112,9 +115,11 @@ fallback beneath the profile's roots.logs (or roots.work); they never fall back 
 writing elsewhere in the README/release tree. Fallback artifacts remain local, not visible
 to other devices. Pass the returned instance_root to run_stage.py to resume the same
 workspace; do not run two instances against one root concurrently.
-Initialize/reuse the workspace before creating the episode manifest; init_episode.py and
-run_stage.py also do this automatically. If a legacy episodes/<code>.json already exists
-from a pre-workspace run, preserve it and reconcile/migrate it deliberately at a safe
+Initialize/reuse the series-scoped workspace before creating the manifest; init_episode.py
+and run_stage.py also do this automatically. Legacy episodes/<code>.json and shared
+episodes/<code>/ are DS9 identities. Voyager uses local episodes/VOY/<code>.json and shared
+episodes/VOY-<code>/; do not move or relabel old DS9 records to create a Voyager episode.
+Preserve existing data and reconcile any pre-workspace DS9 manifest deliberately at a safe
 boundary-never guess which device owns it or overwrite it automatically.
 
 In shared mode, keep machine.json outside the README folder and set
@@ -196,7 +201,8 @@ If NONE: ask whether to proceed using the LD-only duration/PAD audio path.
 If NONE and Cut Pad Images/<episode> contains PNGs: ask whether to use them for confirmed cut PADs.
 Final output folder (optional): <path, or use machine.json roots.out>
 Derive and verify episode/title from the Archive and DVD. Run the complete workflow,
-measure every episode-specific value, update episodes/<code>.json, and use the bundled
+measure every episode-specific value, update the active DS9 episodes/<code>.json or VOY
+episodes/VOY/<code>.json manifest, and use the bundled
 scripts. Stop if a tool/input/gate is missing or ambiguous. Do not reuse historical
 numbers or overwrite files. Preserve all assets by default. If I explicitly request
 cleanup, use only the exact download-folder path and Recycle Bin; never delete a
@@ -220,21 +226,68 @@ an unreviewed scratch script into an authoritative measurement.
 
 2. Archive pages and input inventory
 
+For a title/season/episode request, resolve the Archive item from the included metadata-only
+snapshot, for example:
+
+python scripts\resolve_archive_episode.py "Download Episode 18 of season 2 of DS9"
+python scripts\resolve_archive_episode.py "Download episode 1 of season 1 of Star Trek Voyager"
+
+Aliases include DS9/Deep Space Nine/Deep Space 9, VOY/Voyager, and TNG/The Next Generation;
+the resolver also accepts Star Trek or Trek prefixes. It returns an item URL only for one
+exact standalone episode-copy item. The current Section 31 snapshot has DS9 and VOY copies
+for seasons 1-5. It has no standalone TNG episode-copy items; the TNG extra archive and season
+stacks are not single-episode matches. Missing/ambiguous results STOP for clarification.
+
+The included tree is metadata-only and may become stale. Use its URL with the live downloader's
+-ListOnly check; trust the current Archive file list, paired sidecars, hashes, capture count,
+and space gate-not a remembered catalog snapshot. Confirm the human title from capture names
+and DVD evidence. If no destination was supplied, use a show-prefixed folder under
+roots.downloads_root (for example, VOY S01E01 LaserDisc); do not apply a DS9-specific
+downloads template to another series.
+
 Known Internet Archive item pages:
 
 - Emissary Part I: https://archive.org/details/DS9-S01E01-LaserDisc-Copies
 - Emissary Part II (item is named S01E02): https://archive.org/details/DS9-S01E02-LaserDisc-Copies
 - A Man Alone, one-part example: https://archive.org/details/DS9-S01E04-LaserDisc-Copies
 - Past Prologue, one-part example: https://archive.org/details/DS9-S01E03-LaserDisc-Copies
-- Other items generally follow https://archive.org/details/DS9-S01E##-LaserDisc-Copies; verify the page and title.
+- Other indexed DS9/VOY copy items are returned by the catalog resolver; verify the live page/title and the ListOnly inventory.
+
+Series-aware processing contract (V14): canonical identity is SERIES:SxxExx.
+Plans store episode: SxxExx plus series: DS9|VOY; omitting series remains DS9 for all
+legacy V9/V10 plans. run_stage.py accepts --series VOY; a direct Python helper accepts
+--episode VOY:S01E01. New manifests contain both series and identity. Python and
+PowerShell helpers validate that series against the selected manifest. The Archive resolver
+returns workflow_identity/workflow_route for exact standalone DS9/VOY items only.
+
+All Voyager generated files are separated under <profile roots>/<root>/VOY/; DS9 continues
+to use its historical root directly. Workflow state/logs/locks and resume live under the
+series-specific workspace, or roots.logs/VOY for a non-shared local profile. Use the
+resolver's suggested_download_folder_name (or a user-provided distinct folder); do not reuse
+a DS9 download directory. The intake template's editable series value defaults to DS9.
+Set it to VOY for Voyager and retain the same season/episode code in its separate field.
+
+No DS9 manifest/workspace/profile migration is required. Older DS9 manifests lacking the
+series fields and older DS9 workflow states lacking series/identity remain DS9 and remain
+resumable. New VOY manifests are initialized only after verified download-manifest evidence;
+they must not be hand-copied from DS9. DS9 S01E01/E02 keep the Emissary two-part procedure;
+VOY S01E01 is not blocked by that DS9-only exception. TNG combined-item-only entries remain
+blocked from single-episode processing. The resolver never downloads; the live -ListOnly,
+integrity, paired-file, and free-space gates remain mandatory.
 
 Use the Archive metadata API through scripts\download_archive.ps1 -ListOnly to inventory the exact TBCs, paired JSON, raw EFM/EFM.7z, capture labels, sizes, and hashes. Capture sets vary; trust the complete selected filename list and capture count, not a remembered episode pattern. An Archive metadata title equal to the item slug identifies the item, but does not by itself establish the human episode title; verify it against the supplied DVD. The downloader prints aggregate bytes and a projected free-space gate. Require SPACE GATE PASS with limits.min_free_gb still available; never estimate total size from the TBC count.
 
-Resolve the download folder once and use the same absolute $source path for preview and transfer. If the user did not provide one, derive the profile default:
+Resolve the download folder once and use the same absolute $source path for preview and
+transfer. If the user did not provide one for a resolver match, use its
+suggested_download_folder_name beneath roots.downloads_root. For a manually supplied URL,
+use the user's path or the profile template only if it matches the series; ask rather than
+silently reuse a DS9-specific folder for VOY/TNG. Do not change the machine profile.
 
-$source = Join-Path $profile.roots.downloads_root ($profile.roots.downloads_template.Replace('{episode}', $ep))
+$resolution is the JSON object returned by resolve_archive_episode.py
+$source = Join-Path $profile.roots.downloads_root $resolution.suggested_download_folder_name
 
-Do not lowercase it, remove spaces, or invent a new folder name. Preview with:
+Do not lowercase it, remove spaces, or invent a different folder name without the user's
+choice. Preview with:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\download_archive.ps1 -Url $url -Destination $source -ListOnly.
 Capture the complete process output and save $LASTEXITCODE immediately after it exits;
 only then filter or truncate the captured output. Piping the running downloader directly
@@ -460,7 +513,7 @@ Diagnosis and classification
 Fill policy
 
 - Non-cut PAD: use the upstream rife-ncnn-vulkan engine's RIFE midpoint between the two adjacent real output-domain frames. A tested best-quality command (768x484 PNG pair, model already installed) was rife-ncnn-vulkan -0 prev.png -1 next.png -o pad.png -s 0.5 -g -1 -x -z -m <model-dir> (-x spatial TTA, -z temporal TTA; CPU/fp32, UHD and de-duplication off). In the E03 identical-encode A/B at pad 22221, maintained-frame steps were 0.00 then 18.79; RIFE steps were 11.36 then 10.60. RIFE reduced high-frequency energy ~22% on that one frame, so constrain it to proven PADs. A tested CPU+TTA run was numerically tied with GPU fp32+TTA; GPU without TTA differed substantially, and NCNN Vulkan fp16 is the precision risk. Verify the installed engine, model, backend, and PNG color path on the current machine; none is implied by another host's setup. The tested RGB24 PNG path can be converted to YUV420 10-bit for output, but conversion cannot recreate source 10-bit precision.
-- PAD on a cut with a DVD: never RIFE across two shots. Map through the independently verified DVD <-> LD picture map, sequentially decode/IVTC the DVD to 23.976, and accept only a uniquely matching frame. Crop/scale to the LD raster and color-match gently to the prior good LD frame. Publish the reviewed timestamped PNG and provenance into this episode's devices/<device>-<stable-id>/episodes/<code>/cut-pad-images/ with shared_workspace.py publish-cut-pad (include the verified DVD SHA-256, --confirm-mapping, and a non-empty --color-match-note), then pass the exact PNG as --cut-pad-image <output-frame>=<PNG>.
+- PAD on a cut with a DVD: never RIFE across two shots. Map through the independently verified DVD <-> LD picture map, sequentially decode/IVTC the DVD to 23.976, and accept only a uniquely matching frame. Crop/scale to the LD raster and color-match gently to the prior good LD frame. Publish the reviewed timestamped PNG and provenance into this episode's series-scoped workspace devices/<device>-<stable-id>/episodes/<identity-folder>/cut-pad-images/ with shared_workspace.py publish-cut-pad (include the verified DVD SHA-256, --confirm-mapping, and a non-empty --color-match-note), then pass the exact PNG as --cut-pad-image <output-frame>=<PNG>.
 - PAD on a cut without a DVD: if the user selected shared cut-pad stills, use only the reviewed Cut Pad Images/<episode>/DVD-HH-MM-SS.mmm-fNNNNNNNN.png still whose scene/timestamp maps uniquely to this measured cut PAD; pass it as --cut-pad-image <output-frame>=<PNG>. The timestamp is a candidate locator, not proof of alignment. If no unique image match exists or the user declined stills, use --hold-cut <output-frame> to copy the immediately previous native 10-bit LD frame. Never cross-shot RIFE or guess a DVD-time mapping.
 
 Injection, encode, and validation

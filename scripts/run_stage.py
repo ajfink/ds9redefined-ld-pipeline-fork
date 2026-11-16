@@ -26,8 +26,8 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ROOT))
 from dependency_lock import (LockError, profile_platform, redact_shared_text,
                              resolve_interpreter, shared_redactions)  # noqa: E402
-from ldcommon import (device_workspace_enabled, shared_instance_root,
-                      workspace_release_root)  # noqa: E402
+from ldcommon import (Ld, PipelineError, device_workspace_enabled, parse_episode_identity,
+                      shared_instance_root, workspace_release_root)  # noqa: E402
 from shared_workspace import resolve_instance_workspace  # noqa: E402
 
 STAGES = {
@@ -115,7 +115,8 @@ def python_command(profile: dict, script: str, episode: str, extra: list[str]) -
     return [py(profile), str(SCRIPTS / script), "--episode", episode, *extra]
 
 
-def make_action(stage: str, episode: str, profile: dict, extra: list[str], report_out: str | None) -> list[str]:
+def make_action(stage: str, episode: str, profile: dict, extra: list[str],
+                report_out: str | None, series: str = "DS9") -> list[str]:
     spec = STAGES[stage]
     os_name = profile_platform(profile)
     kind = spec["kind"]
@@ -131,7 +132,8 @@ def make_action(stage: str, episode: str, profile: dict, extra: list[str], repor
             raise LockError(f"stage {stage!r} fixes argument(s) {', '.join(conflicts)}; do not override them")
         return python_command(profile, spec["script"], episode, [*extra, *fixed_args])
     if kind == "init":
-        return [py(profile), str(SCRIPTS / "init_episode.py"), *extra]
+        series_args = ["--series", series] if series != "DS9" else []
+        return [py(profile), str(SCRIPTS / "init_episode.py"), *series_args, *extra]
     if kind == "download":
         return [powershell(profile), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                 str(SCRIPTS / "download_archive.ps1"), *extra]
@@ -228,11 +230,12 @@ def run_logged(command: list[str], env: dict[str, str], log_path: Path,
 def write_stage_report(path: Path, profile_path: Path, episode: str, stage: str,
                        command: list[str], started: str, status: str,
                        exit_code: int | None, log_path: Path,
-                       gates: list[dict], timing: dict,
+                       gates: list[dict], timing: dict, series: str = "DS9",
                        redactions: list[tuple[str, str]] | None = None) -> None:
     report = {"schema": "ld-pipeline-stage-run-v1",
               "workflow_version": (ROOT / "WORKFLOW_VERSION").read_text(encoding="ascii").strip(),
-              "episode": episode, "stage": stage, "profile": str(profile_path),
+              "episode": episode, "series": series,
+              "identity": f"{series}:{episode}", "stage": stage, "profile": str(profile_path),
               "command": command, "started_utc": started,
               "finished_utc": datetime.now(timezone.utc).isoformat(),
               "exit_code": exit_code, "status": status, "gates": gates,
@@ -250,6 +253,7 @@ def write_stage_report(path: Path, profile_path: Path, episode: str, stage: str,
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--episode", help="episode code (not needed with --list)")
+    ap.add_argument("--series", choices=("DS9", "VOY"), help="episode series; omitted/bare legacy codes mean DS9")
     ap.add_argument("--stage", choices=sorted(STAGES))
     ap.add_argument("--profile", help="machine profile; defaults to LDP_PROFILE or bundle machine.json")
     ap.add_argument("--instance-root", help="required per-instance episode workspace in shared mode")
@@ -270,16 +274,20 @@ def main() -> int:
     if not args.stage or not args.episode:
         ap.error("--stage and --episode are required unless --list is used")
     try:
+        series, episode_code, identity = parse_episode_identity(args.episode, args.series)
         profile_path, profile = load_profile(args.profile)
         os_name = profile_platform(profile)
         if os_name not in ("windows", "macos", "linux"):
             raise LockError(f"unsupported profile os: {profile.get('os')!r}")
         if os_name == "linux" and STAGES[args.stage]["write"]:
             raise LockError("Linux production stages are blocked by design; only dependency and doctor checks are available until Linux end-to-end validation")
-        action = make_action(args.stage, args.episode, profile, args.script_arg, args.report_out)
+        action = make_action(args.stage, episode_code, profile, args.script_arg, args.report_out, series)
         spec = STAGES[args.stage]
         env = os.environ.copy()
         env["LDP_PROFILE"] = str(profile_path)
+        env["LDP_SERIES"] = series
+        env["LDP_EPISODE"] = episode_code
+        env["LDP_IDENTITY"] = identity
         shared = device_workspace_enabled(profile)
         instance = None
         instance_mode = None
@@ -287,13 +295,13 @@ def main() -> int:
         redactions = shared_redactions(profile_path, profile) if shared else []
         if shared:
             workspace, workspace_warning = resolve_instance_workspace(
-                profile_path, profile, args.episode, args.instance_root,
-                create=args.execute)
+                profile_path, profile, episode_code, args.instance_root,
+                create=args.execute, series=series)
             if workspace:
                 instance = Path(workspace["instance_root"]).resolve()
                 instance_mode = workspace["storage_mode"]
                 env.update(workspace["shell_exports"])
-                env["LDP_EPISODE"] = args.episode
+                env["LDP_EPISODE"] = episode_code
             if args.publish_reference and not spec.get("write"):
                 raise LockError("--publish-reference requires an executing write-capable stage")
         elif args.instance_root or args.publish_reference:
@@ -302,23 +310,25 @@ def main() -> int:
         if requires_doctor(args.stage):
             doctor = [py(profile), str(SCRIPTS / "doctor.py"), "--profile", str(profile_path), "--json"]
             if args.stage != "init-episode":
-                doctor += ["--episode", args.episode]
+                doctor += ["--episode", episode_code]
             if instance:
                 doctor += ["--instance-root", str(instance)]
-        gates = ([validate_command(args.episode, profile, spec["gate"])] if spec.get("gate") else [])
+        gates = ([validate_command(episode_code, profile, spec["gate"])] if spec.get("gate") else [])
         if args.stage == "remux":
-            gates.append(validate_command(args.episode, profile, "encode"))
+            gates.append(validate_command(episode_code, profile, "encode"))
             manifest_dir = Path(env["LDP_MANIFEST_DIR"]) if env.get("LDP_MANIFEST_DIR") else ROOT / "episodes"
-            manifest = manifest_dir / f"{args.episode}.json"
+            if not env.get("LDP_MANIFEST_DIR") and series != "DS9":
+                manifest_dir = manifest_dir / series
+            manifest = manifest_dir / f"{episode_code}.json"
             if manifest.is_file():
                 manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
                 tracks = manifest_data.get("mux_tracks") or []
             else:
                 tracks = []
             if "51" in tracks or "srt" in tracks:
-                gates.append(validate_command(args.episode, profile, "retime"))
+                gates.append(validate_command(episode_code, profile, "retime"))
         if not args.execute:
-            print(f"PLAN V{(ROOT / 'WORKFLOW_VERSION').read_text(encoding='ascii').strip()} stage={args.stage} episode={args.episode}")
+            print(f"PLAN V{(ROOT / 'WORKFLOW_VERSION').read_text(encoding='ascii').strip()} stage={args.stage} episode={identity}")
             print("read-only profile: " + str(profile_path))
             if shared:
                 if instance:
@@ -343,17 +353,22 @@ def main() -> int:
 
         logs_raw = (profile.get("roots") or {}).get("logs")
         logs = (instance / "logs") if instance else (
+            Path(os.path.expandvars(os.path.expanduser(str(logs_raw)))) / series
+            if logs_raw and series != "DS9" else
             Path(os.path.expandvars(os.path.expanduser(str(logs_raw)))) if logs_raw else None)
+        if series != "DS9" and logs is not None and not instance and logs.parent.is_dir():
+            logs.mkdir(exist_ok=True)
         if logs is None or not logs.is_dir():
             raise LockError(f"roots.logs must exist before executing a stage: {logs_raw!r}")
         stamp = datetime.now().strftime("%Y%m%dT%H%M%S%f")
-        log_path = logs / f"stage-{args.episode}-{args.stage}-{stamp}.log"
-        report_path = logs / f"stage-{args.episode}-{args.stage}-{stamp}.json"
+        log_label = episode_code if series == "DS9" else f"{series}-{episode_code}"
+        log_path = logs / f"stage-{log_label}-{args.stage}-{stamp}.log"
+        report_path = logs / f"stage-{log_label}-{args.stage}-{stamp}.json"
         start = datetime.now(timezone.utc).isoformat()
         with log_path.open("x", encoding="utf-8") as log:
             log.write(f"workflow_version={(ROOT / 'WORKFLOW_VERSION').read_text(encoding='ascii').strip()}\n")
             profile_label = "<device-local-profile>" if shared else str(profile_path)
-            log.write(f"episode={args.episode} stage={args.stage} profile={profile_label}\n\n")
+            log.write(f"episode={episode_code} series={series} identity={identity} stage={args.stage} profile={profile_label}\n\n")
             if args.stage == "download":
                 log.write("NOTE: full doctor deferred; downloader enforces profile/curl, Archive integrity, and destination-space gates.\n\n")
             if shared and instance:
@@ -396,9 +411,9 @@ def main() -> int:
             gate_results.append(doctor_row)
             if check.returncode:
                 log_timing("BLOCKED_DOCTOR")
-                write_stage_report(report_path, profile_path, args.episode, args.stage,
+                write_stage_report(report_path, profile_path, episode_code, args.stage,
                                    action, start, "BLOCKED_DOCTOR", check.returncode,
-                                   log_path, gate_results, timing_snapshot(), redactions)
+                                   log_path, gate_results, timing_snapshot(), series, redactions)
                 return check.returncode or 1
         for gate in gates:
             gate_start = time.perf_counter()
@@ -408,9 +423,9 @@ def main() -> int:
                                  "exit_code": gate_proc.returncode})
             if gate_proc.returncode:
                 log_timing("BLOCKED_MANIFEST_GATE")
-                write_stage_report(report_path, profile_path, args.episode, args.stage,
+                write_stage_report(report_path, profile_path, episode_code, args.stage,
                                    action, start, "BLOCKED_MANIFEST_GATE", gate_proc.returncode,
-                                   log_path, gate_results, timing_snapshot(), redactions)
+                                   log_path, gate_results, timing_snapshot(), series, redactions)
                 return gate_proc.returncode or 1
         print("COMMAND: " + display(action), flush=True)
         action_start = time.perf_counter()
@@ -430,11 +445,11 @@ def main() -> int:
                     rc = published.returncode
                     break
         log_timing("PASS" if rc == 0 else "FAIL")
-        write_stage_report(report_path, profile_path, args.episode, args.stage,
+        write_stage_report(report_path, profile_path, episode_code, args.stage,
                            action, start, "PASS" if rc == 0 else "FAIL", rc,
-                           log_path, gate_results, timing_snapshot(), redactions)
+                           log_path, gate_results, timing_snapshot(), series, redactions)
         return 0 if rc == 0 else rc
-    except (OSError, json.JSONDecodeError, LockError) as exc:
+    except (OSError, json.JSONDecodeError, LockError, PipelineError) as exc:
         print(f"STAGE RUNNER ERROR: {exc}", file=sys.stderr)
         return 2
 

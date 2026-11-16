@@ -77,6 +77,21 @@ def main() -> int:
     c = Checks()
     d = ep.data
     c.require(d.get("episode") == ep.code, "episode-code", f"manifest says {d.get('episode')!r}, requested {ep.code}")
+    c.require(str(d.get("series", "DS9")).upper() == ep.series, "episode-series",
+              f"manifest series says {d.get('series', 'DS9')!r}, requested {ep.series}")
+    c.require(d.get("identity", ep.identity) == ep.identity, "episode-identity",
+              f"manifest identity says {d.get('identity', ep.identity)!r}, requested {ep.identity}")
+    archive_item = str(d.get("archive_item", ""))
+    item_series = re.match(r"^(DS9|VOY|TNG)-", archive_item, re.IGNORECASE)
+    item_episode = re.search(r"S\d{2}E\d{2}", archive_item, re.IGNORECASE)
+    if archive_item.upper().startswith("TNG-"):
+        c.require(False, "archive-series", "TNG combined/extra items are blocked from single-episode processing")
+    elif item_series:
+        c.require(item_series.group(1).upper() == ep.series, "archive-series",
+                  f"Archive item prefix {item_series.group(1).upper()} does not match manifest series {ep.series}")
+    if item_episode:
+        c.require(item_episode.group(0).upper() == ep.code, "archive-episode",
+                  f"Archive item episode {item_episode.group(0).upper()} does not match manifest {ep.code}")
     c.require(d.get("record_status") not in ("template", "measured-partial"), "record-status",
               f"record_status={d.get('record_status')!r}; partial/two-part records need their dedicated workflow")
     captures = d.get("captures") or []

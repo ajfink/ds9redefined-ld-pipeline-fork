@@ -565,7 +565,7 @@ def main() -> int:
     if len(captures) != len(set(captures)):
         raise PipelineError(f"capture labels must be unique: {captures}")
 
-    manifest_path = episode_manifest_path(ep.code, ld)
+    manifest_path = episode_manifest_path(ep.code, ld, series=getattr(ep, "series", "DS9"))
     current_manifest_bytes = manifest_path.read_bytes()
     current_manifest_sha = hashlib.sha256(current_manifest_bytes).hexdigest()
     current_manifest_data = json.loads(current_manifest_bytes.decode("utf-8"))

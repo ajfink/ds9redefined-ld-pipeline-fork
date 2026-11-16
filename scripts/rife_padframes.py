@@ -76,7 +76,8 @@ def read_candidates(audit: Path, repair_file: Path, fullres: Path,
     return sorted(out, key=lambda r: r["frame"])
 
 
-def parse_shared_cut_image(spec: str, episode: str, bundle: Path) -> tuple[int, Path, str, int]:
+def parse_shared_cut_image(spec: str, episode: str, bundle: Path,
+                           series: str = "DS9") -> tuple[int, Path, str, int]:
     """Validate FRAME=PNG against the curated episode folder and return its DVD timestamp."""
     if "=" not in spec:
         raise PipelineError(f"--cut-pad-image must be FRAME=PNG, got {spec!r}")
@@ -86,7 +87,8 @@ def parse_shared_cut_image(spec: str, episode: str, bundle: Path) -> tuple[int, 
     except ValueError as exc:
         raise PipelineError(f"cut-pad output frame must be an integer: {frame_s!r}") from exc
     source_png = Path(path_s).expanduser().resolve()
-    image_root = (bundle / "Cut Pad Images" / episode).resolve()
+    image_root = (bundle / "Cut Pad Images" / (episode if series == "DS9" else series) /
+                  ("" if series == "DS9" else episode)).resolve()
     active_cut_root = os.environ.get("LDP_CUT_PAD_IMAGES")
     active_cut_root = Path(active_cut_root).expanduser().resolve() if active_cut_root else None
     allowed = source_png.is_relative_to(image_root)
@@ -98,10 +100,11 @@ def parse_shared_cut_image(spec: str, episode: str, bundle: Path) -> tuple[int, 
             relative = source_png.relative_to(device_root)
         except ValueError:
             relative = None
-        # devices/<device-instance>/episodes/<episode>/cut-pad-images/<png>
+        workspace_name = episode if series == "DS9" else f"{series}-{episode}"
+        # devices/<device-instance>/episodes/<identity-folder>/cut-pad-images/<png>
         allowed = bool(relative and len(relative.parts) == 5 and
                        relative.parts[1] == "episodes" and
-                       relative.parts[2].casefold() == episode.casefold() and
+                       relative.parts[2].casefold() == workspace_name.casefold() and
                        relative.parts[3] == "cut-pad-images")
     if not allowed:
         raise PipelineError(f"shared cut PAD image must come from curated {image_root} or a device-instance cut-pad-images/{episode} folder: {source_png}")
@@ -132,6 +135,8 @@ def parse_shared_cut_image(spec: str, episode: str, bundle: Path) -> tuple[int, 
         except (TypeError, ValueError) as exc:
             raise PipelineError(f"cut-PAD provenance has invalid output_pad_frame: {sidecar}") from exc
         if (str(provenance.get("episode", "")).casefold() != episode.casefold() or
+                str(provenance.get("series", "DS9")).upper() != series.upper() or
+                provenance.get("identity", f"DS9:{provenance.get('episode', '')}") != f"{series.upper()}:{episode.upper()}" or
                 provenance_frame != frame or
                 provenance.get("reviewed_episode_scene_and_pad_mapping") is not True or
                 provenance.get("png_sha256") != digest or
@@ -143,22 +148,24 @@ def parse_shared_cut_image(spec: str, episode: str, bundle: Path) -> tuple[int, 
     return frame, source_png, timestamp, int(match.group(5))
 
 
-def is_device_instance_cut_pad_image(source: Path, bundle: Path, episode: str) -> bool:
+def is_device_instance_cut_pad_image(source: Path, bundle: Path, episode: str,
+                                     series: str = "DS9") -> bool:
     """True only for this episode's instance inbox, not the curated source folder."""
     source = source.resolve()
     try:
         relative = source.relative_to((bundle / "devices").resolve())
     except ValueError:
         relative = None
+    workspace_name = episode if series == "DS9" else f"{series}-{episode}"
     if (relative and len(relative.parts) == 5 and relative.parts[1] == "episodes" and
-            relative.parts[2].casefold() == episode.casefold() and
+            relative.parts[2].casefold() == workspace_name.casefold() and
             relative.parts[3] == "cut-pad-images"):
         return True
     active_root = os.environ.get("LDP_CUT_PAD_IMAGES")
     if active_root:
         active = Path(active_root).expanduser().resolve()
         return (source.parent == active and active.name == "cut-pad-images" and
-                active.parent.name.casefold() == episode.casefold())
+                active.parent.name.casefold() == workspace_name.casefold())
     return False
 
 
@@ -290,7 +297,7 @@ def main() -> int:
     shared_images: dict[int, tuple[Path, str, int]] = {}
     for spec in args.cut_pad_image:
         frame, source_png, timestamp, dvd_frame = parse_shared_cut_image(
-            spec, ep.code, Path(__file__).resolve().parent.parent)
+            spec, ep.code, Path(__file__).resolve().parent.parent, ep.series)
         if frame in shared_images:
             raise PipelineError(f"multiple shared DVD stills were assigned to cut PAD frame {frame}")
         shared_images[frame] = (source_png, timestamp, dvd_frame)
@@ -309,7 +316,7 @@ def main() -> int:
     if not no_dvd:
         bundle = Path(__file__).resolve().parent.parent
         for frame, (source_png, _timestamp, _dvd_frame) in shared_images.items():
-            if not is_device_instance_cut_pad_image(source_png, bundle, ep.code):
+            if not is_device_instance_cut_pad_image(source_png, bundle, ep.code, ep.series):
                 raise PipelineError(
                     "DVD-backed cut PAD stills must be published in this episode's "
                     "devices/<device>/episodes/<episode>/cut-pad-images folder")

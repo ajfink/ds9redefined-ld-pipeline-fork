@@ -248,6 +248,7 @@ class SelectStackReferenceTests(unittest.TestCase):
             class FakeEpisode:
                 def __init__(self):
                     self.code = "S01E99"
+                    self.series = "DS9"
                     self.title = "Synthetic"
                     self.data = {"format": "one_part", "captures": captures}
                     self.capture_set = ["L1", "M1"]

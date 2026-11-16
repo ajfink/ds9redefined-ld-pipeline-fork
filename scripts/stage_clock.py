@@ -21,7 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dependency_lock import LockError  # noqa: E402
-from shared_workspace import resolve_instance_workspace  # noqa: E402
+from shared_workspace import parse_episode_identity, resolve_instance_workspace  # noqa: E402
 
 
 class ClockError(RuntimeError):
@@ -34,13 +34,15 @@ def utc_now() -> str:
 
 def new_clock(episode: str, stage: str, machine: str | None, workspace_root: str,
               workspace_mode: str, now_ns: int | None = None,
-              now_utc: str | None = None) -> dict:
+              now_utc: str | None = None, series: str = "DS9") -> dict:
     now_ns = time.monotonic_ns() if now_ns is None else now_ns
     now_utc = utc_now() if now_utc is None else now_utc
     return {
         "schema": "ld-pipeline-stage-clock-v1",
         "workflow_version": (ROOT / "WORKFLOW_VERSION").read_text(encoding="ascii").strip(),
         "episode": episode,
+        "series": series,
+        "identity": f"{series}:{episode}",
         "stage": stage,
         "machine": machine,
         "workspace_root": workspace_root,
@@ -126,6 +128,7 @@ def clock_file(path_value: str) -> tuple[Path, dict]:
     if clock.get("schema") != "ld-pipeline-stage-clock-v1":
         raise ClockError(f"not an ld-pipeline stage-clock file: {path}")
     if (clock.get("episode") != workspace.get("episode") or
+            str(clock.get("series", "DS9")).upper() != str(workspace.get("series", "DS9")).upper() or
             clock.get("machine") != workspace.get("machine")):
         raise ClockError("stage clock does not match its workspace metadata")
     return path, clock
@@ -150,11 +153,12 @@ def main() -> int:
         if args.command == "start":
             from shared_workspace import load_profile
             profile_path, profile = load_profile(args.profile)
-            episode = args.episode.upper()
-            if not re.fullmatch(r"S\d{2}E\d{2}", episode, re.IGNORECASE):
-                raise ClockError(f"episode must be SxxExx: {args.episode!r}")
+            try:
+                series, episode, identity, _folder = parse_episode_identity(args.episode)
+            except LockError as exc:
+                raise ClockError(str(exc)) from exc
             workspace, warning = resolve_instance_workspace(
-                profile_path, profile, episode, args.instance_root, create=True)
+                profile_path, profile, episode, args.instance_root, create=True, series=series)
             if not workspace:
                 raise ClockError(warning or "could not resolve an episode workspace")
             root = Path(workspace["instance_root"])
@@ -162,15 +166,17 @@ def main() -> int:
             if not label:
                 raise ClockError("stage label must contain a letter or digit")
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-            path = root / "logs" / f"stage-clock-{episode}-{label}-{stamp}-{secrets.token_hex(4)}.json"
+            log_identity = episode if series == "DS9" else f"{series}-{episode}"
+            path = root / "logs" / f"stage-clock-{log_identity}-{label}-{stamp}-{secrets.token_hex(4)}.json"
             clock = new_clock(episode, label, profile.get("machine"), str(root.resolve()),
-                              workspace["storage_mode"])
+                              workspace["storage_mode"], series=series)
             with path.open("x", encoding="utf-8", newline="\n") as f:
                 json.dump(clock, f, indent=2)
                 f.write("\n")
             if warning:
                 print("WARN: " + warning, file=sys.stderr)
             print(json.dumps({"clock_file": str(path.resolve()), "episode": episode,
+                              "series": series, "identity": identity,
                               "stage": label, "state": "running",
                               "workspace_mode": workspace["storage_mode"]}, indent=2))
             return 0

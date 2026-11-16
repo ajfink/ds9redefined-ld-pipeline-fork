@@ -2,15 +2,40 @@ from __future__ import annotations
 
 import sys
 import unittest
+import csv
+import hashlib
+import json
+import tempfile
+from types import SimpleNamespace
 from pathlib import Path
+from unittest.mock import patch
+from ldcommon import PipelineError  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from scripts.init_episode import episode_files, title_from_capture  # noqa: E402
+from scripts import init_episode as init_module  # noqa: E402
+from scripts.init_episode import (archive_episode_identity, episode_files,
+                                  title_from_capture)  # noqa: E402
 
 
 class InitEpisodeFileKeyTests(unittest.TestCase):
+    def test_archive_identity_infers_series_and_preserves_ds9_legacy_default(self):
+        self.assertEqual(archive_episode_identity("VOY-S01E01-LaserDisc-Copies"),
+                         ("VOY", "S01E01"))
+        self.assertEqual(archive_episode_identity("S02E18-LaserDisc-Copies"),
+                         ("DS9", "S02E18"))
+        with self.assertRaisesRegex(PipelineError, "conflicting with --series"):
+            archive_episode_identity("VOY-S01E01-LaserDisc-Copies", "DS9")
+
+    def test_only_ds9_emissary_uses_the_two_part_initializer_block(self):
+        self.assertEqual(archive_episode_identity("VOY-S01E01-LaserDisc-Copies"),
+                         ("VOY", "S01E01"))
+        with self.assertRaisesRegex(PipelineError, "Emissary is two-part"):
+            archive_episode_identity("DS9-S01E01-LaserDisc-Copies")
+        with self.assertRaisesRegex(PipelineError, "TNG Archive items are not enabled"):
+            archive_episode_identity("TNG-S01E24-LaserDisc-Copies")
+
     def test_capture_independent_audio_and_avs_paths_are_initialized(self):
         files = episode_files("S01E07", "Q-Less")
         for key in ("avs_log", "avs_trim", "dvd51_source"):
@@ -30,6 +55,63 @@ class InitEpisodeFileKeyTests(unittest.TestCase):
         files = episode_files("S01E07", "Q-Less")
         self.assertNotIn("ld_native", files)
         self.assertNotIn("ld_corrected", files)
+
+    def test_voy_initializer_writes_series_identity_and_voy_manifest_namespace(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bundle = root / "bundle"
+            (bundle / "episodes" / "VOY").mkdir(parents=True)
+            (bundle / "episodes" / "_template.json").write_bytes(
+                (ROOT / "episodes" / "_template.json").read_bytes())
+            downloads_root = root / "downloads"
+            downloads = downloads_root / "VOY S01E01 LaserDisc"
+            downloads.mkdir(parents=True)
+            file_data = {
+                "VOY-S01E01-Caretaker, Part I-L1.tbc": b"synthetic tbc",
+                "VOY-S01E01-Caretaker, Part I-L1.tbc.json": b"{}",
+                "VOY-S01E01-Caretaker, Part I-L1.efm": b"synthetic efm",
+            }
+            rows = []
+            remote_files = []
+            for name, payload in file_data.items():
+                (downloads / name).write_bytes(payload)
+                digest = hashlib.md5(payload).hexdigest()
+                rows.append({"Name": name, "Bytes": str(len(payload)), "MD5": digest,
+                             "Status": "verified", "ArchiveId": "VOY-S01E01-LaserDisc-Copies"})
+                remote_files.append({"name": name, "size": str(len(payload)), "md5": digest})
+            with (downloads / "download-manifest.csv").open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.DictWriter(stream, fieldnames=rows[0].keys())
+                writer.writeheader()
+                writer.writerows(rows)
+            output_roots = {}
+            for key in ("work", "probe", "avs", "audio", "subs", "out", "prores", "stack", "logs"):
+                output_roots[key] = str(root / key)
+            profile = {"os": "windows", "machine": "TEST", "roots": {
+                "downloads_root": str(downloads_root),
+                "downloads_template": "DS9 {episode} LaserDisc", **output_roots}}
+            fake_ld = SimpleNamespace(profile=profile, profile_path=root / "machine.json")
+            target = bundle / "episodes" / "VOY" / "S01E01.json"
+            remote = {"files": remote_files,
+                      "metadata": {"title": "VOY-S01E01-LaserDisc-Copies"}}
+            args = ["init_episode.py", "--url",
+                    "https://archive.org/details/VOY-S01E01-LaserDisc-Copies",
+                    "--downloads", str(downloads), "--no-dvd", "--series", "VOY",
+                    "--cut-pad-images", "skip"]
+            with patch.object(init_module, "BUNDLE", bundle), \
+                    patch.object(init_module, "Ld", return_value=fake_ld), \
+                    patch.object(init_module, "episode_manifest_path",
+                                 side_effect=lambda code, ld, series=None: target), \
+                    patch.object(init_module, "assert_writable_path", side_effect=lambda path, ld: Path(path)), \
+                    patch.object(init_module, "urlopen") as urlopen, \
+                    patch.object(sys, "argv", args):
+                urlopen.return_value.__enter__.return_value.read.return_value = json.dumps(remote).encode()
+                self.assertEqual(init_module.main(), 0)
+            manifest = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["episode"], "S01E01")
+            self.assertEqual(manifest["series"], "VOY")
+            self.assertEqual(manifest["identity"], "VOY:S01E01")
+            self.assertEqual(manifest["archive_item"], "VOY-S01E01-LaserDisc-Copies")
+            self.assertTrue((root / "probe" / "VOY").is_dir())
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 {
   "_readme": [
-    "Per-episode manifest. Copy only after identifying the episode; fill values as measured.",
+    "Per-episode manifest. New manifests persist both series and SxxExx; missing series in legacy manifests means DS9.",
+    "Canonical identity is SERIES:SxxExx. DS9 keeps its historical manifest/workspace paths; VOY is namespaced.",
     "Scripts read this instead of hard-coding frame counts, durations, skips or paths.",
     "Rule: if an accessor asks for a value and it is not here, the script fails loudly -",
     "measure it and record it. Never guess and never copy another episode's number.",
@@ -10,6 +11,8 @@
     "roots.downloads optionally overrides the profile's download-folder template."
   ],
   "episode": "S01E00",
+  "series": "DS9",
+  "identity": "DS9:S01E00",
   "title": "",
   "pad_report_label": "",
   "record_status": "template",

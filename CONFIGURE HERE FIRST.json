@@ -1,18 +1,22 @@
 {
   "_instructions_DO_NOT_EDIT": [
     "START HERE. These are instructions only; do not enter your configuration values in this section.",
-    "Edit only the value members inside _operator_inputs_EDIT below. Keep each adjacent _comment as its explanation. The workflow creates the job ID from episode and confirmed_title; do not supply one.",
+    "Edit only the value members inside _operator_inputs_EDIT below. Keep each adjacent _comment as its explanation. The workflow creates a series-scoped job ID from series, episode, and confirmed_title; do not supply one.",
     "This is a no-DVD intake example. Confirm the Archive item and title for this job; do not reuse sample decisions. This template supports only explicit no-DVD intake. For DVD-backed intake, create a separate plan with --dvd and the exact matching DVD path.",
     "No-DVD mode has no DVD-derived 5.1/SRT and cannot pass external absolute A/V correlation; it uses the separate LD-only duration/PAD timing route.",
     "For no-DVD jobs, cut_pad_images must be use or skip when shared stills are available. use permits a uniquely verified still only for a confirmed cut-PAD frame; skip forbids those stills, so later cut-PAD repair must use the documented hold-cut method. Neither choice permits cross-shot RIFE.",
-    "The intake ends after input validation. Review the initialized manifest's episode/title identity before creating a processing plan.",
-    "For shared mode, resolve the device episode workspace first and set manifest_path to that workspace's manifest/SxxExx.json.",
+    "The intake ends after input validation. Review the initialized manifest's series/episode/title identity before creating a processing plan.",
+    "Choose series explicitly (legacy DS9 jobs use DS9). For shared mode, resolve the series-scoped device workspace first and set manifest_path to that workspace's manifest/SxxExx.json.",
     "The runner fills approved_by from the current local account and approved_at_utc from the workflow start time; do not enter either value."
   ],
   "_operator_inputs_EDIT": {
+    "series": {
+      "value": "DS9",
+      "_comment": "Required. DS9 or VOY. Bare SxxExx codes default to DS9; choose VOY explicitly for Voyager. TNG combined extras are blocked from single-episode processing."
+    },
     "episode": {
       "value": "REPLACE_WITH_SXXEXX",
-      "_comment": "Required. SxxExx code confirmed against the selected Archive item."
+      "_comment": "Required. SxxExx code confirmed against the selected Archive item; series is recorded separately."
     },
     "profile": {
       "value": "REPLACE_WITH_ABSOLUTE_PATH_TO_DEVICE_LOCAL_MACHINE_PROFILE",
@@ -20,7 +24,7 @@
     },
     "archive_url": {
       "value": "https://archive.org/details/REPLACE_WITH_ARCHIVE_IDENTIFIER",
-      "_comment": "Required. Confirmed Archive item URL; its episode identity must match episode above."
+      "_comment": "Required. Confirmed standalone Archive item URL; its series and episode identity must match series/episode above."
     },
     "downloads_dir": {
       "value": "REPLACE_WITH_ABSOLUTE_DOWNLOAD_DIRECTORY",
@@ -40,11 +44,12 @@
     },
     "manifest_path": {
       "value": "REPLACE_WITH_ABSOLUTE_WORKSPACE_MANIFEST_PATH",
-      "_comment": "Required. Absolute expected manifest path. In shared mode, resolve the device episode workspace and use its manifest folder."
+      "_comment": "Required. Absolute expected manifest path. Local VOY manifests are under episodes/VOY; shared workspaces are series-scoped."
     }
   },
   "schema": "ld-pipeline-workflow-plan-v1",
   "episode": "${input:episode}",
+  "series": "${input:series}",
   "episode_title": "${input:confirmed_title}",
   "profile": "${input:profile}",
   "fingerprint_policy": "balanced",

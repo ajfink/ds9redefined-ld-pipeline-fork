@@ -1,7 +1,7 @@
 # GitHub source-only export
 
 This public repository contains workflow source, documentation, tests, and portable
-templates, V13 doctor/stage/workflow, measurement, and timing tools, and platform Python locks. It intentionally does
+templates, V14 doctor/stage/workflow, measurement, timing, and Archive catalog tools, and platform Python locks. It intentionally does
 **not** contain:
 
 - `machine.json` or machine-specific profiles;
@@ -11,6 +11,9 @@ templates, V13 doctor/stage/workflow, measurement, and timing tools, and platfor
 - TBC/EFM captures, WAV/FLAC audio, video, descriptor caches, or other generated images;
 - all but the intentionally curated, single-frame cut-PAD stills in `Cut Pad Images/<episode>/`;
 - the third-party AviSynth plugin DLLs in `avsplugins/`.
+
+The included Section 31 Archive tree is metadata/link inventory only. It contains no TBC,
+EFM, PCM, or other media bytes.
 
 `episodes/_template.json` and the generic Windows, macOS, and Linux x86_64 candidate example
 profiles are included. Platform dependency locks/environment recipes are under

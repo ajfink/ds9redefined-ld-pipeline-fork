@@ -484,12 +484,21 @@ def main() -> int:
         else:
             episode_path = (resolve_path(manifest_dir_value) if manifest_dir_value else
                             bundle / "episodes")
+            if episode_path and not manifest_dir_value and os.environ.get("LDP_SERIES", "DS9").upper() == "VOY":
+                episode_path = episode_path / "VOY"
             episode_path = episode_path / f"{args.episode}.json" if episode_path else None
         if episode_path is None or not episode_path.is_file():
             results.add("episode:manifest", "FAIL", f"missing manifest: {episode_path}")
         else:
             try:
                 episode = json.loads(episode_path.read_text(encoding="utf-8"))
+                requested_series = os.environ.get("LDP_SERIES", "DS9").upper()
+                manifest_series = str(episode.get("series", "DS9")).upper()
+                if manifest_series != requested_series:
+                    results.add("episode:series", "FAIL",
+                                f"manifest series {manifest_series} does not match requested {requested_series}")
+                else:
+                    results.add("episode:series", "PASS", f"{requested_series}:{args.episode}")
                 captures = episode.get("captures") or []
                 if captures:
                     results.add("episode:manifest", "PASS",

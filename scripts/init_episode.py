@@ -7,8 +7,9 @@ and planned profile-root file locations. It deliberately leaves measurements nul
   python scripts\\init_episode.py --url <archive-url> --downloads <folder> --dvd <dvd.mkv>
   python scripts\\init_episode.py --url <archive-url> --downloads <folder> --no-dvd
 
-It refuses to overwrite an existing manifest. It currently supports one-part
-episodes only; E01/E02 Emissary needs its existing two-part manifest/workflow.
+It refuses to overwrite an existing manifest. It supports one-part DS9/VOY
+episodes only; DS9 E01/E02 Emissary uses its existing two-part workflow, and TNG
+combined/extra items are not single-episode inputs.
 """
 from __future__ import annotations
 
@@ -40,6 +41,26 @@ def archive_id(url: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9._-]+", item):
         raise PipelineError(f"unexpected Archive identifier: {item!r}")
     return item
+
+
+def archive_episode_identity(item: str, requested_series: str | None = None) -> tuple[str, str]:
+    """Resolve an Archive identifier's series; unqualified legacy IDs mean DS9."""
+    if re.match(r"^TNG-", item, re.IGNORECASE):
+        raise PipelineError("TNG Archive items are not enabled for single-episode initialization; combined extras remain blocked")
+    match = re.search(r"S\d{2}E\d{2}", item, re.IGNORECASE)
+    if not match:
+        raise PipelineError(f"could not derive an SxxExx code from Archive item id {item!r}")
+    code = match.group(0).upper()
+    prefix = re.match(r"^(DS9|VOY)-", item, re.IGNORECASE)
+    item_series = prefix.group(1).upper() if prefix else None
+    if item_series and requested_series and item_series != requested_series.upper():
+        raise PipelineError(f"Archive item prefix identifies {item_series}, conflicting with --series {requested_series}")
+    series = (requested_series or item_series or "DS9").upper()
+    if series not in ("DS9", "VOY"):
+        raise PipelineError(f"unsupported processing series {series!r}; TNG combined/extra items are not single-episode manifests")
+    if series == "DS9" and code in ("S01E01", "S01E02"):
+        raise PipelineError("Emissary is two-part; use the existing S01E01 manifest and dedicated Part I/II workflow")
+    return series, code
 
 
 def title_from_dvd(path: Path, code: str, ffprobe: str) -> str:
@@ -76,7 +97,8 @@ def title_from_capture(captures: list[dict], code: str) -> str:
     return ""
 
 
-def verified_instance_cut_pad_images(folder: Path, code: str) -> list[Path]:
+def verified_instance_cut_pad_images(folder: Path, code: str,
+                                     series: str = "DS9") -> list[Path]:
     """Only offer instance-staged stills whose V7 provenance sidecar matches the PNG."""
     out = []
     for png in sorted(folder.glob("DVD-*.png")) if folder.is_dir() else []:
@@ -88,6 +110,8 @@ def verified_instance_cut_pad_images(folder: Path, code: str) -> list[Path]:
         try:
             provenance = json.loads(sidecar.read_text(encoding="utf-8"))
             if (str(provenance.get("episode", "")).casefold() != code.casefold() or
+                    str(provenance.get("series", "DS9")).upper() != series.upper() or
+                    provenance.get("identity", f"DS9:{provenance.get('episode', '')}") != f"{series.upper()}:{code.upper()}" or
                     provenance.get("reviewed_episode_scene_and_pad_mapping") is not True or
                     not isinstance(provenance.get("output_pad_frame"), int) or
                     provenance.get("png_sha256") != hashlib.sha256(png.read_bytes()).hexdigest() or
@@ -147,6 +171,7 @@ def episode_files(code: str, title: str = "", script_ext: str = ".avs") -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", required=True, help="verified Archive /details/<item-id> URL")
+    ap.add_argument("--series", choices=("DS9", "VOY"), help="series namespace; inferred from DS9-/VOY- item IDs when available")
     ap.add_argument("--downloads", required=True, help="destination used by download_archive.ps1")
     dvd_group = ap.add_mutually_exclusive_group(required=True)
     dvd_group.add_argument("--dvd", help="absolute path to the verified matching DVD MKV")
@@ -158,16 +183,15 @@ def main() -> int:
     args = ap.parse_args()
 
     item = archive_id(args.url)
-    m = re.search(r"S\d{2}E\d{2}", item, re.IGNORECASE)
-    if not m:
-        raise PipelineError(f"could not derive an SxxExx code from Archive item id {item!r}")
-    code = m.group(0).upper()
-    if code in ("S01E01", "S01E02"):
-        raise PipelineError("Emissary is two-part; use the existing S01E01 manifest and dedicated Part I/II workflow")
+    series, code = archive_episode_identity(item, args.series)
+    code = code.upper()  # Keep the canonical Archive-derived code explicit at the intake boundary.
 
+    os.environ["LDP_SERIES"] = series
+    os.environ["LDP_EPISODE"] = code
+    os.environ["LDP_IDENTITY"] = f"{series}:{code}"
     ld = Ld()
     if (ld.profile.get("shared") or {}).get("enabled") is True:
-        shared_instance_root(ld.profile, ld.profile_path, code)
+        shared_instance_root(ld.profile, ld.profile_path, code, series)
     download_dir = Path(args.downloads).resolve()
     if not download_dir.is_dir():
         raise PipelineError(f"download destination is not a directory: {download_dir}")
@@ -179,10 +203,12 @@ def main() -> int:
     root_overrides = {}
     roots = ld.profile.get("roots") or {}
     dl_root = roots.get("downloads_root")
-    dl_template = roots.get("downloads_template") or "DS9 {episode} LaserDisc"
+    dl_template = roots.get("downloads_template") or "{series} {episode} LaserDisc"
+    if series != "DS9" and "{series}" not in dl_template:
+        dl_template = "{series} {episode} LaserDisc"
     if dl_root:
         try:
-            expected = (Path(dl_root) / dl_template.format(episode=code)).resolve()
+            expected = (Path(dl_root) / dl_template.format(episode=code, series=series)).resolve()
             if download_dir != expected:
                 root_overrides["downloads"] = str(download_dir)
         except (ValueError, KeyError):
@@ -286,17 +312,18 @@ def main() -> int:
             print("WARN: could not derive a human title from verified capture filenames or Archive metadata; "
                   "confirm it before reporting.", file=sys.stderr)
 
-    cut_pad_dir = BUNDLE / "Cut Pad Images" / code
+    cut_pad_dir = BUNDLE / "Cut Pad Images" / (code if series == "DS9" else series) / ("" if series == "DS9" else code)
     cut_pad_images = sorted(cut_pad_dir.glob("DVD-*.png")) if cut_pad_dir.is_dir() else []
     instance_cut_dir = os.environ.get("LDP_CUT_PAD_IMAGES")
     if instance_cut_dir:
         instance_cut = Path(os.path.expandvars(os.path.expanduser(instance_cut_dir)))
-        cut_pad_images.extend(verified_instance_cut_pad_images(instance_cut, code))
+        cut_pad_images.extend(verified_instance_cut_pad_images(instance_cut, code, series))
     shared = ld.profile.get("shared") or {}
     if shared.get("enabled") is True:
         devices = Path(shared["release_root"]) / "devices"
-        for candidate_dir in devices.glob(f"*/episodes/{code}/cut-pad-images"):
-            cut_pad_images.extend(verified_instance_cut_pad_images(candidate_dir, code))
+        workspace_name = code if series == "DS9" else f"{series}-{code}"
+        for candidate_dir in devices.glob(f"*/episodes/{workspace_name}/cut-pad-images"):
+            cut_pad_images.extend(verified_instance_cut_pad_images(candidate_dir, code, series))
     # Deduplicate identical paths while retaining deterministic order.
     cut_pad_images = sorted({p.resolve() for p in cut_pad_images})
     if args.no_dvd and cut_pad_images and args.cut_pad_images is None:
@@ -309,7 +336,7 @@ def main() -> int:
     if not title and dvd is not None:
         print("WARN: could not derive a human title from DVD tags/filename; confirm it and update title before reporting.", file=sys.stderr)
 
-    default_manifest = episode_manifest_path(code, ld)
+    default_manifest = episode_manifest_path(code, ld, series=series)
     out = Path(args.manifest_out).resolve() if args.manifest_out else default_manifest
     assert_writable_path(out, ld)
     if (ld.profile.get("shared") or {}).get("enabled") is True and out.parent != default_manifest.parent.resolve():
@@ -318,7 +345,8 @@ def main() -> int:
         raise PipelineError(f"refusing to overwrite existing manifest: {out}")
     template = json.loads((BUNDLE / "episodes" / "_template.json").read_text(encoding="utf-8"))
     template.update({
-        "episode": code, "title": title, "pad_report_label": code,
+        "episode": code, "series": series, "identity": f"{series}:{code}",
+        "title": title, "pad_report_label": code if series == "DS9" else f"{series}-{code}",
         "record_status": "draft", "format": "one_part", "archive_item": item,
         "dvd_reference_available": dvd is not None,
         "no_dvd_proceed_approved": bool(args.no_dvd),
@@ -330,15 +358,20 @@ def main() -> int:
         "deliverable": "pre_upscale", "deliverable_tracks": ["ld"],
         "mux_tracks": ["ld"], "ld_audio_source": "ld_synced",
         "_init_note": ("DVD/download locations use machine profile roots when possible and explicit paths only for outside roots. "
-                       "Episode measurements are intentionally null; measure them before running stage scripts. "
-                       "No-DVD mode is permitted only after the user explicitly chose --no-dvd; DVD-derived tracks are unavailable."),
+                        "Episode measurements are intentionally null; measure them before running stage scripts. "
+                        "No-DVD mode is permitted only after the user explicitly chose --no-dvd; DVD-derived tracks are unavailable."),
     })
     if root_overrides:
         template["roots"] = root_overrides
+    if series != "DS9":
+        for root_name in ("work", "probe", "avs", "audio", "subs", "out", "prores", "stack", "logs"):
+            root_value = roots.get(root_name)
+            if root_value:
+                (Path(os.path.expandvars(os.path.expanduser(str(root_value)))) / series).mkdir(parents=True, exist_ok=True)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(template, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"initialized {out}")
-    print(f"episode={code} title={title or '<confirm>'} archive={item}")
+    print(f"episode={code} series={series} identity={series}:{code} title={title or '<confirm>'} archive={item}")
     print(f"dvd_reference_available={dvd is not None}; cut_pad_images_choice={image_choice}")
     print(f"captures={','.join(c['label'] for c in captures)} reference=UNMEASURED")
     print("No stack, cadence, audio, trim, alignment, or retime values were guessed.")

@@ -8,14 +8,16 @@ episode's frame count.
   ld = Ld()                       # loads <bundle>/machine.json
   ld.tool('ffmpeg')               # -> absolute path, raises with a fix hint
   ld.root('out')                  # -> pathlib.Path
-  ld.episode('S01E05')            # -> Episode object (manifest)
+  ld.episode('S01E05')            # -> legacy/default DS9 episode object
+  ld.episode('VOY:S01E01')        # -> explicitly series-scoped Voyager episode
   ep.frame_count, ep.duration_s   # measured values, never guessed
   ep.path('pre_upscale')          # -> Path via {root, name} indirection
 
 Profile resolution order:
   $LDP_PROFILE -> <bundle>/machine.json -> <bundle>/machine.example.json
 
-Local manifests live at <bundle>/episodes/<code>.json. In shared-release mode,
+Legacy DS9 manifests live at <bundle>/episodes/<code>.json; VOY manifests live at
+<bundle>/episodes/VOY/<code>.json. In shared-release mode,
 the active episode manifest is redirected to the caller's unique
 ``LDP_INSTANCE_ROOT/manifest`` folder; no shared-root manifest writes are allowed.
 """
@@ -62,6 +64,33 @@ def _load_json(path: Path):
         raise PipelineError(f"file not found: {path}")
     except json.JSONDecodeError as e:
         raise PipelineError(f"{path} is not valid JSON: {e}")
+
+
+EPISODE_CODE_RE = re.compile(r"^S\d{2}E\d{2}$", re.IGNORECASE)
+SERIES_RE = re.compile(r"^(DS9|VOY)$", re.IGNORECASE)
+
+
+def parse_episode_identity(value: str, series: str | None = None) -> tuple[str, str, str]:
+    """Return (series, SxxExx code, canonical identity); bare legacy codes mean DS9."""
+    raw = str(value or "").strip()
+    embedded_series = None
+    if ":" in raw:
+        embedded_series, raw = raw.split(":", 1)
+        if series and embedded_series.upper() != series.upper():
+            raise PipelineError(f"episode identity {value!r} conflicts with series {series!r}")
+        series = embedded_series
+    chosen = str(series or "DS9").upper()
+    if not SERIES_RE.fullmatch(chosen):
+        raise PipelineError(f"unsupported processing series {chosen!r}; supported series are DS9 and VOY")
+    if not EPISODE_CODE_RE.fullmatch(raw):
+        raise PipelineError(f"episode must be an SxxExx code or SERIES:SxxExx identity, got {value!r}")
+    code = raw.upper()
+    return chosen, code, f"{chosen}:{code}"
+
+
+def series_artifact_component(series: str) -> str | None:
+    """VOY output roots get a namespace; DS9 keeps every historical path unchanged."""
+    return None if series.upper() == "DS9" else series.upper()
 
 
 class Ld:
@@ -124,24 +153,33 @@ class Ld:
     def root(self, name: str) -> Path:
         if name == "logs" and device_workspace_enabled(self.profile):
             return shared_instance_root(self.profile, self.profile_path,
-                                        os.environ.get("LDP_EPISODE")) / "logs"
+                                        os.environ.get("LDP_EPISODE"),
+                                        series=os.environ.get("LDP_SERIES")) / "logs"
         v = (self.profile.get("roots") or {}).get(name)
         if not v:
             raise PipelineError(f"root '{name}' is not set in {self.profile_path}")
-        return Path(v)
+        base = Path(v)
+        component = series_artifact_component(os.environ.get("LDP_SERIES", "DS9"))
+        if component and name in {"work", "probe", "avs", "audio", "subs", "out", "prores", "stack", "logs"}:
+            return base / component
+        return base
 
     def work(self) -> Path:
         return self.root("work")
 
-    def downloads_dir(self, episode_code: str, override: str | None = None) -> Path:
+    def downloads_dir(self, episode_code: str, override: str | None = None,
+                      series: str | None = None) -> Path:
         if override:
             return Path(override)
         roots = self.profile.get("roots") or {}
-        template = roots.get("downloads_template") or "DS9 {episode} LaserDisc"
+        series = str(series or os.environ.get("LDP_SERIES") or "DS9").upper()
+        template = roots.get("downloads_template") or "{series} {episode} LaserDisc"
+        if series != "DS9" and "{series}" not in template:
+            template = "{series} {episode} LaserDisc"
         base = roots.get("downloads_root")
         if not base:
             raise PipelineError("roots.downloads_root is not set in the profile")
-        return Path(base) / template.format(episode=episode_code)
+        return Path(base) / template.format(episode=episode_code, series=series)
 
     # ---- reports ----
     def probe(self) -> Path:
@@ -177,13 +215,21 @@ class Ld:
 class Episode:
     """A per-episode manifest: measured values live here, not in code."""
 
-    def __init__(self, code: str, data: dict, ld: "Ld"):
-        self.code = code
+    def __init__(self, code: str, data: dict, ld: "Ld", series: str | None = None):
+        manifest_series = str(data.get("series", "DS9")).upper()
+        chosen = str(series or manifest_series).upper()
+        if not SERIES_RE.fullmatch(chosen):
+            raise PipelineError(f"{code}: manifest has unsupported series {chosen!r}")
+        if manifest_series != chosen:
+            raise PipelineError(f"{code}: manifest series {manifest_series!r} does not match requested series {chosen}")
+        self.code = code.upper()
+        self.series = chosen
+        self.identity = f"{chosen}:{self.code}"
         self.data = data
         self.ld = ld
 
     def __repr__(self):
-        return f"<Episode {self.code} {self.data.get('title', '')!r}>"
+        return f"<Episode {self.identity} {self.data.get('title', '')!r}>"
 
     # ---- identity ----
     @property
@@ -191,7 +237,10 @@ class Episode:
         return self.data.get("title", self.code)
 
     def downloads(self) -> Path:
-        return self.ld.downloads_dir(self.code, (self.data.get("roots") or {}).get("downloads"))
+        os.environ["LDP_SERIES"] = self.series
+        os.environ["LDP_EPISODE"] = self.code
+        os.environ["LDP_IDENTITY"] = self.identity
+        return self.ld.downloads_dir(self.code, (self.data.get("roots") or {}).get("downloads"), self.series)
 
     # ---- measured values (fail loudly rather than silently defaulting) ----
     def _measure(self, section: str, key: str, cast=float):
@@ -247,6 +296,9 @@ class Episode:
 
     # ---- files: {root, name} keeps machine paths out of the manifest ----
     def path(self, key: str) -> Path:
+        os.environ["LDP_SERIES"] = self.series
+        os.environ["LDP_EPISODE"] = self.code
+        os.environ["LDP_IDENTITY"] = self.identity
         spec = (self.data.get("files") or {}).get(key)
         if not spec:
             raise PipelineError(f"{self.code}: manifest has no file entry '{key}'")
@@ -267,13 +319,24 @@ def load_profile(path=None) -> Ld:
     return Ld(path)
 
 
-def load_episode(code: str, ld: Ld | None = None) -> Episode:
+def load_episode(code: str, ld: Ld | None = None, series: str | None = None) -> Episode:
     ld = ld or Ld()
-    p = episode_manifest_path(code, ld)
+    context_series = series
+    if context_series is None and ":" not in str(code):
+        context_series = os.environ.get("LDP_SERIES")
+    chosen, episode_code, identity = parse_episode_identity(
+        code, context_series)
+    p = episode_manifest_path(episode_code, ld, series=chosen)
     if not p.exists():
-        raise PipelineError(f"no manifest for {code}: {p} - create it from "
+        raise PipelineError(f"no manifest for {identity}: {p} - create it from "
                             f"episodes/_template.json after verified downloads")
-    return Episode(code, _load_json(p), ld)
+    data = _load_json(p)
+    manifest_series = str(data.get("series", "DS9")).upper()
+    if manifest_series != chosen:
+        raise PipelineError(f"manifest identity mismatch at {p}: requested {identity}, manifest series is {manifest_series}")
+    if data.get("identity") is not None and data.get("identity") != identity:
+        raise PipelineError(f"manifest identity mismatch at {p}: requested {identity}, stored {data.get('identity')!r}")
+    return Episode(episode_code, data, ld, chosen)
 
 
 def device_workspace_enabled(profile: dict | None) -> bool:
@@ -289,7 +352,7 @@ def workspace_release_root(profile: dict) -> Path:
 
 
 def shared_instance_root(profile: dict | None = None, profile_path: Path | None = None,
-                         episode: str | None = None) -> Path:
+                         episode: str | None = None, series: str | None = None) -> Path:
     """Resolve and validate a README-relative device workspace or local fallback."""
     profile = profile or Ld().profile
     shared = profile.get("shared") or {}
@@ -307,7 +370,8 @@ def shared_instance_root(profile: dict | None = None, profile_path: Path | None 
             sys.path.insert(0, str(scripts_dir))
         try:
             from shared_workspace import resolve_instance_workspace
-            result, warning = resolve_instance_workspace(profile_path, profile, episode, create=True)
+            result, warning = resolve_instance_workspace(
+                profile_path, profile, episode, create=True, series=series)
         except Exception as exc:
             raise PipelineError(f"could not prepare shared or local-fallback episode workspace: {exc}") from exc
         if not result:
@@ -326,6 +390,9 @@ def shared_instance_root(profile: dict | None = None, profile_path: Path | None 
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise PipelineError(f"instance metadata is missing/invalid at {metadata_path}: {exc}") from exc
+    chosen, episode_code, identity = parse_episode_identity(
+        episode or metadata.get("episode", ""), series or metadata.get("series", "DS9"))
+    workspace_name = episode_code if chosen == "DS9" else f"{chosen}-{episode_code}"
     if metadata.get("storage_mode") == "local-fallback" or os.environ.get("LDP_INSTANCE_MODE") == "local-fallback":
         key = metadata.get("local_root_key")
         if key not in ("logs", "work", "probe"):
@@ -336,10 +403,12 @@ def shared_instance_root(profile: dict | None = None, profile_path: Path | None 
         base = Path(os.path.expandvars(os.path.expanduser(str(raw)))).resolve()
         device_name = str(shared.get("device_name") or profile.get("machine") or "device")
         safe_device = re.sub(r"[^A-Za-z0-9._-]+", "-", device_name).strip(".-_")[:64]
-        expected = base / "ld-pipeline-local" / safe_device / "episodes" / root.name
+        expected = base / "ld-pipeline-local" / safe_device / "episodes" / workspace_name
         if (root != expected.resolve() or metadata.get("machine") != profile.get("machine") or
-                str(metadata.get("episode", "")).casefold() != root.name.casefold()):
-            raise PipelineError("device-local fallback workspace does not match the selected profile/episode")
+                str(metadata.get("episode", "")).casefold() != episode_code.casefold() or
+                str(metadata.get("series", "DS9")).upper() != chosen or
+                metadata.get("identity", f"DS9:{metadata.get('episode', '')}") != identity):
+            raise PipelineError("device-local fallback workspace does not match the selected profile/series/episode")
         return root
     devices = release / "devices"
     if not devices.is_dir():
@@ -355,7 +424,7 @@ def shared_instance_root(profile: dict | None = None, profile_path: Path | None 
     except ValueError as exc:
         raise PipelineError(f"LDP_INSTANCE_ROOT is outside the shared devices tree: {root}") from exc
     if len(relative.parts) != 3 or relative.parts[1] != "episodes":
-        raise PipelineError("LDP_INSTANCE_ROOT must have form devices/<device-instance>/episodes/<episode>")
+        raise PipelineError("LDP_INSTANCE_ROOT must have form devices/<device-instance>/episodes/<identity-folder>")
     device_name = str(shared.get("device_name") or profile.get("machine") or "device")
     safe_device = re.sub(r"[^A-Za-z0-9._-]+", "-", device_name).strip(".-_")[:64]
     if not relative.parts[0].startswith(safe_device + "-"):
@@ -364,9 +433,12 @@ def shared_instance_root(profile: dict | None = None, profile_path: Path | None 
     if (metadata.get("release_root") != "." or
             metadata.get("instance_relative_path") != expected_relative or
             metadata.get("machine") != profile.get("machine") or
-            str(metadata.get("episode", "")).casefold() != root.name.casefold() or
+            str(metadata.get("episode", "")).casefold() != episode_code.casefold() or
+            str(metadata.get("series", "DS9")).upper() != chosen or
+            metadata.get("identity", f"DS9:{metadata.get('episode', '')}") != identity or
+            root.name.casefold() != workspace_name.casefold() or
             relative.parts[0].rsplit("-", 1)[-1] != metadata.get("instance_id")):
-        raise PipelineError("shared instance metadata does not match the selected release/workspace")
+        raise PipelineError("shared instance metadata does not match the selected release/series/workspace")
     return root
 
 
@@ -376,13 +448,17 @@ def shared_enabled(profile: dict | None = None) -> bool:
     return (profile.get("shared") or {}).get("enabled") is True
 
 
-def episode_manifest_path(code: str, ld: Ld | None = None) -> Path:
+def episode_manifest_path(code: str, ld: Ld | None = None,
+                          series: str | None = None) -> Path:
     """Return the current manifest location without ever writing to a shared release tree."""
     ld = ld or Ld()
+    chosen, code, identity = parse_episode_identity(code, series)
+    os.environ["LDP_SERIES"] = chosen
+    os.environ["LDP_EPISODE"] = code
+    os.environ["LDP_IDENTITY"] = identity
     if device_workspace_enabled(ld.profile):
-        os.environ["LDP_EPISODE"] = code
         try:
-            instance = shared_instance_root(ld.profile, ld.profile_path, code)
+            instance = shared_instance_root(ld.profile, ld.profile_path, code, chosen)
         except PipelineError:
             scripts_dir = BUNDLE / "scripts"
             if str(scripts_dir) not in sys.path:
@@ -390,8 +466,8 @@ def episode_manifest_path(code: str, ld: Ld | None = None) -> Path:
             try:
                 from shared_workspace import resolve_instance_workspace
                 result, warning = resolve_instance_workspace(
-                    ld.profile_path, ld.profile, code,
-                    os.environ.get("LDP_INSTANCE_ROOT"), create=True)
+                    ld.profile_path, ld.profile, identity,
+                    os.environ.get("LDP_INSTANCE_ROOT"), create=True, series=chosen)
                 if not result:
                     raise PipelineError(warning or "no usable workspace")
                 for key, value in result["shell_exports"].items():
@@ -401,8 +477,9 @@ def episode_manifest_path(code: str, ld: Ld | None = None) -> Path:
                     print("WARN: " + warning, file=sys.stderr)
             except Exception as exc:
                 raise PipelineError(f"could not prepare shared or local-fallback episode workspace: {exc}") from exc
-        if instance.name.casefold() != code.casefold():
-            raise PipelineError(f"active shared workspace is for {instance.name}, not requested episode {code}")
+        expected_workspace = code if chosen == "DS9" else f"{chosen}-{code}"
+        if instance.name.casefold() != expected_workspace.casefold():
+            raise PipelineError(f"active shared workspace is for {instance.name}, not requested {identity}")
         manifest_dir = instance / "manifest"
         configured = os.environ.get("LDP_MANIFEST_DIR")
         if configured and Path(os.path.expandvars(os.path.expanduser(configured))).resolve() != manifest_dir.resolve():
@@ -410,8 +487,14 @@ def episode_manifest_path(code: str, ld: Ld | None = None) -> Path:
         return manifest_dir / f"{code}.json"
     override = os.environ.get("LDP_MANIFEST_DIR")
     if override:
-        return Path(os.path.expandvars(os.path.expanduser(override))).resolve() / f"{code}.json"
-    return BUNDLE / "episodes" / f"{code}.json"
+        manifest_root = Path(os.path.expandvars(os.path.expanduser(override))).resolve()
+        if chosen != "DS9" and not device_workspace_enabled(ld.profile):
+            manifest_root = manifest_root / chosen
+        return manifest_root / f"{code}.json"
+    local_root = BUNDLE / "episodes"
+    if chosen != "DS9":
+        local_root = local_root / chosen
+    return local_root / f"{code}.json"
 
 
 def assert_writable_path(path: str | os.PathLike, ld: Ld | None = None) -> Path:

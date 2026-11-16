@@ -110,6 +110,14 @@ class StageRunnerTests(unittest.TestCase):
             self.assertEqual(cmd[-2:], ["-Output", r"C:\A B\out.mkv"])
         self.assertIn("audio-promote-no-dvd", STAGES)
 
+    def test_voy_init_action_carries_explicit_series_into_initializer(self):
+        profile = {"os": "windows", "python": {"interpreter": sys.executable}}
+        command = make_action("init-episode", "S01E01", profile,
+                              ["--url", "https://archive.org/details/VOY-S01E01-LaserDisc-Copies"],
+                              None, series="VOY")
+        self.assertTrue(command[1].endswith("init_episode.py"))
+        self.assertEqual(command[2:4], ["--series", "VOY"])
+
     def test_no_dvd_promotion_requires_unique_report_path(self):
         profile = {"os": "darwin", "python": {"interpreter": sys.executable}}
         with self.assertRaisesRegex(LockError, "--report-out"):

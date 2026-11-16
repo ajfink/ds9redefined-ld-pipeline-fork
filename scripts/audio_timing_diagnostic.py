@@ -254,7 +254,7 @@ def promote_no_dvd_manifest(ep, report: dict, corrected: Path, synced: Path,
         raise PipelineError("DVD-free promotion requires the user's recorded --no-dvd choice")
     if set(ep.data.get("deliverable_tracks") or ["ld"]) != {"ld"}:
         raise PipelineError("DVD-free audio mode can deliver LD stereo only; DVD 5.1/SRT tracks are unavailable")
-    manifest_path = episode_manifest_path(ep.code, ep.ld)
+    manifest_path = episode_manifest_path(ep.code, ep.ld, series=getattr(ep, "series", "DS9"))
     assert_writable_path(manifest_path, ep.ld)
     original = manifest_path.read_bytes()
     if hashlib.sha256(original).hexdigest() != expected_manifest_sha256:
@@ -356,7 +356,7 @@ def main() -> int:
 
     ld = Ld()
     ep = load_episode(args.episode, ld)
-    manifest_path = episode_manifest_path(ep.code, ld)
+    manifest_path = episode_manifest_path(ep.code, ld, series=getattr(ep, "series", "DS9"))
     manifest_sha256 = sha256_file(manifest_path) if args.promote_dvd_free else ""
     source = Path(args.audio) if args.audio else ep.path("ld_native")
     project = ep.path("stack_project")

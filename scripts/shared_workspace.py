@@ -3,7 +3,7 @@
 
 The README/code-bundle folder is never an output target. The preferred mutation is
 under its pre-provisioned ``devices/`` subtree: one stable device folder with
-manifests, logs/references, and reviewed cut-PAD stills. If that workspace is
+series-scoped manifests, logs/references, and reviewed cut-PAD stills. If that workspace is
 unavailable, the helper creates an isolated fallback under the machine profile's
 local roots. It never edits ACLs.
 """
@@ -23,6 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 EPISODE_RE = re.compile(r"^S\d{2}E\d{2}$", re.IGNORECASE)
+SERIES_RE = re.compile(r"^(DS9|VOY)$", re.IGNORECASE)
 IMAGE_RE = re.compile(r"^DVD-(\d{2})-(\d{2})-(\d{2})\.(\d{3})-f(\d{8})\.png$", re.IGNORECASE)
 SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9._-]+$")
 DEVICE_ID_RE = re.compile(r"^[0-9A-F]{8}$")
@@ -119,7 +120,7 @@ def configure_shared_profile(source_value: str, output_value: str,
     profile.setdefault("notes", []).append(
         "README-relative shared-release profile: source files are read-only. Episode "
         "manifests/logs/references/cut-PAD images belong under "
-        "devices/<device-instance>/episodes/<code>; run_stage creates/reuses that workspace "
+        "devices/<device-instance>/episodes/<identity-folder>; run_stage creates/reuses that workspace "
         "and uses a local fallback without gating if it is unavailable.")
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("x", encoding="utf-8", newline="\n") as f:
@@ -133,6 +134,25 @@ def safe_component(value: str) -> str:
     if not cleaned:
         raise LockError(f"cannot make a safe path component from {value!r}")
     return cleaned[:64]
+
+
+def parse_episode_identity(value: str, series: str | None = None) -> tuple[str, str, str, str]:
+    """Normalize a qualified identity; old bare SxxExx values remain DS9."""
+    raw = str(value or "").strip()
+    if ":" in raw:
+        embedded, raw = raw.split(":", 1)
+        if series and embedded.upper() != series.upper():
+            raise LockError(f"episode identity {value!r} conflicts with series {series!r}")
+        series = embedded
+    chosen = str(series or "DS9").upper()
+    if not SERIES_RE.fullmatch(chosen):
+        raise LockError(f"unsupported workspace series {chosen!r}; use DS9 or VOY")
+    if not EPISODE_RE.fullmatch(raw):
+        raise LockError(f"episode must be SxxExx or SERIES:SxxExx, got {value!r}")
+    code = raw.upper()
+    identity = f"{chosen}:{code}"
+    folder = code if chosen == "DS9" else f"{chosen}-{code}"
+    return chosen, code, identity, folder
 
 
 def device_identity_path(device: str) -> Path:
@@ -382,20 +402,30 @@ def normalize_workspace_record(root: Path, profile: dict, metadata: dict) -> dic
     return metadata
 
 
-def initialize_workspace(profile_path: Path, profile: dict, episode: str) -> dict:
-    """Create a new workspace only when no matching workspace already exists."""
+def initialize_workspace(profile_path: Path, profile: dict, episode: str,
+                         series: str | None = None) -> dict:
+    chosen, code, identity, _ = parse_episode_identity(episode, series)
+    # Create a new workspace only when no matching workspace already exists.
     existing, warning = resolve_instance_workspace(
-        profile_path, profile, episode, create=False)
+        profile_path, profile, code, create=False, series=chosen)
     if existing:
         raise LockError(
             "a matching workspace already exists; use 'ensure' or pass its explicit "
             "--instance-root instead of creating a duplicate")
     if warning and "workspaces for this device/episode" in warning:
         raise LockError(warning + "; use 'ensure' with an explicit --instance-root")
-    return create_workspace(profile_path, profile, episode)
+    return create_workspace(profile_path, profile, code, series=chosen)
 
 
 def _shell_exports(profile_path: Path, root: Path, mode: str) -> dict[str, str]:
+    try:
+        metadata = json.loads((root / "workspace.json").read_text(encoding="utf-8"))
+        series = str(metadata.get("series", "DS9")).upper()
+        episode = str(metadata.get("episode", root.name)).upper()
+        identity = str(metadata.get("identity", f"{series}:{episode}"))
+    except (OSError, json.JSONDecodeError):
+        series, episode = "DS9", root.name.upper()
+        identity = f"{series}:{episode}"
     return {
         "LDP_PROFILE": str(profile_path),
         "LDP_INSTANCE_ROOT": str(root.resolve()),
@@ -403,14 +433,19 @@ def _shell_exports(profile_path: Path, root: Path, mode: str) -> dict[str, str]:
         "LDP_INSTANCE_LOGS": str((root / "logs").resolve()),
         "LDP_CUT_PAD_IMAGES": str((root / "cut-pad-images").resolve()),
         "LDP_INSTANCE_MODE": mode,
+        "LDP_SERIES": series,
+        "LDP_EPISODE": episode,
+        "LDP_IDENTITY": identity,
     }
 
 
-def _local_fallback_candidates(profile: dict, episode: str) -> list[tuple[str, Path]]:
+def _local_fallback_candidates(profile: dict, episode: str,
+                                series: str | None = None) -> list[tuple[str, Path]]:
     roots = profile.get("roots") or {}
     shared = profile.get("shared") or {}
     release = workspace_release_root(profile)
     device = safe_component(str(shared.get("device_name") or profile.get("machine") or "device"))
+    chosen, code, _, folder = parse_episode_identity(episode, series)
     candidates = []
     for key in ("logs", "work", "probe"):
         raw = roots.get(key)
@@ -420,16 +455,16 @@ def _local_fallback_candidates(profile: dict, episode: str) -> list[tuple[str, P
         try:
             base.relative_to(release)
         except ValueError:
-            candidates.append((key, base / "ld-pipeline-local" / device / "episodes" / episode.upper()))
+            candidates.append((key, base / "ld-pipeline-local" / device / "episodes" / folder))
     return candidates
 
 
-def create_local_fallback(profile_path: Path, profile: dict, episode: str) -> dict:
+def create_local_fallback(profile_path: Path, profile: dict, episode: str,
+                          series: str | None = None) -> dict:
     """Create/use a device-local workspace when README-folder devices/ is unavailable."""
-    if not EPISODE_RE.fullmatch(episode):
-        raise LockError(f"episode must be SxxExx, got {episode!r}")
+    chosen, code, identity, folder = parse_episode_identity(episode, series)
     failures = []
-    for base_key, root in _local_fallback_candidates(profile, episode):
+    for base_key, root in _local_fallback_candidates(profile, code, chosen):
         try:
             root.mkdir(parents=True, exist_ok=True)
             metadata_path = root / "workspace.json"
@@ -437,7 +472,9 @@ def create_local_fallback(profile_path: Path, profile: dict, episode: str) -> di
                 saved = json.loads(metadata_path.read_text(encoding="utf-8"))
                 if (saved.get("storage_mode") != "local-fallback" or
                         saved.get("machine") != profile.get("machine") or
-                        str(saved.get("episode", "")).casefold() != episode.casefold()):
+                        str(saved.get("episode", "")).casefold() != code.casefold() or
+                        str(saved.get("series", "DS9")).upper() != chosen or
+                        saved.get("identity", f"DS9:{saved.get('episode', '')}") != identity):
                     failures.append(f"refusing to reuse unrelated local folder {root}")
                     continue
             else:
@@ -446,7 +483,9 @@ def create_local_fallback(profile_path: Path, profile: dict, episode: str) -> di
                     "storage_mode": "local-fallback",
                     "workflow_version": (ROOT / "WORKFLOW_VERSION").read_text(encoding="ascii").strip(),
                     "created_utc": datetime.now(timezone.utc).isoformat(),
-                    "episode": episode.upper(),
+                    "episode": code,
+                    "series": chosen,
+                    "identity": identity,
                     "machine": profile.get("machine"),
                     "instance_id": "LOCAL-" + secrets.token_hex(4).upper(),
                     "release_root": ".",
@@ -479,9 +518,9 @@ def create_local_fallback(profile_path: Path, profile: dict, episode: str) -> di
     raise LockError("could not create a device-local fallback workspace: " + detail)
 
 
-def create_workspace(profile_path: Path, profile: dict, episode: str) -> dict:
-    if not EPISODE_RE.fullmatch(episode):
-        raise LockError(f"episode must be SxxExx, got {episode!r}")
+def create_workspace(profile_path: Path, profile: dict, episode: str,
+                     series: str | None = None) -> dict:
+    chosen, code, identity, folder = parse_episode_identity(episode, series)
     shared = profile.get("shared") or {}
     devices = workspace_release_root(profile) / "devices"
     if not devices.is_dir():
@@ -504,7 +543,7 @@ def create_workspace(profile_path: Path, profile: dict, episode: str) -> dict:
     if episodes_dir.is_symlink():
         raise LockError(f"refusing episodes-directory symlink: {episodes_dir}")
     episodes_dir.mkdir(exist_ok=True)
-    episode_root = device_instance / "episodes" / episode.upper()
+    episode_root = device_instance / "episodes" / folder
     if episode_root.is_symlink():
         raise LockError(f"refusing episode workspace symlink: {episode_root}")
     try:
@@ -513,7 +552,7 @@ def create_workspace(profile_path: Path, profile: dict, episode: str) -> dict:
         # A concurrent init may have reserved this same stable device/episode
         # workspace. Reuse it only if its provenance validates; never create a
         # sibling random folder as a collision workaround.
-        validate_instance(str(episode_root), profile_path, profile)
+        validate_instance(str(episode_root), profile_path, profile, identity)
         metadata_path = episode_root / "workspace.json"
         metadata = normalize_workspace_record(
             episode_root, profile, json.loads(metadata_path.read_text(encoding="utf-8")))
@@ -536,7 +575,9 @@ def create_workspace(profile_path: Path, profile: dict, episode: str) -> dict:
         "storage_mode": "shared-release" if shared.get("enabled") is True else "readme-workspace",
         "workflow_version": (ROOT / "WORKFLOW_VERSION").read_text(encoding="ascii").strip(),
         "created_utc": datetime.now(timezone.utc).isoformat(),
-        "episode": episode.upper(),
+        "episode": code,
+        "series": chosen,
+        "identity": identity,
         "machine": profile.get("machine"),
         "instance_id": instance_id,
         "profile_name": profile_path.name,
@@ -565,16 +606,18 @@ def create_workspace(profile_path: Path, profile: dict, episode: str) -> dict:
 
 def resolve_instance_workspace(profile_path: Path, profile: dict, episode: str,
                                requested_root: str | None = None,
-                               *, create: bool = True) -> tuple[dict | None, str | None]:
+                               *, create: bool = True,
+                               series: str | None = None) -> tuple[dict | None, str | None]:
     """Reuse or create the README-folder workspace; fall back locally without gating.
 
     The second return value is a warning for callers to surface in console and logs.
     A supplied but invalid/ambiguous shared path is never silently reused.
     """
+    chosen, code, identity, folder = parse_episode_identity(episode, series)
     notes: list[str] = []
     if requested_root:
         try:
-            root = validate_instance(requested_root, profile_path, profile)
+            root = validate_instance(requested_root, profile_path, profile, identity)
             ensure_workspace_dirs(root)
             meta = normalize_workspace_record(
                 root, profile, json.loads((root / "workspace.json").read_text(encoding="utf-8")))
@@ -593,12 +636,12 @@ def resolve_instance_workspace(profile_path: Path, profile: dict, episode: str,
     preferred_id = existing_device_instance_id(profile, device)
     candidates = []
     if devices.is_dir():
-        for root in devices.glob(f"{device}-*/episodes/{episode.upper()}"):
+        for root in devices.glob(f"{device}-*/episodes/{folder}"):
             suffix = root.parents[1].name[len(device) + 1:]
             if preferred_id and suffix != preferred_id:
                 continue
             try:
-                candidates.append(validate_instance(str(root), profile_path, profile))
+                candidates.append(validate_instance(str(root), profile_path, profile, identity))
             except (LockError, OSError, json.JSONDecodeError):
                 continue
     if len(candidates) == 1 and not requested_root:
@@ -619,11 +662,11 @@ def resolve_instance_workspace(profile_path: Path, profile: dict, episode: str,
     if len(candidates) > 1:
         notes.append(f"found {len(candidates)} README-folder workspaces for this device/episode; not choosing one")
     if not requested_root:
-        for _, local_root in _local_fallback_candidates(profile, episode):
+        for _, local_root in _local_fallback_candidates(profile, code, chosen):
             if not (local_root / "workspace.json").is_file():
                 continue
             try:
-                root = validate_instance(str(local_root), profile_path, profile)
+                root = validate_instance(str(local_root), profile_path, profile, identity)
                 ensure_workspace_dirs(root)
                 meta = normalize_workspace_record(
                     root, profile, json.loads((root / "workspace.json").read_text(encoding="utf-8")))
@@ -634,22 +677,31 @@ def resolve_instance_workspace(profile_path: Path, profile: dict, episode: str,
                 continue
     if not requested_root and not candidates and create:
         try:
-            return create_workspace(profile_path, profile, episode), None
+            return create_workspace(profile_path, profile, code, series=chosen), None
         except (LockError, OSError, json.JSONDecodeError) as exc:
             notes.append(f"could not create workspace under README-folder devices/: {exc}")
     if not create:
         return None, "; ".join(notes) if notes else "no existing README-folder workspace"
-    local = create_local_fallback(profile_path, profile, episode)
+    local = create_local_fallback(profile_path, profile, code, series=chosen)
     prefix = "; ".join(notes) if notes else "README-folder workspace was not initialized"
     return local, (prefix + f"; continuing with device-local fallback {local['instance_root']}")
 
 
-def validate_instance(root_value: str, profile_path: Path, profile: dict) -> Path:
+def validate_instance(root_value: str, profile_path: Path, profile: dict,
+                      expected_identity: str | None = None) -> Path:
     root = Path(os.path.expandvars(os.path.expanduser(root_value))).resolve()
     try:
         metadata = json.loads((root / "workspace.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise LockError(f"invalid/missing workspace.json at {root}: {exc}") from exc
+    chosen, code, identity, folder = parse_episode_identity(
+        expected_identity or metadata.get("identity") or metadata.get("episode", ""),
+        metadata.get("series", "DS9"))
+    saved_series = str(metadata.get("series", "DS9")).upper()
+    saved_identity = metadata.get("identity", f"DS9:{metadata.get('episode', '')}")
+    if (saved_series != chosen or str(metadata.get("episode", "")).upper() != code or
+            saved_identity != identity or root.name.casefold() != folder.casefold()):
+        raise LockError(f"workspace identity does not match requested {identity}: {root}")
     device = safe_component(str(profile.get("shared", {}).get("device_name") or
                                 profile.get("machine") or "device"))
     mode = workspace_storage_mode(root, profile, metadata)
@@ -661,10 +713,10 @@ def validate_instance(root_value: str, profile_path: Path, profile: dict) -> Pat
         if not raw:
             raise LockError(f"local fallback profile roots.{key} is no longer configured")
         base = Path(os.path.expandvars(os.path.expanduser(str(raw)))).resolve()
-        expected = base / "ld-pipeline-local" / device / "episodes" / root.name
+        expected = base / "ld-pipeline-local" / device / "episodes" / folder
         if (root != expected.resolve() or metadata.get("machine") != profile.get("machine") or
-                str(metadata.get("episode", "")).casefold() != root.name.casefold()):
-            raise LockError("device-local fallback workspace does not match the selected profile/episode")
+                str(metadata.get("episode", "")).casefold() != code.casefold()):
+            raise LockError("device-local fallback workspace does not match the selected profile/series/episode")
     else:
         devices = workspace_release_root(profile) / "devices"
         try:
@@ -672,7 +724,7 @@ def validate_instance(root_value: str, profile_path: Path, profile: dict) -> Pat
         except ValueError as exc:
             raise LockError(f"instance root must be under README-folder devices/: {root}") from exc
         if len(relative.parts) != 3 or relative.parts[1] != "episodes":
-            raise LockError("instance root must have form devices/<device-instance>/episodes/<episode>")
+            raise LockError("instance root must have form devices/<device-instance>/episodes/<identity-folder>")
         if (not relative.parts[0].startswith(device + "-") or
                 metadata.get("release_root") != "." or
                 metadata.get("instance_relative_path") != root.relative_to(ROOT.resolve()).as_posix() or
@@ -680,8 +732,8 @@ def validate_instance(root_value: str, profile_path: Path, profile: dict) -> Pat
             raise LockError("workspace metadata does not match this README-folder release/device")
         if metadata.get("machine") != profile.get("machine"):
             raise LockError("shared workspace belongs to a different machine profile")
-        if str(metadata.get("episode", "")).casefold() != root.name.casefold():
-            raise LockError("shared workspace metadata episode does not match its folder")
+        if str(metadata.get("episode", "")).casefold() != code.casefold():
+            raise LockError("shared workspace metadata episode code does not match its identity")
     if not root.is_dir():
         raise LockError(f"instance directory is missing: {root}")
     return root
@@ -765,10 +817,15 @@ def publish_cut_pad(source: Path, instance: Path, output_frame: int,
     if image.exists() or provenance.exists():
         raise LockError(f"cut-PAD image/provenance already exists; refusing overwrite: {image}")
     copy_exclusive(source, image)
+    workspace_metadata = json.loads((instance / "workspace.json").read_text(encoding="utf-8"))
+    series = str(workspace_metadata.get("series", "DS9")).upper()
+    episode = str(workspace_metadata.get("episode", instance.name)).upper()
     record = {
         "schema": "ld-pipeline-cut-pad-provenance-v2",
         "created_utc": datetime.now(timezone.utc).isoformat(),
-        "episode": instance.name,
+        "episode": episode,
+        "series": series,
+        "identity": str(workspace_metadata.get("identity", f"{series}:{episode}")),
         "output_pad_frame": output_frame,
         "dvd_timestamp": f"{match.group(1)}:{match.group(2)}:{match.group(3)}.{match.group(4)}",
         "dvd_frame": int(match.group(5)),
@@ -791,6 +848,7 @@ def main() -> int:
     init = sub.add_parser("init", help="create a new workspace only if no matching one exists; otherwise use ensure")
     init.add_argument("--profile", required=True)
     init.add_argument("--episode", required=True)
+    init.add_argument("--series", choices=("DS9", "VOY"), help="episode series; bare legacy episodes default to DS9")
     ref = sub.add_parser("publish-reference", help="copy one useful report into this instance's references folder")
     ref.add_argument("--profile", required=True)
     ref.add_argument("--instance-root", required=True)
@@ -810,6 +868,7 @@ def main() -> int:
     ensure = sub.add_parser("ensure", help="reuse/create the README-folder workspace or use a local fallback")
     ensure.add_argument("--profile", required=True)
     ensure.add_argument("--episode", required=True)
+    ensure.add_argument("--series", choices=("DS9", "VOY"), help="episode series; bare legacy episodes default to DS9")
     ensure.add_argument("--instance-root", help="reuse this existing workspace when valid")
     cfg = sub.add_parser("configure-profile", help="create a new local profile for this shared release")
     cfg.add_argument("--source", required=True, help="existing device-local profile to copy")
@@ -825,13 +884,15 @@ def main() -> int:
         profile_path, profile = load_profile(args.profile)
         if args.command == "ensure":
             result, warning = resolve_instance_workspace(
-                profile_path, profile, args.episode, args.instance_root, create=True)
+                profile_path, profile, args.episode, args.instance_root, create=True,
+                series=args.series)
             if not result:
                 raise LockError(warning or "could not prepare episode workspace")
             print(json.dumps({"workspace": result, "warning": warning}, indent=2))
             return 0
         if args.command == "init":
-            result = initialize_workspace(profile_path, profile, args.episode)
+            result = initialize_workspace(profile_path, profile, args.episode,
+                                          series=getattr(args, "series", None))
             print(json.dumps(result, indent=2))
         else:
             instance = validate_instance(args.instance_root, profile_path, profile)

@@ -66,6 +66,9 @@ function Get-LdRoot {
     }
     $v = $Profile.roots.$Name
     if (-not $v) { throw "root '$Name' is not set in the profile" }
+    if ($env:LDP_SERIES -eq 'VOY' -and $Name -in @('work','probe','avs','audio','subs','out','prores','stack','logs')) {
+        return Join-Path $v 'VOY'
+    }
     return $v
 }
 
@@ -101,6 +104,7 @@ function Set-LdEpisodeWorkspace {
     if (-not $python) { throw "cannot prepare the non-gating episode workspace: Python executable not found: $pythonValue" }
     $helper = Join-Path $script:LdBundle 'scripts\shared_workspace.py'
     $arguments = @($helper, 'ensure', '--profile', $script:LdProfilePath, '--episode', $Code)
+    if ($env:LDP_SERIES -eq 'VOY') { $arguments += @('--series', 'VOY') }
     if ($env:LDP_INSTANCE_ROOT) { $arguments += @('--instance-root', $env:LDP_INSTANCE_ROOT) }
     $output = @(& $python @arguments 2>&1)
     $rc = $LASTEXITCODE
@@ -151,12 +155,20 @@ function Get-LdEpisode {
             }
         }
         $p = Join-Path $env:LDP_MANIFEST_DIR "$Code.json"
-    } else { $p = Join-Path $script:LdBundle "episodes\$Code.json" }
+    } else {
+        $manifestRoot = Join-Path $script:LdBundle 'episodes'
+        if ($env:LDP_SERIES -eq 'VOY') { $manifestRoot = Join-Path $manifestRoot 'VOY' }
+        $p = Join-Path $manifestRoot "$Code.json"
+    }
     if (-not (Test-Path -LiteralPath $p)) {
         throw "no manifest for $Code - create episodes\$Code.json from episodes\_template.json after measuring it"
     }
     try { $ep = Get-Content -LiteralPath $p -Raw | ConvertFrom-Json }
     catch { throw "manifest is not valid JSON: $p ($($_.Exception.Message))" }
+    $requestedSeries = if ($env:LDP_SERIES) { $env:LDP_SERIES.ToUpperInvariant() } else { 'DS9' }
+    $manifestSeries = if ($ep.series) { ([string]$ep.series).ToUpperInvariant() } else { 'DS9' }
+    if ($manifestSeries -ne $requestedSeries) { throw "manifest series $manifestSeries does not match requested series $requestedSeries for $Code" }
+    if ($ep.identity -and $ep.identity -ne "$requestedSeries`:$Code") { throw "manifest identity $($ep.identity) does not match requested $requestedSeries`:$Code" }
     return $ep
 }
 

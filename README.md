@@ -1,7 +1,9 @@
 # DS9 LaserDisc OpenCode Operator Pack
 
-**Workflow version: 13** — check `WORKFLOW_VERSION` and follow the core-change/device-log
-rules in `WORKFLOW_VERSIONING.md` before editing or syncing workflow files.
+**Workflow version: 14** — check `WORKFLOW_VERSION` and follow the core-change/device-log
+rules in `WORKFLOW_VERSIONING.md` before editing or syncing workflow files. The W working tree
+is synchronized separately; its Git metadata remains behind because of pre-existing local
+changes and is not reset or rebased as part of this release.
 
 **Design goal:** make the workflow clear and reliable enough for capable free or low-cost
 models to run with its bounded steps, explicit ACTION/VERIFY/STOP gates, and deterministic
@@ -46,9 +48,10 @@ ambiguity/failure. Topaz is never launched automatically.
 
 ## The job prompt
 
-The user provides the Archive item URL, the folder in which the LaserDisc files
-should be saved, and—if available—the matching DVD episode/version. Verify the
-episode/title independently from Archive metadata, capture names, and DVD evidence.
+The user provides either an Archive item URL or a show/season/episode request, the folder
+in which the LaserDisc files should be saved, and—if available—the matching DVD
+episode/version. For a show/season/episode request, use the included resolver and verify
+the selected item/title from Archive metadata, capture names, and DVD evidence.
 If no matching DVD is available, ask whether the user explicitly wants to proceed
 with the LD-only timing path; it cannot provide DVD 5.1/SRT or an external absolute
 A/V cross-correlation.
@@ -75,12 +78,18 @@ separate parity flag or parity-clip check is required.
 If you are local Qwen3.5 4B, also follow DS9 LaserDisc OpenCode Runbook - Qwen4B.md.
 Use the Qwen4B-Luna variant and opencode-go/gpt-6-luna only at its explicit fallback triggers.
 
-LaserDisc Archive URL: <https://archive.org/details/...>
+LaserDisc Archive URL (if known): <https://archive.org/details/... or blank>
+Series/season/episode (if URL is blank): <DS9, VOY, or TNG / season / episode>
 Save source files to: <absolute folder path>
 Matching DVD episode/version (optional; path or NONE): <path or NONE>
 If NONE, ask whether to proceed with LD-only timing before initializing.
 If NONE and Cut Pad Images/<episode> contains stills, ask whether the user wants to use them.
 Final output folder (optional; default is machine.json roots.out): <path or blank>
+
+If the URL is blank because the user named a series/season/episode, resolve the request
+with `scripts/resolve_archive_episode.py`. Continue only when it returns exactly one
+`status: matched` standalone episode-copy item. A combined-item-only or not-found result
+requires clarification; do not infer a URL from a season stack or extra archive.
 
 If the DVD is NONE and the user chooses to proceed, use the V6 duration/PAD route to
 correct and sample-align the original LD audio to the measured, trimmed and pad-fixed
@@ -94,8 +103,9 @@ shot cut—not a substitute for a DVD reference or a source for other tracks.
 Derive and verify the episode code/title. Preserve inputs. Measure every episode-
 specific value; never copy timings from a reference episode. Follow each runbook
 VERIFY/STOP gate. Use the bundled helpers and keep machine paths in the device-local
-profile and measured values in the active episode manifest (`episodes/<code>.json`
-locally, or the device workspace's `manifest/<code>.json`). Never delete/clean files unless I name
+profile and measured values in the active episode manifest (`episodes/<code>.json` for legacy
+DS9, `episodes/VOY/<code>.json` for Voyager; shared workspaces use `episodes/<code>` for DS9
+and `episodes/VOY-<code>` for Voyager, each with `manifest/<code>.json`). Never delete/clean files unless I name
 the exact path and action; reference DVDs, masters, outputs, and reference-runs are
 out of scope for download cleanup. If a required stage is missing from
 the bundle, build a reusable parameterized helper in scripts/ and test it against
@@ -142,6 +152,55 @@ manifest initialization, EFM decode/capture choice, stack/reference work, cadenc
 LD-dependent picture/audio measurements, PAD decisions/repairs, retiming, encode, and
 delivery QC. DVD-only prep never authorizes guessing an LD value. The checklist records
 progress; it does not waive a gate.
+
+## Resolve an Archive item from a series/episode request
+
+If the user gives a show, season, and episode instead of an Archive URL, resolve the
+included item tree before downloading:
+
+```powershell
+python scripts/resolve_archive_episode.py "Download Episode 18 of season 2 of DS9"
+python scripts/resolve_archive_episode.py "Download episode 1 of season 1 of Star Trek Voyager"
+```
+
+Aliases include DS9/Deep Space Nine/Deep Space 9, VOY/Voyager, and TNG/The Next Generation;
+`Star Trek` or `Trek` may prefix a show name. Only one exact standalone episode-copy match
+returns `status: matched`. Use the returned URL, choose the user's destination or the
+resolver's show-prefixed folder name under `roots.downloads_root`, and run the normal
+`download_archive.ps1 -ListOnly` gate before transfer. The included snapshot covers DS9 and
+VOY seasons 1–5; it does not invent missing seasons/items. TNG has no standalone episode-copy
+items in this account; its multi-episode extra is reported but never auto-downloaded for one
+episode. A catalog match only selects an item link; it does not prove a human title or bypass
+live Archive hash/space checks.
+
+## Series-aware episode identity and migration
+
+The canonical identity is `SERIES:SxxExx` (for example `VOY:S01E01`). New workflow plans store
+`series: "VOY"` alongside `episode: "S01E01"`; stage CLIs accept `--series VOY`, and direct
+stage helpers accept `--episode VOY:S01E01`. An unqualified legacy code still means DS9. New
+manifests persist `series` and `identity`; a legacy manifest without `series` is interpreted as
+DS9 and its old path is unchanged.
+
+Voyager manifests live in `episodes/VOY/<code>.json` locally or in a series-specific workspace
+folder named `VOY-<code>`. DS9 retains its existing manifest/workspace locations. All generated
+VOY artifacts, logs, workflow status, and resume locks are namespaced under the VOY output roots
+or VOY workspace, preventing same-code overwrite/resume collisions. Profile roots remain the
+configured roots; VOY output roots are created below a `VOY/` child directory. Download
+directories must also be show-prefixed (for example `VOY S01E01 LaserDisc`).
+
+The Archive resolver remains metadata-only. It routes only exact standalone DS9/VOY items into
+the series-aware intake. The approved workflow still runs the live downloader `-ListOnly`, hash,
+paired-sidecar, and free-space gates; initialization still requires the verified download
+manifest and existing human decisions. The TNG combined extra remains blocked. DS9 S01E01/E02
+retain the Emissary special workflow, while VOY S01E01 is a normal VOY identity.
+
+**Migration:** no existing DS9 manifest, workspace, profile, or output needs renaming. Add
+`series: "VOY"` / `identity: "VOY:SxxExx"` only to new Voyager manifests through
+`init_episode.py`; do not re-label an existing DS9 manifest. For an existing VOY staging setup,
+move/copy nothing automatically—review its files and choose a `VOY/` output namespace, then
+re-run stage planning. Resume state never crosses series, and legacy DS9 state without series
+fields remains DS9-only resumable. Human approval and QC gates remain unchanged.
+
 For Qwen3.5 4B, apply the Qwen4B step format. Route to `opencode-go/gpt-6-luna`
 only when a Luna **DELEGATE** rule is triggered after the local checks; if the
 fallback route is unavailable, ask the user rather than silently changing models.
@@ -523,7 +582,8 @@ silently create a second copy. After adding the aggregate/space summary, ListOnl
 retested for this item: it reported 15 files, labels L1/M1/P1/P2/P3, and
 `SPACE GATE PASS`; no new transfer was started during this documentation review.
 
-Every measured value belongs in `episodes/<code>.json`; every generated report goes
+Every measured value belongs in the active series manifest (`episodes/<code>.json` for
+DS9, `episodes/VOY/<code>.json` for Voyager); every generated report goes
 to the machine's `roots.probe`/`roots.logs`. If a command fails, inspect its artifact
 and logs before retrying. Do not overwrite or clean user files without explicit
 permission.
@@ -538,11 +598,11 @@ permission.
 | `scripts/preflight_mac.py` | Mac profile/tool/root/VapourSynth capability check (`--episode` and `--json` supported); checks workflow version and does not prove full workflow readiness |
 | `scripts/doctor.py` | Unified read-only profile/dependency/platform report; Linux x86_64 remains explicitly not episode-ready |
 | `scripts/bootstrap_deps.py` / `dependencies/` | Direct Python version locks for Windows x64, Mac arm64, and candidate Linux x86_64; check-only by default, `--install` is explicit |
-| `scripts/run_stage.py` | Allowlisted stage dispatcher; dry-run plan by default, explicit `--execute`, downloader-specific checks for the early download stage, full doctor/manifest gates before other write stages, and unique logs/reports |
-| `scripts/run_workflow.py` | Ordered JSON-plan orchestration using only `run_stage.py` allowlisted stages; durable status/log, per-job locking, input/output fingerprints, and conservative resume |
-| `CONFIGURE HERE FIRST.json` | Sanitized no-DVD intake-plan template; edit only `_operator_inputs_EDIT` values and replace every placeholder |
+| `scripts/run_stage.py` | Allowlisted stage dispatcher; dry-run plan by default, explicit `--execute`, series-aware stage identity, downloader-specific checks for early download, and full gates before other writes |
+| `scripts/run_workflow.py` | Ordered JSON-plan orchestration; series-scoped status/log/locks/resume, input/output fingerprints, and conservative resume |
+| `CONFIGURE HERE FIRST.json` | Sanitized no-DVD intake-plan template; choose DS9 or VOY in the editable `series` value |
 | `scripts/stage_clock.py` | Pause/resume timer for manual stages; separates active work from human gate waits and writes a timestamped record in the device workspace |
-| `scripts/shared_workspace.py` | Ensure one stable per-machine device folder with per-episode workspaces; publish no-overwrite references and reviewed cut-PAD provenance |
+| `scripts/shared_workspace.py` | Ensure one stable per-machine device folder with series-scoped episode workspaces; publish no-overwrite references and reviewed cut-PAD provenance |
 | `scripts/generate_runbooks.py` / `templates/runbooks/` | Regenerate model variants from the canonical runbook plus model-policy templates; `--check` detects drift |
 | `WORKFLOW_VERSION` / `WORKFLOW_VERSIONING.md` | Authoritative workflow version and core-change/device-log rules |
 | `V7-RELEASE.md` | V7 tooling overview and platform validation boundaries |
@@ -552,11 +612,13 @@ permission.
 | `V11-RELEASE.md` | Queue-use boundary and `init_episode` shared-mode regression fix |
 | `V12-RELEASE.md` | Optional report-only LD/DVD audio comparator and regression coverage |
 | `V13-RELEASE.md` | Fail-closed break edges, cut-PAD policy/provenance, stable workspaces, Orc resume, and bounded extraction |
+| `V14-RELEASE.md` | Section 31 Archive tree, natural resolver, and series-aware VOY workflow release record |
 | `V9-QUEUE.md` | Historical V9 device-log review and inherited carry-overs; planning only |
 | `V10-QUEUE.md` | Historical V10 scope and implementation record; planning only |
 | `V11-QUEUE.md` | Historical V11 record and dependency-policy proposal; planning only |
 | `V12-QUEUE.md` | V12 planning/review record; not live workflow instructions |
 | `V13-QUEUE.md` | V13 implementation/evidence record and held episode findings; non-operative |
+| `V14-QUEUE.md` | Archive catalog/resolver scope and coverage limitations; planning only |
 | `changelog.txt` | Short release history; retrospective V1–V5 notes and accepted V6 changes |
 | `Cut Pad Images/<episode>/` | Curated single-frame DVD cut-PAD repair stills, named by verified DVD timestamp/frame; not a DVD reference substitute |
 | `scripts/download_archive.ps1` | Metadata-verified, resumable source download; checks profile curl (>=7.71.0), and ListOnly prints inventory, integrity metadata, aggregate bytes, and projected free space |
@@ -564,6 +626,9 @@ permission.
 | `scripts/init_episode.py` | Verified Archive/download + optional DVD -> draft manifest; `--no-dvd` records explicit approval, and macOS gets `.vpy` script paths |
 | `scripts/validate_episode.py` | Stage-specific manifest/artifact prerequisites; optional expensive source MD5 recheck |
 | `scripts/select_stack_reference.py` | Streamed Orc refresh loop with heartbeat and verified completed-pass resume; selects/stabilizes a reference and never renders |
+| `scripts/resolve_archive_episode.py` | Resolve a natural series/season/episode request to one standalone Archive item; no transfer is started |
+| `scripts/build_archive_catalog.py` / `scripts/archive_catalog.py` | Build/read the metadata-only Section 31 item/file tree and resolve aliases; `--force` is required to replace the snapshot |
+| `archive_catalog/section_31_tree.json` | Included metadata-only Section 31 account/item/file tree snapshot; no media bytes |
 | `scripts/build_stack_project.py` | Manifest-driven Orc graph skeleton; scratch `--reference-override` does not edit the manifest |
 | `scripts/efm_paths.py` | Plan episode-scoped EFMSink WAV/report paths and refuse existing outputs |
 | `scripts/extract_video_descriptors.py` | Sequential master/DVD descriptor extraction on the validated FFmpeg rawvideo grid |
@@ -592,7 +657,7 @@ permission.
 | `scripts/qc_report.py` | Final delivery report; skipped/unverified required checks fail closed |
 | `scripts/regen_plain_text.py` | Rebuild the ASCII companion from the main Markdown runbook |
 
-### V13 entry points
+### V14 entry points (authoring candidate)
 
 ```text
 python scripts/bootstrap_deps.py --print --json
@@ -676,7 +741,8 @@ it is not tied to W: or to one shared-drive copy. The expected layout is:
   README.md
   devices/                             # the only writable area beneath the README folder
     <device>-<stable-id>/                # one stable folder per machine
-      episodes/<code>/
+      episodes/<code>/                  # DS9 and legacy bare codes
+      episodes/VOY-<code>/              # Voyager, same-code safe
         manifest/
         logs/
         references/
