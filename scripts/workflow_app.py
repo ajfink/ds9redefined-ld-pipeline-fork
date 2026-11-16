@@ -36,19 +36,23 @@ DEFAULT_TEMPLATE = LOCAL_TEMPLATE if LOCAL_TEMPLATE.is_file() else EXAMPLE_TEMPL
 FIELD_LABELS = {
     "archive_url": "Archive URL",
     "confirmed_title": "Confirmed title",
-    "downloads_dir": "Download folder",
+    "downloads_dir": "Download destination (from profile)",
     "dvd_mode": "DVD mode",
     "dvd_path": "Exact matching DVD file",
     "cut_pad_images": "No-DVD cut-PAD images",
 }
 
 FIELD_HELP = {
+    "source_mode": ("Archive URL mode downloads verified Archive files. Open local skips downloading but requires a "
+                    "previously downloaded folder/file with a verified download-manifest.csv; it still checks that "
+                    "inventory against Archive metadata."),
     "archive_url": ("Paste the canonical HTTPS archive.org/details/<item> URL. The app derives the episode code "
                     "from the item ID when possible, otherwise it can inspect Archive metadata."),
     "confirmed_title": ("The title written into the new episode manifest and audit record. Confirm it against "
                          "the selected DVD/capture evidence; it is not inferred from an episode code."),
-    "downloads_dir": ("Exact destination for the verified TBC/JSON/EFM download. Choose the intended volume "
-                      "and leave enough free space; the workflow checks the destination before downloading."),
+    "downloads_dir": ("Automatically derived from roots.downloads_root/downloads_template in the selected machine "
+                      "profile and the detected episode code. Edit those settings with Open machine profile; the "
+                      "URL source mode has no source Browse button."),
     "dvd_mode": ("DVD-backed uses the exact matching DVD file and enables DVD-derived measurements/tracks. "
                  "No-DVD is an explicit alternative with no DVD 5.1/SRT or external DVD A/V correlation."),
     "dvd_path": ("Select the exact matching local DVD file for this episode. This path is passed to initialization "
@@ -58,6 +62,9 @@ FIELD_HELP = {
     "manifest_path": ("Automatically selected new manifest output. Shared/device-workspace profiles use the "
                        "collision-safe devices/<device-instance>/episodes/<code>/manifest layout; local profiles "
                        "use the existing local manifest location. The manifest is never overwritten."),
+    "local_source_path": ("Select an existing folder or one file from a previously downloaded Archive item. "
+                          "The folder must contain download-manifest.csv with verified rows and one ArchiveId; "
+                          "the initializer will recheck that inventory against Archive metadata."),
     "episode": ("Detected from the Archive item ID or its metadata. Confirm the URL/item is the intended episode; "
                 "the code is not manually entered."),
     "profile": ("Machine profile used by the workflow. Existing profiles in the default per-user profile folder "
@@ -110,7 +117,11 @@ class WorkflowApp:
         self.root.geometry("1000x780")
         self.root.minsize(820, 640)
         self.values = {key: tk.StringVar() for key in
-                       (*FIELD_LABELS, "episode", "profile", "manifest_path", "instance_root")}
+                       (*FIELD_LABELS, "episode", "profile", "manifest_path", "instance_root",
+                        "source_mode", "local_source_path")}
+        self.values["source_mode"].set("archive-url")
+        self.source_mode_var = self.values["source_mode"]
+        self.previous_source_mode = "archive-url"
         self.values["fingerprint_policy"] = tk.StringVar(value="balanced")
         self.episode_display = tk.StringVar(value="Not resolved from Archive URL")
         self.manifest_display = tk.StringVar(value="Resolve the Archive URL to select the episode manifest location")
@@ -163,16 +174,35 @@ class WorkflowApp:
         form = ttk.LabelFrame(outer, text="Intake", padding=10)
         form.pack(fill="x")
         self.entries: dict[str, ttk.Widget] = {}
+        self.field_labels: dict[str, ttk.Label] = {}
+        self.field_rows: dict[str, int] = {}
+        self.source_radio_buttons: list[ttk.Radiobutton] = []
+        self.source_mode_var = self.values["source_mode"]
         episode_field_label = ttk.Label(form, text="Episode code (detected)")
         episode_field_label.grid(row=0, column=0, sticky="w", padx=(0, 8), pady=3)
         ToolTip(episode_field_label, FIELD_HELP["episode"])
         self.episode_label = ttk.Label(form, textvariable=self.episode_display)
         self.episode_label.grid(row=0, column=1, sticky="w", pady=3)
         ToolTip(self.episode_label, FIELD_HELP["episode"])
-        for row, key in enumerate(FIELD_LABELS, start=1):
+        source_label = ttk.Label(form, text="Source")
+        source_label.grid(row=1, column=0, sticky="w", padx=(0, 8), pady=3)
+        ToolTip(source_label, FIELD_HELP["source_mode"])
+        archive_radio = ttk.Radiobutton(form, text="Archive URL", variable=self.source_mode_var,
+                                        value="archive-url", command=self._source_mode_changed)
+        archive_radio.grid(row=1, column=1, sticky="w", pady=3)
+        ToolTip(archive_radio, "Download this Archive item after the normal identity and free-space checks.")
+        local_radio = ttk.Radiobutton(form, text="Open local", variable=self.source_mode_var,
+                                      value="local", command=self._source_mode_changed)
+        local_radio.grid(row=1, column=1, sticky="w", padx=(125, 0), pady=3)
+        ToolTip(local_radio, FIELD_HELP["source_mode"])
+        self.source_radio_buttons.extend((archive_radio, local_radio))
+
+        for row, key in enumerate(FIELD_LABELS, start=2):
             field_label = ttk.Label(form, text=FIELD_LABELS[key])
             field_label.grid(row=row, column=0, sticky="w", padx=(0, 8), pady=3)
             ToolTip(field_label, FIELD_HELP[key])
+            self.field_labels[key] = field_label
+            self.field_rows[key] = row
             if key == "dvd_mode":
                 widget = ttk.Combobox(form, textvariable=self.values[key],
                                       values=("dvd-backed", "no-dvd"), state="readonly", width=28)
@@ -180,6 +210,8 @@ class WorkflowApp:
             elif key == "cut_pad_images":
                 widget = ttk.Combobox(form, textvariable=self.values[key],
                                       values=("use", "skip"), state="readonly", width=28)
+            elif key == "downloads_dir":
+                widget = ttk.Entry(form, textvariable=self.values[key], state="readonly")
             else:
                 widget = ttk.Entry(form, textvariable=self.values[key])
             widget.grid(row=row, column=1, sticky="ew", pady=3)
@@ -193,7 +225,25 @@ class WorkflowApp:
                 button = ttk.Button(form, text="Browse…", command=browse)
                 button.grid(row=row, column=2, padx=(6, 0), pady=3)
                 self.browse_buttons[key] = button
-        manifest_row = len(FIELD_LABELS) + 1
+        self.local_source_frame = ttk.Frame(form)
+        self.local_source_frame.grid(row=self.field_rows["archive_url"], column=0,
+                                     columnspan=3, sticky="ew", pady=3)
+        self.local_source_label = ttk.Label(self.local_source_frame, text="Existing local folder or file")
+        self.local_source_label.grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ToolTip(self.local_source_label, FIELD_HELP["local_source_path"])
+        self.local_source_entry = ttk.Entry(self.local_source_frame,
+                                            textvariable=self.values["local_source_path"], state="readonly")
+        self.local_source_entry.grid(row=0, column=1, sticky="ew")
+        self.local_folder_button = ttk.Button(self.local_source_frame, text="Folder…",
+                                              command=self._browse_local_folder)
+        self.local_folder_button.grid(row=0, column=2, padx=(6, 0))
+        self.local_file_button = ttk.Button(self.local_source_frame, text="File…",
+                                            command=self._browse_local_file)
+        self.local_file_button.grid(row=0, column=3, padx=(6, 0))
+        self.local_source_frame.columnconfigure(1, weight=1)
+        self.local_source_frame.grid_remove()
+
+        manifest_row = len(FIELD_LABELS) + 2
         manifest_label = ttk.Label(form, text="Manifest path (automatic)")
         manifest_label.grid(row=manifest_row, column=0, sticky="w", padx=(0, 8), pady=3)
         manifest_value = ttk.Label(form, textvariable=self.manifest_display, wraplength=680)
@@ -243,16 +293,61 @@ class WorkflowApp:
 
     def _browse_handler(self, key: str):
         handlers = {
-            "downloads_dir": self._browse_downloads,
             "dvd_path": self._browse_dvd,
         }
         return handlers.get(key)
 
-    def _browse_downloads(self) -> None:
-        path = filedialog.askdirectory(title="Select or create the intended download folder",
-                                       mustexist=False)
+    def _browse_local_folder(self) -> None:
+        path = filedialog.askdirectory(title="Select an existing verified Archive download folder",
+                                       mustexist=True)
         if path:
-            self.values["downloads_dir"].set(path)
+            self._local_source_selected(Path(path))
+
+    def _browse_local_file(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Select a file from an existing verified Archive download folder",
+            filetypes=(("LaserDisc source/evidence files", "download-manifest.csv *.tbc *.tbc.json *.efm *.efm.7z"),
+                       ("All files", "*.*")))
+        if path:
+            self._local_source_selected(Path(path))
+
+    def _local_source_selected(self, path: Path) -> None:
+        try:
+            source = resolve_local_source(path)
+        except WorkflowAppError as exc:
+            messagebox.showerror("Local source not accepted", str(exc), parent=self.root)
+            return
+        self.source_mode_var.set("local")
+        self.values["source_mode"].set("local")
+        self.previous_source_mode = "local"
+        self.values["local_source_path"].set(source["selected_path"])
+        self.values["downloads_dir"].set(source["source_dir"])
+        self._suppress_archive_trace = True
+        self.values["archive_url"].set(source["archive_url"])
+        self._suppress_archive_trace = False
+        self._update_source_controls()
+        self._finish_episode_resolution(source["archive_url"], source["episode"],
+                                        "local verified download manifest")
+
+    def _source_mode_changed(self) -> None:
+        mode = self.source_mode_var.get()
+        previous = self.previous_source_mode
+        if mode == "archive-url" and previous == "local":
+            self.values["archive_url"].set("")
+            self.values["downloads_dir"].set("")
+        self.values["source_mode"].set(mode)
+        self.previous_source_mode = mode
+        self.values["local_source_path"].set("")
+        self.values["manifest_path"].set("")
+        self.values["instance_root"].set("")
+        self.manifest_display.set("Resolve the selected source to select the episode manifest location")
+        self.resolved_archive_url = ""
+        if mode == "archive-url":
+            self._archive_url_changed()
+        else:
+            self.values["episode"].set("")
+            self.episode_display.set("Select a verified local folder/file to detect the episode")
+        self._update_mode_controls()
 
     def _browse_dvd(self) -> None:
         path = filedialog.askopenfilename(title="Select the exact matching DVD file",
@@ -322,11 +417,17 @@ class WorkflowApp:
         self.template = template
         self.profile_path = self._prepare_default_profile(template)
         self._suppress_archive_trace = True
+        self.source_mode_var.set("archive-url")
+        self.previous_source_mode = "archive-url"
         self.values["episode"].set("")
         self.values["manifest_path"].set("")
         self.values["instance_root"].set("")
+        self.values["local_source_path"].set("")
+        self.values["source_mode"].set("archive-url")
         for key, setting in template["_operator_inputs_EDIT"].items():
-            if key in self.values and key not in ("episode", "profile", "manifest_path", "instance_root") and isinstance(setting, dict):
+            if key in self.values and key not in (
+                    "episode", "profile", "manifest_path", "instance_root", "downloads_dir",
+                    "source_mode", "local_source_path") and isinstance(setting, dict):
                 self.values[key].set(str(setting.get("value", "")))
         self.values["dvd_path"].set("")
         self.values["fingerprint_policy"].set(template.get("fingerprint_policy", "balanced"))
@@ -360,10 +461,32 @@ class WorkflowApp:
                 if episode:
                     self.values["episode"].set(episode)
                     self.episode_display.set(f"{episode} (from Archive item URL)")
+                    self._set_profile_download_dir(episode)
                 else:
                     self.episode_display.set("Not in item URL; click Resolve episode to inspect Archive metadata")
         if hasattr(self, "resolve_button"):
             self._update_mode_controls()
+
+    def _set_profile_download_dir(self, episode: str) -> None:
+        if self.source_mode_var.get() != "archive-url" or not self.profile_path:
+            return
+        try:
+            profile = json.loads(self.profile_path.read_text(encoding="utf-8-sig"))
+            roots = profile.get("roots") or {}
+            raw_root = roots.get("downloads_root")
+            if not raw_root:
+                self.values["downloads_dir"].set("")
+                return
+            template = str(roots.get("downloads_template") or "DS9 {episode} LaserDisc")
+            leaf = template.format(episode=episode)
+            root = Path(os.path.expandvars(os.path.expanduser(str(raw_root))))
+            destination = root / leaf
+            if not destination.is_absolute():
+                raise WorkflowAppError("machine profile roots.downloads_root must be an absolute path")
+            self.values["downloads_dir"].set(str(destination.resolve(strict=False)))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, ValueError, WorkflowAppError) as exc:
+            self.values["downloads_dir"].set("")
+            self.status.set(f"Could not derive download folder from machine profile: {exc}")
 
     def _resolve_episode(self) -> None:
         url = self.values["archive_url"].get().strip()
@@ -430,6 +553,8 @@ class WorkflowApp:
             self._update_mode_controls()
             return
         self.values["episode"].set(episode)
+        if self.source_mode_var.get() == "archive-url":
+            self._set_profile_download_dir(episode)
         self.values["manifest_path"].set(str(manifest))
         self.values["instance_root"].set(instance_root)
         self.manifest_display.set(str(manifest))
@@ -477,6 +602,9 @@ class WorkflowApp:
         self.values["instance_root"].set(str(data.get("instance_root", "")))
         self.manifest_display.set(manifest_path or "No manifest path recorded in this plan")
         self.source_label.configure(text=f"Workflow plan: {self.plan_path}")
+        source_mode_input = operator.get("source_mode")
+        self.previous_source_mode = (str(source_mode_input.get("value", "archive-url"))
+                                     if isinstance(source_mode_input, dict) else "archive-url")
         self.status.set("Existing plan loaded. Preview before running or resuming it.")
         self._set_form_editable(False)
         self._update_review_choices()
@@ -489,7 +617,10 @@ class WorkflowApp:
         for key, widget in self.field_widgets.items():
             if key in ("dvd_mode", "cut_pad_images"):
                 continue
-            widget.configure(state="normal" if self.form_editable else "disabled")
+            if key == "downloads_dir":
+                widget.configure(state="readonly" if self.form_editable and self.source_mode_var.get() == "archive-url" else "disabled")
+            else:
+                widget.configure(state="normal" if self.form_editable else "disabled")
         self.entries["dvd_mode"].configure(state="readonly" if self.form_editable else "disabled")
         dvd_enabled = self.form_editable and mode == "dvd-backed"
         cut_enabled = self.form_editable and mode == "no-dvd"
@@ -501,12 +632,45 @@ class WorkflowApp:
         if hasattr(self, "resolve_button"):
             enabled = self.form_editable and bool(self.values["archive_url"].get().strip()) and not self.resolving_episode
             self.resolve_button.configure(state="normal" if enabled else "disabled")
-        if mode == "dvd-backed":
+        if self.source_mode_var.get() == "local":
+            self.mode_note.configure(text="Open local uses the selected folder/file and its verified download-manifest.csv; it skips downloading but still checks the inventory against Archive metadata.")
+        elif mode == "dvd-backed":
             self.mode_note.configure(text="DVD-backed mode passes the selected exact file to initialization. Verify it is the matching episode. The new manifest path must be in the selected profile/workspace's expected manifest folder.")
         elif mode == "no-dvd":
             self.mode_note.configure(text="No-DVD mode is an explicit decision and removes DVD-derived tracks and external DVD A/V correlation. Choose the cut-PAD still policy as well.")
         else:
             self.mode_note.configure(text="Choose DVD-backed or no-DVD mode. The plan will encode that choice in both stage arguments and its audit decisions.")
+        self._update_source_controls()
+
+    def _update_source_controls(self) -> None:
+        if not hasattr(self, "local_source_frame"):
+            return
+        url_mode = self.source_mode_var.get() == "archive-url"
+        for key in ("archive_url", "downloads_dir"):
+            if url_mode:
+                self.field_labels[key].grid()
+                self.entries[key].grid()
+                button = self.browse_buttons.get(key)
+                if button:
+                    button.grid()
+            else:
+                self.field_labels[key].grid_remove()
+                self.entries[key].grid_remove()
+                button = self.browse_buttons.get(key)
+                if button:
+                    button.grid_remove()
+        if url_mode:
+            self.local_source_frame.grid_remove()
+            self.resolve_button.grid()
+        else:
+            self.local_source_frame.grid()
+            self.resolve_button.grid_remove()
+        radio_state = "normal" if self.form_editable else "disabled"
+        for button in self.source_radio_buttons:
+            button.configure(state=radio_state)
+        local_state = "normal" if self.form_editable and not url_mode else "disabled"
+        self.local_folder_button.configure(state=local_state)
+        self.local_file_button.configure(state=local_state)
 
     def _collect_values(self) -> dict[str, str]:
         values = {key: variable.get().strip() for key, variable in self.values.items()}

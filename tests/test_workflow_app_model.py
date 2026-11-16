@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import copy
 import json
 import sys
@@ -14,7 +15,7 @@ from run_workflow import load_plan  # noqa: E402
 from workflow_app_model import (WorkflowAppError, build_intake_plan,
                                 choose_existing_profile, create_default_profile,
                                 default_profile_path, episode_code_from_url_identifier,
-                                read_intake_template, resolve_episode_code,
+                                read_intake_template, resolve_episode_code, resolve_local_source,
                                 write_new_plan)  # noqa: E402
 
 
@@ -73,6 +74,24 @@ def values_for(root: Path) -> dict[str, str]:
     }
 
 
+def create_local_download(root: Path) -> tuple[Path, Path]:
+    source = root / "DS9 S01E07 LaserDisc"
+    source.mkdir(parents=True)
+    files = [
+        ("DS9-S01E07-Q-Less-L1.tbc", b"small TBC fixture"),
+        ("DS9-S01E07-Q-Less-L1.tbc.json", b"small metadata fixture"),
+    ]
+    manifest = source / "download-manifest.csv"
+    with manifest.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=("ArchiveId", "Status", "Name", "Bytes", "MD5"))
+        writer.writeheader()
+        for name, payload in files:
+            (source / name).write_bytes(payload)
+            writer.writerow({"ArchiveId": "DS9-S01E07-LaserDisc-Copies", "Status": "verified",
+                             "Name": name, "Bytes": len(payload), "MD5": "0" * 32})
+    return source, source / files[0][0]
+
+
 class WorkflowAppPlanTests(unittest.TestCase):
     def test_default_profile_locations_are_per_user_and_portable(self):
         home = Path("C:/Users/tester")
@@ -126,6 +145,40 @@ class WorkflowAppPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(WorkflowAppError, "multiple episode codes"):
             resolve_episode_code("https://archive.org/details/DS9-Copies", metadata_reader=lambda _item: {
                 "metadata": {"title": "S01E07 and S01E08"}, "files": []})
+
+    def test_local_source_requires_verified_manifest_and_resolves_folder_or_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            folder, tbc = create_local_download(root)
+            from_folder = resolve_local_source(folder)
+            from_file = resolve_local_source(tbc)
+            self.assertEqual(from_folder["episode"], "S01E07")
+            self.assertEqual(from_folder["archive_url"],
+                             "https://archive.org/details/DS9-S01E07-LaserDisc-Copies")
+            self.assertEqual(from_file["source_dir"], str(folder.resolve()))
+            bad = root / "unverified"
+            bad.mkdir()
+            with self.assertRaisesRegex(WorkflowAppError, "lacks download-manifest.csv"):
+                resolve_local_source(bad)
+
+    def test_local_intake_plan_skips_download_and_tracks_local_source_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            folder, tbc = create_local_download(root)
+            values = values_for(root)
+            Path(values["profile"]).write_text(json.dumps({"shared": {"enabled": False}}), encoding="utf-8")
+            values.update({"source_mode": "local", "local_source_path": str(tbc),
+                           "episode": "S01E07", "archive_url": "", "downloads_dir": ""})
+            plan = build_intake_plan(intake_template(), values)
+            self.assertEqual([step["stage"] for step in plan["steps"]],
+                             ["init-episode", "validate-inputs"])
+            self.assertEqual(plan["steps"][0]["args"][plan["steps"][0]["args"].index("--downloads") + 1],
+                             "${input:downloads_dir}")
+            self.assertIn(str(folder.resolve()), plan["_operator_inputs_EDIT"]["downloads_dir"]["value"])
+            self.assertIn(str(tbc.resolve()), plan["steps"][0]["inputs"])
+            saved = write_new_plan(root / "local-plan.json", plan)
+            loaded, _ = load_plan(saved)
+            self.assertEqual(loaded["steps"][0]["stage"], "init-episode")
 
     def test_real_intake_template_builds_without_modifying_source(self):
         template_path = ROOT / "CONFIGURE HERE FIRST.example.json"

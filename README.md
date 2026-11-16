@@ -578,10 +578,14 @@ python scripts/generate_runbooks.py --check
 
 Launch the local desktop cockpit with `python scripts/workflow_app.py`. It loads the
 existing intake JSON by default, but **never edits that file**: `Save new plan…` writes a
-separate no-overwrite plan. The app derives the episode code from the Archive item ID, or
-looks it up in Archive metadata when needed; it does not ask the user to type the code. The
-**Resolve episode/workspace** button also derives the manifest location from the selected
-profile. Shared/device-workspace profiles use
+separate no-overwrite plan. A radio selector chooses between Archive URL and Open local.
+URL mode derives the episode code from the item ID, or looks it up in Archive metadata; it
+does not ask the user to type the code. Open local accepts a folder or listed source file
+from a previous Archive download, requires its verified `download-manifest.csv`, and skips
+the download stage; initialization still checks that inventory against Archive metadata.
+The **Resolve episode/workspace** button appears only for URL mode; local selection resolves
+the episode from its manifest automatically. Both flows derive the manifest location from
+the selected profile. Shared/device-workspace profiles use
 `devices/<device-instance>/episodes/<code>/manifest/<code>.json`; local profiles use their
 existing manifest location.
 uses the default per-user machine-profile folder (`%LOCALAPPDATA%\ld-pipeline\profiles`

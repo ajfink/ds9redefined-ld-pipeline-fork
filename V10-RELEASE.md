@@ -39,11 +39,15 @@ pull request was created.
   resolves the manifest path from the selected profile/episode workspace, and provides hover
   help for the intake fields. It does not ask users to type an episode code or locate a
   profile/manifest path.
+- Intake source is a radio choice: Archive URL mode downloads as before; Open local accepts
+  a prior downloaded folder or listed file with a verified `download-manifest.csv`, skips
+  the download stage, and retains the initializer's Archive metadata/hash verification.
+  URL mode alone shows the episode/workspace resolver; local mode uses folder/file pickers.
 
 ## Validation and limits
 
 - Mainline V10 reported 105 passed and 7 VapourSynth-only skipped. This fork's expanded suite
-  passes **127 tests, with 7 VapourSynth-only skipped**.
+  passes **129 tests, with 7 VapourSynth-only skipped**.
 - Fork checks passed: Python `compileall`, generated-runbook `--check`, `git diff --check`,
   `av_check_output.py` import with `SyntaxWarning` treated as an error, PowerShell AST parsing
   of 8 scripts, and `run_stage.py --list` with both new diagnostics registered.
@@ -71,10 +75,10 @@ pull request was created.
   selections/paths, and settings may arrive through an AI prompt but must be persisted to
   the designated config/plan and validated, not left only in chat.
 - The GUI tests cover real-template immutability, DVD/no-DVD argument generation, Archive
-  episode inference, default profile location/creation and legacy-profile reuse, plan
-  validation, and overwrite refusal. Field-label tooltips explain the decisions. The desktop
-  window itself still needs an interactive user acceptance pass; the V10 plan/runner contract
-  is unchanged.
+  episode inference, local-source manifest validation and no-download plan generation, default
+  profile location/creation and legacy-profile reuse, plan validation, and overwrite refusal.
+  Field-label tooltips explain the decisions. The desktop window itself still needs an
+  interactive user acceptance pass; the V10 plan/runner contract is unchanged.
 - GitHub preparation check: `main` remains the V10 baseline and `fromstuntokill-app` holds
   the application branch. GitHub CLI is not installed, so no repository settings or pull
   request were created. The local `CONFIGURE HERE FIRST.json` is ignored and excluded; only
