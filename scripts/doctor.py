@@ -276,7 +276,7 @@ def main() -> int:
             platform_report = linux_preflight(profile, profile_file, interpreter, lock_report, args.episode)
 
         workflow_status = {
-            "windows": "V10 Windows x86_64 reference workflow",
+            "windows": "V11 Windows x86_64 reference workflow",
             "macos": "macOS arm64 end-to-end workflow demonstrated on M5 (S01E10); fresh-device setup is not independently certified",
             "linux": "UNTESTED: x86_64 dependency/capability candidate only; do not process a delivery",
         }[target_os]

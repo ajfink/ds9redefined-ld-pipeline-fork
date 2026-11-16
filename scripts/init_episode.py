@@ -167,7 +167,7 @@ def main() -> int:
 
     ld = Ld()
     if (ld.profile.get("shared") or {}).get("enabled") is True:
-        shared_instance_root(ld.profile, ld.profile_path, args.episode)
+        shared_instance_root(ld.profile, ld.profile_path, code)
     download_dir = Path(args.downloads).resolve()
     if not download_dir.is_dir():
         raise PipelineError(f"download destination is not a directory: {download_dir}")

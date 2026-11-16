@@ -1,6 +1,12 @@
+> **NOT FOR LIVE WORKFLOW USE.** This is a release-planning/implementation record only. Do
+> not cite or apply its contents as episode instructions, measurements, approvals, stage
+> arguments, or gates. Active jobs must follow the current README, canonical runbook, and
+> released tools.
+
 # V10 implementation record
 
-**Current release is V10.** This file records the accepted V10 scope from the W/Z log review.
+**Historical implementation record: V10. Current release is V11.** This file records the
+accepted V10 scope from the W/Z log review.
 Implementation and synthetic/unit validation are complete; no real episode was reprocessed
 for this release. The evidence below is not a new default or authorization to modify active
 episode data. Existing QC, space, ACL, and approval gates were not relaxed.

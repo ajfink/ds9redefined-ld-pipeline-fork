@@ -17,6 +17,12 @@ At a glance
 
 The numbered sections below are the actual procedure and gates; this list is only the orientation/quick review.
 
+Live-run authority: V*-QUEUE.md files are planning records, not episode instructions or
+evidence. Do not read, cite, or use queued proposals as measurements, approvals, stage
+arguments, or gates while running an episode. Follow this current runbook and README plus the
+released scripts matching WORKFLOW_VERSION; queue content has no effect until explicitly
+implemented and released.
+
 During a long source download, do useful independent prep rather than waiting: verify
 and probe the matching DVD, check machine readiness, and preserve clearly labeled
 preliminary evidence. Do not create/validate the episode manifest until the downloader
@@ -262,7 +268,8 @@ cadence, trims, or retime schedule. Do not use another episode's measurements. O
 init_episode.py creates the manifest after download verification, populate only supported
 manifest fields with confirmed facts; retain the detailed DVD probe and its provenance in
 roots.probe / roots.logs. Do not add ad hoc manifest keys. Leave uncertain values unset.
-If a proposed prep step requires an episode manifest or verified LD artifact, queue it
+If a proposed prep step requires an episode manifest or verified LD artifact, queue it in
+the active episode's job checklist (not a V*-QUEUE.md release-planning file)
 for its proper later gate; never fabricate a temporary manifest to bypass that requirement.
 
 After download, initialize without guessing measurements:

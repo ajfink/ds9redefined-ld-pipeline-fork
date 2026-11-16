@@ -133,3 +133,17 @@ FROM Version 9 -> Version 10
   generation, whitespace, warning-as-error import, and PowerShell parsing passed. See
   `V10-RELEASE.md` and authoring-device execution-log section 39. No real retime/media
   processing, full episode, or new macOS/Linux support claim is made.
+
+Version 11 (2026-11-15)
+FROM Version 10 -> Version 11
+- Marked all V9/V10/V11 queue files as non-operative planning records and added explicit
+  README/canonical/generated-runbook instructions not to cite or use queue entries during a
+  live episode workflow.
+- Fixed the required shared-mode `init_episode.py` path to use the already validated
+  Archive-derived episode code instead of undeclared `args.episode`; added AST regression
+  coverage for undeclared argparse attributes and the workspace call site.
+- The dependency target-or-newer policy and LD/DVD comparator remain V11 queue proposals;
+  neither changed in this release. The comparator prototype and media/report are not included.
+- Validation: **111 passed, 7 VapourSynth-only skipped**; Python compilation, generated
+  runbooks, diff check, and PowerShell parsing passed. No real episode or media was processed
+  for release validation. See `V11-RELEASE.md` and execution-log section 44.

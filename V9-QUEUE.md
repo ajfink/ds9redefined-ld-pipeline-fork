@@ -1,6 +1,10 @@
+> **NOT FOR LIVE WORKFLOW USE.** This is release-planning material only. Do not read, cite,
+> or apply queue entries as episode instructions, measurements, approvals, stage arguments,
+> or gates. Active jobs must follow the current README, canonical runbook, and released tools.
+
 # V9 planning queue
 
-**Historical planning snapshot: V9. Current release is V10.** This file preserves the V9
+**Historical planning snapshot: V9. Current release is V11.** This file preserves the V9
 device-log review and its inherited carry-overs; it is not workflow instructions or
 authorization to change a gate, profile, active episode, or device data. Accepting a core
 item requires implementation, validation, a workflow-version increment, release notes, and

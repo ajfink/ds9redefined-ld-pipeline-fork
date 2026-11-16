@@ -1,6 +1,6 @@
 # DS9 LaserDisc OpenCode Operator Pack
 
-**Workflow version: 10** — check `WORKFLOW_VERSION` and follow the core-change/device-log
+**Workflow version: 11** — check `WORKFLOW_VERSION` and follow the core-change/device-log
 rules in `WORKFLOW_VERSIONING.md` before editing or syncing workflow files.
 
 **Design goal:** make the workflow clear and reliable enough for capable free or low-cost
@@ -17,6 +17,12 @@ episode data, reference archives, media/caches, and third-party AviSynth DLLs. S
 `_instructions_DO_NOT_EDIT` section intact. The template is a no-DVD intake example and
 must be filled with this job's confirmed values before it can be planned. Job IDs and
 approval identity/time are generated automatically.
+
+**Live-workflow source boundary:** `V*-QUEUE.md` files are planning/backlog records only.
+Do not read, cite, or apply queue entries as episode instructions, measurements, approvals,
+stage arguments, or gates during a live job. Use this README, the canonical runbook, and
+released scripts at `WORKFLOW_VERSION`; a queued proposal becomes operative only after it is
+implemented and released.
 
 **Start here.** An OpenCode instance given this folder and the three job inputs
 below should read this README, then follow `DS9 LaserDisc OpenCode Runbook.md`.
@@ -521,8 +527,10 @@ permission.
 | `V8-RELEASE.md` | V8 stage timing and README-relative device workspace changes |
 | `V9-RELEASE.md` | V9 ordered workflow orchestration and intake configuration |
 | `V10-RELEASE.md` | V10 retime verification, measurement diagnostics, workspace compatibility, and analysis safeguards |
+| `V11-RELEASE.md` | Queue-use boundary and `init_episode` shared-mode regression fix |
 | `V9-QUEUE.md` | V9 device-log review and inherited carry-overs |
 | `V10-QUEUE.md` | V10 scope and implementation record |
+| `V11-QUEUE.md` | Proposed target-or-newer dependency policy and report-only LD/DVD audio comparator; planning only |
 | `changelog.txt` | Short release history; retrospective V1–V5 notes and accepted V6 changes |
 | `Cut Pad Images/<episode>/` | Curated single-frame DVD cut-PAD repair stills, named by verified DVD timestamp/frame; not a DVD reference substitute |
 | `scripts/download_archive.ps1` | Metadata-verified, resumable source download; checks profile curl (>=7.71.0), and ListOnly prints inventory, integrity metadata, aggregate bytes, and projected free space |

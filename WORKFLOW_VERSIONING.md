@@ -1,6 +1,6 @@
 # Workflow versioning
 
-**Authoritative workflow version: 10** (`WORKFLOW_VERSION` is the machine-readable
+**Authoritative workflow version: 11** (`WORKFLOW_VERSION` is the machine-readable
 counter). The authoritative bundle is `Z:\ld-pipeline` on the authoring machine.
 
 ## What requires a version change
@@ -30,12 +30,15 @@ and work data.
 
 Use `templates/device-workflow-change.template.md` for a consistent device-log entry.
 
-`V10-RELEASE.md` records the current V10 retime/measurement/workspace safeguards and validation boundaries.
-`V9-RELEASE.md`, `V8-RELEASE.md`, and `V7-RELEASE.md` preserve earlier release records. The historical V6 queue was retired and removed in the shared-release follow-up;
+`V11-RELEASE.md` records the current V11 queue-use boundary and required-stage regression fix.
+`V10-RELEASE.md`, `V9-RELEASE.md`, `V8-RELEASE.md`, and `V7-RELEASE.md` preserve earlier release records. The historical V6 queue was retired and removed in the shared-release follow-up;
 its former proposals are not workflow instructions or permission to bypass an accepted gate.
 `V9-QUEUE.md` preserves the V9 device-log review and inherited carry-overs.
 `V10-QUEUE.md` records the accepted V10 scope and its validation limits; its documented
 real-media follow-up observations are not claims of end-to-end or cross-platform support.
+`V11-QUEUE.md` retains unaccepted dependency-check and LD/DVD comparator proposals. Queue
+contents are not active instructions; V11 accepted queue-safety/init changes are recorded in
+`V11-RELEASE.md` and the version-history/device log.
 
 ## Version history
 
@@ -51,10 +54,11 @@ real-media follow-up observations are not claims of end-to-end or cross-platform
 | 8 | `LENOVO-LEGION-5`, 2026-11-15; from Version 7 | Added active elapsed-time fields to every `run_stage.py` log/report, split into automatic gate, action, and post-action time; waits between invocations are excluded. Added `scripts/stage_clock.py` pause/resume/stop records for manual stages, so human gate waits can be paused and excluded. Extended the README-relative device workspace contract, non-gating README-folder creation/local fallback, per-instance log evidence guide, and owner-only device subtree ACL guidance across the canonical/Qwen/ASCII docs. Fixed the local fallback candidate resolver defect found in the Lenovo Legion device log. | **63 passed, 7 Mac/VapourSynth-only skipped**; Python compilation, PowerShell parsing, generated-runbook checks, stage timing tests, and early-download dry-run passed. `WORKFLOW_VERSION` is 8. W tracked files will be synchronized without touching `devices/`; the connected W account still has release-root Full Control and must be ACL-restricted before shared processing. |
 | 9 | `LENOVO-LEGION-5`, 2026-11-15; from Version 8 | Added `scripts/run_workflow.py` for ordered allowlisted plans, durable status/logs, per-job locking, profile/plan/version identity checks, declared artifact fingerprints, conservative verified resume, and downloader-only retry. Added automatic episode/title/UTC job IDs and approval metadata. Registered deterministic descriptor, alignment, break-edge, audio-sync, and retime helpers; corrected PAD full-resolution/RIFE prerequisites to require cadence rather than the PAD-fix output. Added a sanitized no-DVD intake configuration and fixture-backed interruption/resume test. Linux production remains blocked; the Mac cadence-dispatch integration issue remains open. | **81 passed, 7 VapourSynth-only skipped**; Python compilation, generated-runbook check, and diff whitespace check passed. The intake integration test uses a local Archive fixture and fake stage runner; it is network-free. No real Archive transfer, real-media processing, full end-to-end episode, or new macOS support claim. See `V9-RELEASE.md` and execution-log section 37. |
 | 10 | `LENOVO-LEGION-5`, 2026-11-15; from Version 9 | Added output-silence verification to DVD retime generation, including explicit sub-resolution `LIMIT` reporting and QC visibility. Added episode-scoped no-overwrite EFM path planning; report-only PAD audio-occupancy and LD luma-black sensitivity diagnostics; a guard against extrapolating DVD/LD offsets outside the sampled alignment range; neighboring-black clipping for break measurement windows; legacy workspace-mode inference and duplicate-init refusal; and a one-off analysis validation checklist. Linux production remains blocked; the existing Mac cadence-dispatch issue remains open. | **105 passed, 7 VapourSynth-only skipped**; Python compilation, generated-runbook check, `git diff --check`, `SyntaxWarning`-as-error import, and PowerShell parsing (8 files) passed. Tests are synthetic/unit and fixture-backed only; no real EFM decode, retime, or episode reprocessing is claimed. Real-media threshold choices and S01E08/S01E11 revalidation remain outstanding. See `V10-RELEASE.md` and execution-log section 39. |
+| 11 | `LENOVO-LEGION-5`, 2026-11-15; from Version 10 | Added an explicit non-operative warning to all version queue files and live-workflow instructions in the README/canonical/generated runbooks, so queue proposals cannot be treated as episode values, gates, or actions. Fixed the `init_episode.py` shared-mode crash by passing its Archive-derived `code`, and added AST regression tests preventing undeclared `args.*` access. The LD/DVD audio comparator remains a V11 queue proposal; no sample-rate/QC behavior changed. | **111 passed, 7 VapourSynth-only skipped**; Python compilation, generated-runbook, diff, warning-as-error import, and PowerShell parse checks passed. No real media was processed as part of V11 release validation; the separate S01E12 transfer/init is documented in execution-log section 43. Linux production remains blocked and no new macOS support is claimed. See `V11-RELEASE.md` and execution-log section 44. |
 
 Version records are in `W:\ld-pipeline-execution-log.md`: Version 1 section 16, Version 2 section 17,
 Version 3 sections 18-19, Version 4 section 21, Version 5 sections 22-23, Version 6 section 27, Version 7 sections 28-31,
-Version 8 section 34, Version 9 section 37, and Version 10 section 39. E07 findings are in `Z:\S01E07-flow-log.md` and
+Version 8 section 34, Version 9 section 37, Version 10 section 39, and Version 11 section 44. E07 findings are in `Z:\S01E07-flow-log.md` and
 `Z:\work\logs\S01E07-v5-rerun.md`.
 The M5 source/adoption evidence is in `W:\M5 Mac LaserDisc Project Updates Log.md`;
 its last recorded adoption is Version 2, and its current on-device marker still needs
