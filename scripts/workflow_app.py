@@ -113,6 +113,7 @@ class WorkflowApp:
         self.values["fingerprint_policy"] = tk.StringVar(value="balanced")
         self.episode_display = tk.StringVar(value="Not resolved from Archive URL")
         self.resolved_archive_url = ""
+        self.resolving_episode = False
         self._suppress_archive_trace = False
         self.profile_path: Path | None = None
         self.template_path: Path | None = None
