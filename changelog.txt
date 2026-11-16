@@ -209,7 +209,9 @@ FROM Version 14 -> Version 15
   and post-write validation. Unresolved offsets/steps remain null.
 - Preserved one-sided break-edge evidence while keeping incomplete results nonzero; pinned
   retimed audio segment durations and recorded the generated-output silence scan threshold.
-- Validation: **231 passed, 7 skipped**; compileall, warnings-as-errors imports, generated
-  runbooks and byte-identical plain-text output, all 7 PowerShell parser checks, and diff check
-  passed. No episode media/download/encode/remux was run for release validation. See
-  `V15-RELEASE.md` and the authoring-device V15 change record.
+- Validation: **224 passed, 7 skipped** (231 tests); compileall, warnings-as-errors imports,
+  generated runbooks and byte-identical plain-text output, all 7 PowerShell parser checks, and
+  diff check passed. Real-media validation on S01E12's existing media: retime output-gap
+  verification **17/17 PASS** (3 FAIL before the fix) and `validate --stage retime` 35/0; no
+  download/encode/remux ran for release validation. See `V15-RELEASE.md` and the
+  authoring-device V15 change record.

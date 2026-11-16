@@ -33,10 +33,13 @@ was downloaded or processed to implement or validate these changes.
 
 ## Validation
 
-- Full unit suite: **231 passed, 7 skipped**.
+- Full unit suite: **224 passed, 7 skipped** (231 tests).
 - Candidate tests use synthetic intervals and mocked metadata/FFmpeg process results. The
-  retime pin tests include short FFmpeg-generated signals. Real-media S01E12 success is
-  historical device-log evidence, not a media rerun in this release validation.
+  retime pin tests include short FFmpeg-generated signals. The pin/threshold fix was also
+  exercised on S01E12's existing media during development: output-gap verification
+  **17/17 PASS** (3 FAIL before the fix) and `validate --stage retime` 35/0
+  (device log section 51, S01E12 episode logs); no media was rerun as part of the
+  release-validation suite itself.
 - Python compilation passed (`compileall` over `scripts` and `tests`); V15 helper imports passed
   with warnings treated as errors. Generated Qwen runbooks were current, and a regenerated
   temporary plain-text companion matched the checked-in file byte-for-byte. All 7 PowerShell
@@ -51,3 +54,8 @@ was downloaded or processed to implement or validate these changes.
   decision. Ambiguous candidates remain blocked for review.
 - Existing DS9/VOY identities and V14 manifests are unchanged; no migration or media operation
   is performed by V15 release validation.
+- Device-local, NOT part of V15: S01E12's clip ends on an orphan single-frame black (output
+  frame 65366, no map pad, genuine DVD-consistent black ending) that trips the release
+  `pad_audit.py` boundary raise before any output is written. The episode used a documented
+  local adaptation (`Z:\work\probe\pad_audit_local_boundaryfix.py`; device log section 52,
+  episode log `S01E12-pad-audit-boundary.md`), proposed for merge into a future increment.
