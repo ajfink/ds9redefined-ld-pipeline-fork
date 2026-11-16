@@ -147,3 +147,17 @@ FROM Version 10 -> Version 11
 - Validation: **111 passed, 7 VapourSynth-only skipped**; Python compilation, generated
   runbooks, diff check, and PowerShell parsing passed. No real episode or media was processed
   for release validation. See `V11-RELEASE.md` and execution-log section 44.
+
+Version 12 (2026-11-15)
+FROM Version 11 -> Version 12
+- Integrated the parameterized `ld_dvd_audio_compare.py` as an optional report-only diagnostic.
+  It compares LD/DVD per-second envelopes and unshifted whole-source band summaries; it never
+  chooses a rate, edits a manifest, approves a decision, or gates QC.
+- Added explicit DVD-selector provenance, lag-sign semantics, shared-workspace path redaction,
+  writable-path validation, no-overwrite report output, sanitized E08 numerical regression
+  fixture, and synthetic/CLI regression tests.
+- Updated the canonical runbook and model-generated runbooks with the optional audio-stage use;
+  kept the E08 one-off script/report and all episode media outside the repository.
+- Validation: **116 passed, 7 VapourSynth-only skipped**; 12 comparator tests, compilation,
+  warning-as-error import, generated-runbook, and diff checks passed. No real E12 media run or
+  peak-memory benchmark is claimed. See `V12-RELEASE.md` and execution-log section 45.

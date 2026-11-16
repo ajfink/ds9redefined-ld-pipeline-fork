@@ -1,6 +1,6 @@
 # DS9 LaserDisc OpenCode Operator Pack
 
-**Workflow version: 11** — check `WORKFLOW_VERSION` and follow the core-change/device-log
+**Workflow version: 12** — check `WORKFLOW_VERSION` and follow the core-change/device-log
 rules in `WORKFLOW_VERSIONING.md` before editing or syncing workflow files.
 
 **Design goal:** make the workflow clear and reliable enough for capable free or low-cost
@@ -528,9 +528,11 @@ permission.
 | `V9-RELEASE.md` | V9 ordered workflow orchestration and intake configuration |
 | `V10-RELEASE.md` | V10 retime verification, measurement diagnostics, workspace compatibility, and analysis safeguards |
 | `V11-RELEASE.md` | Queue-use boundary and `init_episode` shared-mode regression fix |
-| `V9-QUEUE.md` | V9 device-log review and inherited carry-overs |
-| `V10-QUEUE.md` | V10 scope and implementation record |
-| `V11-QUEUE.md` | Proposed target-or-newer dependency policy and report-only LD/DVD audio comparator; planning only |
+| `V12-RELEASE.md` | Optional report-only LD/DVD audio comparator and regression coverage |
+| `V9-QUEUE.md` | Historical V9 device-log review and inherited carry-overs; planning only |
+| `V10-QUEUE.md` | Historical V10 scope and implementation record; planning only |
+| `V11-QUEUE.md` | Historical V11 record and dependency-policy proposal; planning only |
+| `V12-QUEUE.md` | V12 planning/review record; not live workflow instructions |
 | `changelog.txt` | Short release history; retrospective V1–V5 notes and accepted V6 changes |
 | `Cut Pad Images/<episode>/` | Curated single-frame DVD cut-PAD repair stills, named by verified DVD timestamp/frame; not a DVD reference substitute |
 | `scripts/download_archive.ps1` | Metadata-verified, resumable source download; checks profile curl (>=7.71.0), and ListOnly prints inventory, integrity metadata, aggregate bytes, and projected free space |
@@ -544,6 +546,7 @@ permission.
 | `scripts/measure_dvd_alignment.py` | Continuity-constrained DVD-minus-master Viterbi candidate path and sampled-range report |
 | `scripts/measure_break_edges.py` | Long-window content offsets, DP comparison, score/runner-up; clips windows away from adjacent recorded blacks |
 | `scripts/measure_audio_rate.py` | Multi-window audio-vs-picture-map diagnostic with OLS and robust checks; never auto-selects a correction |
+| `scripts/ld_dvd_audio_compare.py` | Optional report-only LD/DVD envelope and band comparison; never selects a rate or gates QC |
 | `scripts/measure_pad_audio.py` | Report-only PAD_1 audio occupancy vs nearby PCM controls; never recommends a rate |
 | `scripts/measure_ld_black.py` | Report-only descriptor-luma dark-run intervals across selected thresholds |
 | `scripts/efm_paths.py` | Episode-scoped EFM WAV/report path plan with existing-output refusal |

@@ -5,7 +5,7 @@
 
 # V10 implementation record
 
-**Historical implementation record: V10. Current release is V11.** This file records the
+**Historical implementation record: V10. Current release is V12.** This file records the
 accepted V10 scope from the W/Z log review.
 Implementation and synthetic/unit validation are complete; no real episode was reprocessed
 for this release. The evidence below is not a new default or authorization to modify active

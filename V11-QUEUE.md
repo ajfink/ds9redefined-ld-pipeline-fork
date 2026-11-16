@@ -5,11 +5,11 @@
 
 # V11 planning queue
 
-**Current released version is V11.** This file is a backlog of proposals, not current behavior.
-V11's accepted queue-use boundary and `init_episode` regression fix are described in
-`V11-RELEASE.md`; the remaining items below are not operative until separately implemented
-and released. They do not change the dependency doctor, locks, readiness gates, or installation
-behavior. No package is installed, updated, downgraded, or fetched automatically by a proposal.
+**Historical V11 planning backlog; current released version is V12.** This file is not live
+workflow input. V11's accepted queue-use boundary and `init_episode` regression fix are
+described in `V11-RELEASE.md`. The comparator proposal below was reviewed and integrated in
+V12; the target-or-newer dependency proposal remains unaccepted. Neither proposal altered
+dependency behavior or package installation.
 
 ## V11 accepted changes
 
@@ -79,10 +79,11 @@ The helper is report-only: it selects no rate, approves nothing, edits no manife
 writes no audio. It should remain a diagnostic, not silently become an automatic quality or
 rate-selection gate.
 
-The running-instance v2 label/schema correction reported in the S01E12 helper log is not
-present in the current Z prototype: the local untracked script still has schema v1 and the
-same-start band labels. Reconcile and test that patch before considering the helper adopted;
-do not treat its report as released V11 behavior.
+The running-instance v2 label/schema correction reported in the S01E12 helper log was applied
+to the prototype and verified against the E08 numeric regression: same-start band means are
+explicitly marked unshifted/not lag-corrected, and the documented E08 numbers remain
+unchanged. The reviewed helper was subsequently integrated with a v3 report schema in V12;
+see `V12-RELEASE.md`.
 
 ### Implementation scope
 
@@ -117,10 +118,10 @@ do not treat its report as released V11 behavior.
 
 ## Guardrails
 
-- V11 remains authoritative until a later proposal is accepted and released.
+- V12 is authoritative; this queue is historical planning material only.
 - A newer version is not automatically considered functionally compatible: existing
   capability, import, readiness, and media-quality gates remain binding.
 - No update lookup or package mutation is part of a diagnostic/check operation.
-- The V10 release and dependency behavior remain authoritative until a tested V11 release.
+- Current behavior is defined by the current released README/runbook/code, not this queue.
 - Do not include the one-off E08 script/report, DVD, WAV/FLAC, or other media in the source
   repository; only sanitized regression numbers/fixtures may be committed.
