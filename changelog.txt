@@ -334,3 +334,14 @@ FROM Version 20 -> Version 21 (app branch only; production `main` and W remain V
   edit map rather than be entered as DVD track retime fields.
 - Added the DVD boundary policy and evidence expectations to the cadence workbench review.
 - Validation: **403 passed, 7 skipped** (410 tests); compile/import, generated-runbook, all 7 PowerShell AST parses, and diff checks passed. No real-media measurements or GUI smoke test; see `V21-RELEASE.md`.
+
+FromStunToKill app branch V22 (2026-11-17)
+FROM Version 21 -> Version 22 (app branch only; production `main` and W remain V15)
+- Clarified the user's priority: preserve the LD's internal break timing and use the existing
+  piecewise DVD 5.1/SRT retime; final A/V alignment is the criterion, not equal black lengths.
+- Retained V21's measured DVD-referenced head/tail visual/audio alignment for LD-only intro/tail
+  cleanup and common timeline origin.
+- Updated the canonical/plain-text runbooks, generated Qwen guides, README, and cadence-workbench
+  review wording. No media transforms or manifest schema changed.
+- Validation: **403 passed, 7 skipped** (410 tests); compile/import, generated-runbook, all 7
+  PowerShell AST parses, and diff checks passed. No real-media measurement or GUI smoke test.

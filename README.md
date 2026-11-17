@@ -1,8 +1,8 @@
 # DS9 LaserDisc OpenCode Operator Pack
 
-**Workflow version: 21 (FromStunToKill app branch)** — check `WORKFLOW_VERSION` and follow the
+**Workflow version: 22 (FromStunToKill app branch)** — check `WORKFLOW_VERSION` and follow the
 core-change/device-log rules in `WORKFLOW_VERSIONING.md` before editing or syncing workflow files.
-This V21 increment is scoped to the app branch; production `main` and the W shared tree remain
+This V22 increment is scoped to the app branch; production `main` and the W shared tree remain
 at V15 and are not modified by this release.
 
 **Design goal:** make the workflow clear and reliable enough for capable free or low-cost
@@ -546,12 +546,10 @@ missing, verify and regenerate it before continuing.
        workflow: decode it sequentially (never `-ss` a non-monotonic DVD), extract the DVD
        and master descriptor grids, adjudicate the picture map/edges and robust-rate/fade
        evidence, then build `ld_corrected` and sample-accurate `ld_synced`. At midpoint
-       commercial-break fades, map both edges of the same visual break and its audio fade
-       points to the DVD reference, preserving the DVD-measured picture/audio offset. Only
-       consider trimming excess LD duration if that matched DVD interval is measurably
-       shorter; retain DVD-length breaks when equal/longer. The current
-       pipeline does not execute internal LD picture/audio cuts, so record such a candidate
-       and stop rather than changing `retime.breaks` or cutting by eye. Do not use the
+       commercial-break fades, keep the LD's internal picture/audio timeline even when the
+       DVD black/fade interval is shorter or longer. Use mapped boundaries for piecewise DVD
+       5.1/SRT retiming; judge success by measured content alignment and final A/V QC, not
+       equal black durations. Do not use the
        DVD-rate fit as an assumed value. If the user explicitly chose no-DVD mode, run
        `python scripts/audio_timing_diagnostic.py --episode <code> --promote-dvd-free --report-out <new-unique.json>` only
        after measured video frames/DELTA and PAD counts/endpoints are available. It applies
@@ -624,7 +622,7 @@ permission.
 
 ## Optional FromStunToKill desktop app
 
-Launch the local GUI with `python scripts/workflow_app.py`. It uses the V21 allowlisted
+Launch the local GUI with `python scripts/workflow_app.py`. It uses the V22 allowlisted
 runner and automatically saves concrete, immutable workflow plans under the device's
 `devices/<DEVICE>-<ID>/plans/` folder when **Preview** is clicked; no separate save step is
 needed. Intake fields remain editable after preview and until **Run** is confirmed; edits
@@ -736,8 +734,10 @@ measurements or grants approval.
 | `FROMSTUNTOKILL-V19-APP.md` | Historical V19 app-branch integration and validation boundary |
 | `V20-RELEASE.md` | Historical post-run download/audio cleanup review and safety gates |
 | `FROMSTUNTOKILL-V20-APP.md` | Historical V20 cleanup integration and validation boundary |
-| `V21-RELEASE.md` | DVD-referenced visual/audio boundary-alignment policy |
-| `FROMSTUNTOKILL-V21-APP.md` | Current V21 boundary-review integration and validation boundary |
+| `V21-RELEASE.md` | Historical DVD-referenced boundary proposal and limitations |
+| `FROMSTUNTOKILL-V21-APP.md` | Historical V21 boundary-review policy |
+| `V22-RELEASE.md` | Final A/V alignment priority and internal-break decision |
+| `FROMSTUNTOKILL-V22-APP.md` | Current V22 alignment policy and validation boundary |
 | `V9-QUEUE.md` | Historical V9 device-log review and inherited carry-overs; planning only |
 | `V10-QUEUE.md` | Historical V10 scope and implementation record; planning only |
 | `V11-QUEUE.md` | Historical V11 record and dependency-policy proposal; planning only |

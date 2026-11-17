@@ -304,11 +304,11 @@ def build_cadence_map_plan(context: dict[str, Any], tfm_log: str | Path,
                       f"cadence-map-{series.lower()}-{episode.lower()}-{token[-8:]}")
     trim_policy = (
         "DVD reference: independently map visual and native-audio start/end points onto the LD timeline; "
-        "preserve measured DVD A/V offset. For a matched midpoint commercial break, consider trimming "
-        "only excess LD duration when the DVD interval is measured shorter; current tools do not "
-        "execute internal LD picture/audio cuts, so record and stop."
+        "preserve measured DVD A/V offset. Keep the LD internal commercial-break timeline; use mapped "
+        "edges to retime DVD tracks, and judge success by final A/V QC, not equal black durations."
         if dvd_available else
-        "No DVD reference: use only measured LD-side head/tail trims; do not infer DVD correspondence.")
+        "No DVD reference: use only measured LD-side head/tail trims; do not infer DVD correspondence "
+        "or alter internal breaks.")
     plan["decisions"] = [
         {"id": "cadence-map-mode", "value": plan_mode},
         {"id": "measured-audio-pad-frames", "value": audio["pad_frames"]},

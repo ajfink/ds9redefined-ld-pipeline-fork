@@ -97,8 +97,8 @@ class WorkflowWorkbenchPlanTests(unittest.TestCase):
             boundary_policy = next(row["value"] for row in cadence["decisions"]
                                    if row["id"] == "dvd-boundary-policy")
             self.assertIn("visual and native-audio start/end", boundary_policy)
-            self.assertIn("DVD interval is measured shorter", boundary_policy)
-            self.assertIn("do not execute", cadence["steps"][1]["prompt"])
+            self.assertIn("Keep the LD internal commercial-break timeline", boundary_policy)
+            self.assertIn("not equal black durations", cadence["steps"][1]["prompt"])
 
     def test_cadence_plan_refuses_missing_measured_trim_or_motion_trace(self):
         with tempfile.TemporaryDirectory() as temporary:
