@@ -1,8 +1,8 @@
 # DS9 LaserDisc OpenCode Operator Pack
 
-**Workflow version: 18 (FromStunToKill app branch)** — check `WORKFLOW_VERSION` and follow the
+**Workflow version: 19 (FromStunToKill app branch)** — check `WORKFLOW_VERSION` and follow the
 core-change/device-log rules in `WORKFLOW_VERSIONING.md` before editing or syncing workflow files.
-This V18 increment is scoped to the app branch; production `main` and the W shared tree remain
+This V19 increment is scoped to the app branch; production `main` and the W shared tree remain
 at V15 and are not modified by this release.
 
 **Design goal:** make the workflow clear and reliable enough for capable free or low-cost
@@ -601,7 +601,7 @@ permission.
 
 ## Optional FromStunToKill desktop app
 
-Launch the local GUI with `python scripts/workflow_app.py`. It uses the V18 allowlisted
+Launch the local GUI with `python scripts/workflow_app.py`. It uses the V19 allowlisted
 runner and automatically saves concrete, immutable workflow plans under the device's
 `devices/<DEVICE>-<ID>/plans/` folder when **Preview** is clicked; no separate save step is
 needed. Intake fields remain editable after preview and until **Run** is confirmed; edits
@@ -676,7 +676,7 @@ measurements or grants approval.
 | `scripts/doctor.py` | Unified read-only profile/dependency/platform report; Linux x86_64 remains explicitly not episode-ready |
 | `scripts/bootstrap_deps.py` / `dependencies/` | Direct Python version locks for Windows x64, Mac arm64, and candidate Linux x86_64; check-only by default, `--install` is explicit |
 | `scripts/run_stage.py` | Allowlisted stage dispatcher; dry-run plan by default, explicit `--execute`, series-aware stage identity, downloader-specific checks for early download, and full gates before other writes |
-| `scripts/run_workflow.py` | Ordered JSON-plan orchestration; series-scoped status/log/locks/resume, input/output fingerprints, and conservative resume |
+| `scripts/run_workflow.py` | Ordered JSON-plan orchestration; series-scoped status/log/locks/resume, input/output fingerprints, conservative resume, and per-step progress bar |
 | `scripts/workflow_app.py` | Optional Tk desktop intake, episode status, PAD cut review, EFM provenance/selection, process monitoring, and guided workbenches |
 | `scripts/pad_classification_review.py` / `record_pad_classifications.py` | P95 motion-baseline PAD defaults, human cut/outlier review, and immutable manifest recording before RIFE |
 | `scripts/verify_efm_capture.py` / `record_efm_capture_selection.py` | Bind each EFMSink decode to its manifest TBC/log/WAV/report, then record an explicit human capture choice |
@@ -706,8 +706,10 @@ measurements or grants approval.
 | `FROMSTUNTOKILL-V16-APP.md` | V16 app-branch integration scope, validation, and publication boundary |
 | `V17-RELEASE.md` | P95 motion-baseline automatic PAD classification and human review of cut-like candidates |
 | `FROMSTUNTOKILL-V17-APP.md` | Historical V17 desktop integration and validation boundary |
-| `V18-RELEASE.md` | Episode status, guided workbenches, process monitoring, and delivery-plan changes |
-| `FROMSTUNTOKILL-V18-APP.md` | Current V18 desktop integration, boundaries, and validation |
+| `V18-RELEASE.md` | Historical V18 dashboard, guided workbenches, monitoring, and delivery-plan changes |
+| `FROMSTUNTOKILL-V18-APP.md` | Historical V18 desktop integration and validation boundary |
+| `V19-RELEASE.md` | CLI workflow progress display and validation |
+| `FROMSTUNTOKILL-V19-APP.md` | Current V19 app-branch integration and validation boundary |
 | `V9-QUEUE.md` | Historical V9 device-log review and inherited carry-overs; planning only |
 | `V10-QUEUE.md` | Historical V10 scope and implementation record; planning only |
 | `V11-QUEUE.md` | Historical V11 record and dependency-policy proposal; planning only |
@@ -793,6 +795,13 @@ python scripts/run_workflow.py --plan "CONFIGURE HERE FIRST.json"               
 python scripts/run_workflow.py --plan "<completed plan.json>" --execute
 python scripts/run_workflow.py --plan "<same plan.json>" --execute --resume
 ```
+
+Execution prints an ASCII progress bar to stderr for every stage and review step. It updates
+when steps start/finish and periodically during long or quiet stages, showing completed plan
+steps, the current stage, elapsed time, and time since child output. In terminals updates are
+frequent; redirected output receives less-frequent heartbeat lines. The bar is advisory: it
+tracks plan-step completion, not percent-complete inside an encoder or renderer, and never
+changes cancellation/retry behavior.
 
 Job state and the combined stage log are written under the selected episode workspace's
 `logs/` or the profile's local `roots.logs`. A per-job OS lock, exact plan/profile/workflow

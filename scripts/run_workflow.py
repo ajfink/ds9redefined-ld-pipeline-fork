@@ -65,16 +65,18 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def sha256_file(path: Path) -> str:
+def sha256_file(path: Path, heartbeat=None) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for block in iter(lambda: stream.read(CHUNK_BYTES), b""):
             digest.update(block)
+            if heartbeat:
+                heartbeat()
     return digest.hexdigest()
 
 
 def file_fingerprints(values: list[str], *, must_exist: bool = True,
-                      policy: str = "balanced") -> list[dict[str, Any]]:
+                      policy: str = "balanced", heartbeat=None) -> list[dict[str, Any]]:
     """Fingerprint paths; large media use stat + edge samples unless full mode is requested."""
     if policy not in ("balanced", "full"):
         raise WorkflowError(f"unsupported fingerprint policy: {policy!r}")
@@ -85,7 +87,7 @@ def file_fingerprints(values: list[str], *, must_exist: bool = True,
                                "mtime_ns": stat.st_mtime_ns}
         if policy == "full" or stat.st_size <= FULL_HASH_LIMIT:
             row["method"] = "sha256"
-            row["sha256"] = sha256_file(path)
+            row["sha256"] = sha256_file(path, heartbeat)
         else:
             digest = hashlib.sha256()
             with path.open("rb") as stream:
@@ -541,10 +543,11 @@ def _fingerprint_payload(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "path_id": _path_id(row["path"])} for row in rows]
 
 
-def _verify_passed_step(saved: dict, step: dict, fingerprint_policy: str) -> None:
+def _verify_passed_step(saved: dict, step: dict, fingerprint_policy: str,
+                        heartbeat=None) -> None:
     inputs, outputs = _step_file_lists(step)
-    current_inputs = file_fingerprints(inputs, policy=fingerprint_policy)
-    current_outputs = file_fingerprints(outputs, policy=fingerprint_policy)
+    current_inputs = file_fingerprints(inputs, policy=fingerprint_policy, heartbeat=heartbeat)
+    current_outputs = file_fingerprints(outputs, policy=fingerprint_policy, heartbeat=heartbeat)
     expected_inputs = saved.get("input_fingerprints") or []
     if _fingerprint_payload(current_inputs) != expected_inputs:
         raise WorkflowError(f"completed step {step['id']} input changed; refusing to skip or rerun it")
@@ -597,6 +600,94 @@ def configure_console() -> None:
                 pass
 
 
+class WorkflowProgress:
+    """Portable overall-step bar with periodic elapsed/idle updates during child stages."""
+
+    def __init__(self, total: int, stream=None, *, clock=time.monotonic,
+                 interval: float | None = None, width: int = 24):
+        self.total = max(1, int(total))
+        self.stream = stream or sys.stderr
+        self.clock = clock
+        self.interval = interval if interval is not None else (
+            3.0 if getattr(self.stream, "isatty", lambda: False)() else 15.0)
+        self.width = max(8, min(18, int(width)))
+        self.started = self.clock()
+        self.completed = 0
+        self.current_index: int | None = None
+        self.current_label = "starting"
+        self.current_started = self.started
+        self.last_output = self.started
+        self.last_emitted = float("-inf")
+        self.finished = False
+
+    @staticmethod
+    def _duration(seconds: float) -> str:
+        whole = max(0, int(seconds))
+        hours, remainder = divmod(whole, 3600)
+        minutes, secs = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
+
+    def _line(self, status: str | None = None) -> str:
+        now = self.clock()
+        fraction = min(1.0, self.completed / self.total)
+        filled = min(self.width, int(fraction * self.width))
+        bar = "#" * filled + "-" * (self.width - filled)
+        percent = int(fraction * 100)
+        if self.current_index is None:
+            if status in ("PASS", "FAILED", "BLOCKED", "INTERRUPTED", "REJECTED", "WAITING FOR HUMAN REVIEW"):
+                label = f"workflow - {status}"
+            elif status:
+                label = f"{self.current_label} - {status}"
+            else:
+                label = "complete" if self.completed >= self.total else "between stages"
+            stage_elapsed = 0.0
+            idle = 0.0
+        else:
+            label = self.current_label
+            if status:
+                label = f"{label} - {status}"
+            stage_elapsed = max(0.0, now - self.current_started)
+            idle = max(0.0, now - self.last_output)
+        return (f"PROGRESS [{bar}] {self.completed}/{self.total} {percent}% | {label} | "
+                f"stage {self._duration(stage_elapsed)} | idle {self._duration(idle)} | "
+                f"total {self._duration(max(0.0, now - self.started))}")
+
+    def emit(self, *, force: bool = False, status: str | None = None) -> None:
+        if self.finished:
+            return
+        now = self.clock()
+        if not force and now - self.last_emitted < self.interval:
+            return
+        print(self._line(status), file=self.stream, flush=True)
+        self.last_emitted = now
+
+    def start_step(self, index: int, label: str) -> None:
+        self.current_index = index
+        self.current_label = f"{index}/{self.total} {label}"
+        self.current_started = self.clock()
+        self.last_output = self.current_started
+        self.emit(force=True, status="running")
+
+    def note_output(self) -> None:
+        self.last_output = self.clock()
+        self.emit()
+
+    def heartbeat(self) -> None:
+        self.emit()
+
+    def complete_step(self, index: int, label: str, *, status: str = "complete") -> None:
+        self.completed = max(self.completed, min(self.total, index))
+        self.current_index = None
+        self.current_label = label
+        self.emit(force=True, status=status)
+
+    def finish(self, status: str) -> None:
+        if self.finished:
+            return
+        self.emit(force=True, status=status)
+        self.finished = True
+
+
 def _stop_child_tree(proc: subprocess.Popen) -> None:
     """Stop the launched stage process tree, not only its Python wrapper."""
     if os.name == "nt":
@@ -634,7 +725,8 @@ def _stop_child_tree(proc: subprocess.Popen) -> None:
 
 def _run_child(command: list[str], env: dict[str, str], log,
                redactions: list[tuple[str, str]], state: dict,
-               state_path: Path, *, verbose: bool = True) -> int:
+               state_path: Path, *, verbose: bool = True,
+               progress: WorkflowProgress | None = None) -> int:
     safe_command = redact_shared_text(_display(command), redactions)
     log.write(f"\n[{utc_now()}] COMMAND: {safe_command}\n")
     log.flush()
@@ -675,6 +767,8 @@ def _run_child(command: list[str], env: dict[str, str], log,
                 if last_line:
                     state["steps"][state["active_index"]]["last_output"] = redact_shared_text(last_line[-500:], redactions)
                 save_state(state_path, state, redactions)
+                if progress:
+                    progress.heartbeat()
                 continue
             if line is None:
                 eof = True
@@ -688,6 +782,8 @@ def _run_child(command: list[str], env: dict[str, str], log,
             if verbose or standard_output_line(safe_line):
                 sys.stdout.write(safe_line)
                 sys.stdout.flush()
+            if progress:
+                progress.note_output()
             last_line = line.rstrip("\r\n")
             line_count += 1
             if line_count % 25 == 0:
@@ -795,6 +891,7 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool,
     if not resume and (state_path.exists() or log_path.exists()):
         raise WorkflowError(f"workflow job already exists; choose a fresh generated ID or use --resume: {state_path}")
 
+    progress = WorkflowProgress(len(plan["steps"]))
     with workflow_lock(lock_path):
         fingerprint_policy = plan.get("fingerprint_policy", "balanced")
         if resume:
@@ -846,7 +943,9 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool,
                     outputs = step.get("outputs", [])
                     if step.get("kind") == "review":
                         if saved["status"] == "PASS":
-                            _verify_passed_step(saved, step, fingerprint_policy)
+                            _verify_passed_step(saved, step, fingerprint_policy,
+                                                heartbeat=progress.heartbeat)
+                            progress.complete_step(index + 1, f"review {step['id']}", status="verified")
                             print(f"SKIP verified approved review: {step['id']}")
                             continue
                         if saved["status"] == "REJECTED":
@@ -855,12 +954,14 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool,
                                 "Correct/reconcile the evidence and create a new plan.")
                         if saved["status"] not in ("PENDING", "WAITING_APPROVAL"):
                             raise WorkflowError(f"review step {step['id']} has unexpected state {saved['status']}")
+                        progress.start_step(index + 1, f"review {step['id']}")
                         was_waiting = saved["status"] == "WAITING_APPROVAL"
                         if step["id"] in approve_steps and not was_waiting:
                             raise WorkflowError(f"review step {step['id']} is not currently waiting for approval")
                         if step["id"] in deny_steps and not was_waiting:
                             raise WorkflowError(f"review step {step['id']} is not currently waiting for approval")
-                        current_inputs = file_fingerprints(inputs, policy=fingerprint_policy)
+                        current_inputs = file_fingerprints(
+                            inputs, policy=fingerprint_policy, heartbeat=progress.heartbeat)
                         if saved["status"] == "PENDING":
                             saved["input_fingerprints"] = current_inputs
                             saved["prompt"] = step["prompt"]
@@ -881,6 +982,7 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool,
                             with log_path.open("a", encoding="utf-8", newline="\n") as denial_log:
                                 denial_log.write("\nREVIEW DENIED " + json.dumps({
                                     "step": step["id"], **saved["denial"]}, ensure_ascii=False) + "\n")
+                            progress.finish("REJECTED")
                             print(f"REVIEW DENIED [{step['id']}] by {saved['denial']['denied_by']}")
                             return 4
                         if step["id"] not in approve_steps:
@@ -888,6 +990,7 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool,
                             state["active_step"] = step["id"]
                             state["active_index"] = index
                             save_state(state_path, state, redactions)
+                            progress.finish("WAITING FOR HUMAN REVIEW")
                             prompt = redact_shared_text(step["prompt"], redactions)
                             print(f"REVIEW REQUIRED [{step['id']}]: {prompt}")
                             command = [sys.executable, str(Path(__file__).resolve()),
@@ -908,23 +1011,29 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool,
                         with log_path.open("a", encoding="utf-8", newline="\n") as approval_log:
                             approval_log.write("\nREVIEW APPROVED " + json.dumps({
                                 "step": step["id"], **saved["approval"]}, ensure_ascii=False) + "\n")
+                        progress.complete_step(index + 1, f"review {step['id']}", status="approved")
                         print(f"REVIEW APPROVED [{step['id']}] by {saved['approval']['approved_by']}")
                         continue
                     if saved["status"] == "PASS":
-                        _verify_passed_step(saved, step, fingerprint_policy)
+                        _verify_passed_step(saved, step, fingerprint_policy,
+                                            heartbeat=progress.heartbeat)
+                        progress.complete_step(index + 1, step["stage"], status="verified")
                         print(f"SKIP verified completed step: {step['id']}")
                         continue
+                    progress.start_step(index + 1, step["stage"])
                     if saved["status"] in ("RUNNING", "INTERRUPTED", "FAILED"):
                         if step.get("resume_policy") != "download":
                             raise WorkflowError(
                                 f"step {step['id']} ended as {saved['status']}; inspect its outputs/logs, "
                                 "then create a new job plan after reconciliation")
-                        current_inputs = file_fingerprints(inputs, policy=fingerprint_policy)
+                        current_inputs = file_fingerprints(
+                            inputs, policy=fingerprint_policy, heartbeat=progress.heartbeat)
                         if _fingerprint_payload(current_inputs) != (saved.get("input_fingerprints") or []):
                             raise WorkflowError(f"resumable download step {step['id']} inputs changed; refusing retry")
                         print(f"RESUME downloader step: {step['id']}")
                     else:
-                        saved["input_fingerprints"] = file_fingerprints(inputs, policy=fingerprint_policy)
+                        saved["input_fingerprints"] = file_fingerprints(
+                            inputs, policy=fingerprint_policy, heartbeat=progress.heartbeat)
 
                     state["active_step"] = step["id"]
                     state["active_index"] = index
@@ -932,13 +1041,13 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool,
                     saved["started_utc"] = saved.get("started_utc") or utc_now()
                     saved["attempts"] = int(saved.get("attempts", 0)) + 1
                     saved["input_fingerprints"] = saved.get("input_fingerprints") or file_fingerprints(
-                        inputs, policy=fingerprint_policy)
+                        inputs, policy=fingerprint_policy, heartbeat=progress.heartbeat)
                     save_state(state_path, state, redactions)
                     started = time.monotonic()
                     command = _command(plan, step, profile_path, instance_root)
                     try:
                         rc = _run_child(command, env, log, redactions, state, state_path,
-                                        verbose=verbose)
+                                        verbose=verbose, progress=progress)
                     except KeyboardInterrupt:
                         saved["status"] = "INTERRUPTED"
                         saved["finished_utc"] = utc_now()
@@ -946,6 +1055,7 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool,
                         state["status"] = "INTERRUPTED"
                         state["active_step"] = step["id"]
                         save_state(state_path, state, redactions)
+                        progress.finish("INTERRUPTED")
                         raise
                     except WorkflowError as exc:
                         rc = 2
@@ -958,9 +1068,11 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool,
                         state["status"] = "FAILED"
                         state["active_step"] = None
                         save_state(state_path, state, redactions)
+                        progress.finish("FAILED")
                         print(f"WORKFLOW STOP: step {step['id']} failed (exit {rc}); later steps were not run", file=sys.stderr)
                         return rc or 1
-                    saved["output_fingerprints"] = file_fingerprints(outputs, policy=fingerprint_policy)
+                    saved["output_fingerprints"] = file_fingerprints(
+                        outputs, policy=fingerprint_policy, heartbeat=progress.heartbeat)
                     if not inputs and not outputs:
                         raise WorkflowError(f"step {step['id']} has no file evidence to checkpoint")
                     saved["status"] = "PASS"
@@ -968,17 +1080,21 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool,
                     saved.pop("error", None)
                     state["active_step"] = None
                     save_state(state_path, state, redactions)
+                    progress.complete_step(index + 1, step["stage"])
 
                 state["status"] = "PASS"
                 state["finished_utc"] = utc_now()
                 state["active_step"] = None
                 save_state(state_path, state, redactions)
+                progress.finish("PASS")
                 print(f"WORKFLOW PASS: {plan['job_id']} state={redact_shared_text(str(state_path), redactions)}")
                 return 0
         except KeyboardInterrupt:
+            progress.finish("INTERRUPTED")
             print("WORKFLOW INTERRUPTED; durable state was saved. Use --resume only for a plan with safe retry policy.", file=sys.stderr)
             return 130
         except WorkflowError:
+            progress.finish("BLOCKED")
             if state.get("status") == "RUNNING":
                 state["status"] = "BLOCKED"
                 state["active_step"] = state.get("active_step")

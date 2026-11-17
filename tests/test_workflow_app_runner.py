@@ -7,7 +7,7 @@ import os
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -19,7 +19,7 @@ import run_workflow  # noqa: E402
 import run_stage  # noqa: E402
 from run_workflow import (PLAN_SCHEMA, WorkflowError, file_fingerprints,
                           generate_job_id, load_plan, run_plan, standard_output_line,
-                          _run_child, _state_for_disk)
+                          _run_child, _state_for_disk, WorkflowProgress)
 
 
 FAKE_RUN_STAGE = r'''from __future__ import annotations
@@ -132,6 +132,60 @@ class WorkflowPlanTests(unittest.TestCase):
         self.assertTrue(standard_output_line("WARN: optional report was not found"))
         self.assertTrue(standard_output_line("REVIEW REQUIRED [stack]: inspect metrics"))
         self.assertTrue(standard_output_line("stage report: report.json"))
+
+    def test_workflow_progress_bar_reports_fraction_elapsed_and_idle_time(self):
+        now = [10.0]
+        output = io.StringIO()
+        progress = WorkflowProgress(2, output, clock=lambda: now[0], interval=2.0)
+        progress.start_step(1, "encode-final")
+        now[0] = 14.0
+        progress.heartbeat()
+        progress.note_output()
+        now[0] = 17.0
+        progress.heartbeat()
+        progress.complete_step(1, "encode-final")
+        progress.complete_step(2, "qc")
+        progress.finish("PASS")
+        text = output.getvalue()
+        self.assertIn("[#########---------] 1/2 50%", text)
+        self.assertIn("1/2 encode-final - running", text)
+        self.assertIn("stage 00:04 | idle 00:04", text)
+        self.assertIn("100%", text)
+        self.assertIn("PASS", text)
+
+    def test_full_input_fingerprint_emits_progress_heartbeats(self):
+        calls = []
+        result = file_fingerprints([str(self.input)], policy="full",
+                                   heartbeat=lambda: calls.append("tick"))
+        self.assertEqual(result[0]["kind"], "file")
+        self.assertTrue(calls)
+
+    def test_execution_emits_progress_for_each_running_stage(self):
+        path = self.write_plan(job_id="progress-plan")
+        progress_output = io.StringIO()
+        with patch.object(run_workflow, "RUN_STAGE", self.fake), redirect_stderr(progress_output):
+            self.assertEqual(run_plan(path, execute=True, resume=False), 0)
+        text = progress_output.getvalue()
+        self.assertIn("PROGRESS [", text)
+        self.assertIn("1/1 validate-inputs - running", text)
+        self.assertIn("100%", text)
+        self.assertIn("PASS", text)
+
+    def test_progress_includes_review_steps_and_marks_approval_wait(self):
+        path = self.write_plan(job_id="review-progress")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["steps"][0]["stage"] = "render-stack"
+        data["steps"].append({
+            "id": "review-stack", "kind": "review", "for_stage": "render-stack",
+            "prompt": "Review the rendered stack.", "inputs": [str(self.output)], "outputs": [],
+        })
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        progress_output = io.StringIO()
+        with patch.object(run_workflow, "RUN_STAGE", self.fake), redirect_stderr(progress_output):
+            self.assertEqual(run_plan(path, execute=True, resume=False), 3)
+        text = progress_output.getvalue()
+        self.assertIn("1/2 50%", text)
+        self.assertIn("2/2 review review-stack - WAITING FOR HUMAN REVIEW", text)
 
     def test_standard_mode_hides_routine_output_but_saves_full_log(self):
         script = self.root / "routine_stage.py"

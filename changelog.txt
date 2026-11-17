@@ -301,3 +301,12 @@ FROM Version 17 -> Version 18 (app branch only; production `main` and W remain V
 - Validation: **389 passed, 7 skipped** (396 tests); compileall, warnings-as-errors imports,
   generated-runbook check, all 7 PowerShell parsers, and diff check passed. No real media, final
   encode/remux, fresh-Mac GUI test, or workspace restore; see `V18-RELEASE.md`.
+
+FromStunToKill app branch V19 (2026-11-17)
+FROM Version 18 -> Version 19 (app branch only; production `main` and W remain V15)
+- Added a portable ASCII progress bar to workflow CLI execution for every stage and review step.
+- The bar reports completed plan steps, the active stage, elapsed time, and seconds since child
+  output. It keeps updating during quiet/long stages without changing subprocess or retry policy.
+- Validation: **393 passed, 7 skipped** (400 tests); compile/import, generated-runbook, all 7
+  PowerShell AST parses, and diff checks passed. No media processing or GUI smoke test; see
+  `V19-RELEASE.md`.
