@@ -268,18 +268,26 @@ def main() -> int:
     if profile_path is None or not profile_path.is_file():
         print(f"FAIL profile: not found: {profile_path}")
         return 2
-    if devices_root.is_dir():
-        try:
-            profile_path.resolve().relative_to(bundle.resolve())
-            print("FAIL profile: shared release requires machine.json outside the bundle root")
-            return 2
-        except ValueError:
-            pass
     try:
         profile = json.loads(profile_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         print(f"FAIL profile: {exc}")
         return 2
+    if devices_root.is_dir():
+        try:
+            profile_path.resolve().relative_to(bundle.resolve())
+        except ValueError:
+            pass
+        else:
+            scripts_dir = str(bundle / "scripts")
+            if scripts_dir not in sys.path:
+                sys.path.insert(0, scripts_dir)
+            try:
+                from shared_workspace import validate_device_config_profile
+                validate_device_config_profile(profile_path, profile, bundle)
+            except Exception as exc:
+                print(f"FAIL profile: invalid device-scoped profile: {exc}")
+                return 2
 
     results = Results(quiet=args.json)
     results.add("platform", "PASS" if profile.get("os") == "darwin" else "FAIL",
@@ -447,6 +455,9 @@ def main() -> int:
     required_scripts = (
         "build_map_vpy.py", "build_map.ps1", "build_stack_project.py",
         "select_stack_reference.py", "extract_video_descriptors.py",
+        "workflow_app.py", "workflow_app_model.py", "local_source.py", "init_local_episode.py",
+        "review_popup.py", "opencode_help.py", "pad_review.py", "render_stack.py",
+        "retime_break_review.py",
         "measure_dvd_alignment.py", "prepare_retime_breaks.py", "record_retime_breaks.py",
         "retime_break_candidates.py", "measure_break_edges.py",
         "measure_audio_rate.py", "audio_timing_diagnostic.py", "build_ld_synced.py",

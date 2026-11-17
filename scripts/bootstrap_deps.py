@@ -18,17 +18,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dependency_lock import (LockError, compare_lock, profile_platform,
                              resolve_interpreter, target_for)
+from shared_workspace import validate_device_config_profile
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def load_profile(path: str | None) -> tuple[Path | None, dict]:
     chosen = path or os.environ.get("LDP_PROFILE")
-    devices = Path(__file__).resolve().parent.parent / "devices"
+    devices = ROOT / "devices"
     if not chosen and devices.is_dir():
-        raise LockError("shared release detected; pass --profile pointing to a local machine.json outside the release tree")
+        raise LockError("shared release detected; use this device's profile under devices/<device>-<id>/local device config")
     if chosen:
         p = Path(os.path.expandvars(os.path.expanduser(chosen))).resolve()
     else:
-        p = Path(__file__).resolve().parent.parent / "machine.json"
+        p = ROOT / "machine.json"
         if not p.is_file():
             return None, {}
     if not p.is_file():
@@ -40,9 +43,10 @@ def load_profile(path: str | None) -> tuple[Path | None, dict]:
     if devices.is_dir():
         try:
             p.relative_to(devices.parent.resolve())
-            raise LockError("machine profile must be outside the shared release tree")
         except ValueError:
             pass
+        else:
+            validate_device_config_profile(p, profile, devices.parent)
         if (profile.get("shared") or {}).get("enabled") is not True:
             raise LockError("shared release profile must set shared.enabled=true")
     return p, profile

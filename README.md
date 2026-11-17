@@ -215,8 +215,13 @@ fallback route is unavailable, ask the user rather than silently changing models
 
 ## One-time setup on each machine
 
-1. Keep a device profile outside the folder containing this README. For Windows, copy
-   `machine.example.json` to a device-local temporary profile (or use the existing local
+1. **Desktop app:** `python scripts/workflow_app.py` bootstraps a unique
+   `devices/<DEVICE>-<ID>/` folder first, then creates that device's Git-ignored
+   `local device config/machine.json` inside it. The app validates this exception against
+   a machine-local identity marker; do not copy that profile to another device.
+
+   **CLI workflow:** keep profiles outside the folder containing this README. For Windows,
+   copy `machine.example.json` to a device-local temporary profile (or use the existing local
    profile), create a new workspace profile with `shared_workspace.py configure-profile`,
    then run discovery against that external output profile:
 
@@ -241,10 +246,10 @@ fallback route is unavailable, ask the user rather than silently changing models
    On Linux x86_64, a local copy may start from `machine-linux-x86_64.example.json` for
    dependency/capability checks only; the Linux production workflow is not validated and
    `doctor.py` will not mark it episode-ready.
-   On Mac/Linux, seed a profile from the matching example outside the README folder, set
+   For manual Mac/Linux CLI setup, seed a profile from the matching example outside the README folder, set
    machine-local paths, then use `configure-profile` to create a separate profile pointing
    at this README folder. Always pass that external profile to `doctor.py` and
-   `run_stage.py`; never use the authoring bundle's `machine.json` as a device profile.
+   `run_stage.py`; never use the authoring bundle's root-level `machine.json` as a device profile.
 2. With the local profile paths known, the download may start after its own profile/curl,
    Archive metadata, file-integrity metadata, and destination-space checks; do not wait
    for full tool inventory. Run the Tool-update gate below during the transfer. If components are
@@ -594,6 +599,55 @@ to the machine's `roots.probe`/`roots.logs`. If a command fails, inspect its art
 and logs before retrying. Do not overwrite or clean user files without explicit
 permission.
 
+## Optional FromStunToKill desktop app
+
+Launch the local GUI with `python scripts/workflow_app.py`. It uses the V15 allowlisted
+runner and automatically saves concrete, immutable workflow plans under the device's
+`devices/<DEVICE>-<ID>/plans/` folder when **Preview** is clicked; no separate save step is
+needed. Intake fields remain editable after preview and until **Run** is confirmed; edits
+cause the next Preview/Run to create another plan rather than changing a saved plan. A direct
+**Run** click on a new or edited intake saves and previews first, then requires a second click
+to execute. It does not require an AI service to select an episode, build a plan, or run the
+workflow. In **Archive URL** mode, the
+Series control is hidden and the picker/Archive metadata resolves the series automatically.
+In **Open local** mode, the Series selector is shown when filenames do not identify DS9 or
+VOY. The canonical identity is displayed as `SERIES:SxxExx`, and existing bare DS9 plans
+remain supported.
+
+On first launch, the app reserves a stable device identity, creates
+`devices/<DEVICE>-<ID>/` first, then creates that device's machine profile at
+`devices/<DEVICE>-<ID>/local device config/machine.json`. The `devices/` tree is
+Git-ignored. Device manifests/logs and configured work folders stay in that unique subtree;
+a small identity marker remains in the user's local config folder so this device can verify
+its shared profile on the next launch. Profiles from the general per-user profile folder are
+left untouched and do not block startup. **Open machine profile…** is only needed to inspect
+or edit the automatically selected device profile.
+
+The Archive picker is metadata-only. Selecting an item fills its item URL and resolves its
+live title/workspace; it does not download media or bypass `-ListOnly`, integrity, sidecar,
+or free-space checks. TNG combined-item entries and Emissary remain blocked from generic
+single-episode intake. Local intake inventories decoded captures and records fingerprints
+without asserting Archive origin. A selected local capture folder or exact DVD may be outside
+the profile's default download/DVD roots; its path is retained in that device's episode
+manifest so local validation can reopen it. Archive download destinations remain constrained
+by the machine profile's download template.
+
+The episode title is optional in local intake; if omitted, the plan records `Title not
+supplied (SERIES:SxxExx)` and instructs the operator to replace it with an evidence-confirmed
+title before downstream processing. The no-DVD cut-PAD choice is required only for no-DVD
+intake; it is not required in DVD-backed mode.
+
+The GUI can prepare V15 retime-break candidate reports, then show every pairing/status in
+a review table. It never chooses thresholds or pairings for the operator. Recording is a
+separate plan requiring explicit unique-pair/merged-through selections, a rationale, a
+human review gate, report/input hash checks, a backup, and the V15 atomic manifest writer;
+offsets and steps remain unmeasured. Final encode/remux is not started by candidate tools.
+
+**Get OpenCode help** is optional, audit-logged, and disabled by default; the operator can
+explicitly enable it in the app. The V15 core workflow, local-source intake, Archive picker,
+candidate analysis, and human approval gates work without it. AI output never selects
+measurements or grants approval.
+
 ---
 
 ## Bundled tools
@@ -606,6 +660,8 @@ permission.
 | `scripts/bootstrap_deps.py` / `dependencies/` | Direct Python version locks for Windows x64, Mac arm64, and candidate Linux x86_64; check-only by default, `--install` is explicit |
 | `scripts/run_stage.py` | Allowlisted stage dispatcher; dry-run plan by default, explicit `--execute`, series-aware stage identity, downloader-specific checks for early download, and full gates before other writes |
 | `scripts/run_workflow.py` | Ordered JSON-plan orchestration; series-scoped status/log/locks/resume, input/output fingerprints, and conservative resume |
+| `scripts/workflow_app.py` | Optional Tk desktop intake and review UI; saves plans for the same allowlisted V15 runner |
+| `scripts/retime_break_review.py` | GUI table for explicit V15 candidate classification; creates a separately reviewed record plan |
 | `scripts/measure_ld_black.py`, `scripts/prepare_retime_breaks.py`, `scripts/record_retime_breaks.py` | Threshold-sensitivity report, ambiguous-safe DVD/LD pairing report, and explicit backed-up recording of reviewed intervals; offsets remain unmeasured until edge adjudication |
 | `scripts/retime_break_candidates.py` | Pure pairing/record-validation helpers used by the report and recorder; no manifest write on report path |
 | `CONFIGURE HERE FIRST.json` | Sanitized no-DVD intake-plan template; choose DS9 or VOY in the editable `series` value |
@@ -622,6 +678,7 @@ permission.
 | `V13-RELEASE.md` | Fail-closed break edges, cut-PAD policy/provenance, stable workspaces, Orc resume, and bounded extraction |
 | `V14-RELEASE.md` | Section 31 Archive tree, natural resolver, and series-aware VOY workflow release record |
 | `V15-RELEASE.md` | Changelog source boundary, fail-closed break candidate intake, and retime output verification improvements |
+| `FROMSTUNTOKILL-V15-APP.md` | Optional desktop app integration, review boundaries, validation, and platform limits |
 | `V9-QUEUE.md` | Historical V9 device-log review and inherited carry-overs; planning only |
 | `V10-QUEUE.md` | Historical V10 scope and implementation record; planning only |
 | `V11-QUEUE.md` | Historical V11 record and dependency-policy proposal; planning only |
@@ -905,8 +962,10 @@ measurements:
   409,910,282,896 bytes = 409.91 GB decimal / 381.76 GiB. Five captures is inside
   the 2-6 weighted-stack range.
 - **Destination:** resolve from the requested path or that machine's profile
-  (`roots.downloads_root` + `roots.downloads_template`). `limits.heavy_jobs` controls
-  whether another heavy job may start while the transfer runs.
+  (`roots.downloads_root` + `roots.downloads_template`). `limits.heavy_jobs` is an
+  operator policy hint only; the current runner does not enforce a global heavy-job
+  scheduler, so do not start another heavy job concurrently unless you have verified
+  available resources.
 The Orc graph builder produced a new E05 graph skeleton (Orc refresh/render not run),
 the cadence builder generated a measured E05 AVS that passed an FFmpeg five-frame
 AviSynth probe, and initial encoding produced a dry-run command. The generic retime

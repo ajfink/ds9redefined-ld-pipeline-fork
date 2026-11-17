@@ -102,15 +102,6 @@ class Ld:
                 f"{BUNDLE} is configured as a shared release tree; do not use a bundle-local profile. "
                 "Set LDP_PROFILE to a local machine.json and create/reuse the episode workspace with "
                 "scripts/shared_workspace.py ensure.")
-        if p and shared_devices.is_dir():
-            candidate = Path(os.path.expandvars(os.path.expanduser(str(p)))).resolve()
-            try:
-                candidate.relative_to(BUNDLE.resolve())
-                inside_release = True
-            except ValueError:
-                inside_release = False
-            if inside_release:
-                raise PipelineError(f"machine profile must be outside the shared release tree: {candidate}")
         self.profile_path = Path(p) if p else BUNDLE / "machine.json"
         if not self.profile_path.exists():
             alt = BUNDLE / "machine.example.json"
@@ -123,6 +114,26 @@ class Ld:
                                     f"run preflight.ps1 -Write")
         self.profile = _load_json(self.profile_path)
         shared = self.profile.get("shared") or {}
+        candidate = self.profile_path.expanduser().resolve(strict=False)
+        try:
+            candidate.relative_to(BUNDLE.resolve())
+            inside_release = True
+        except ValueError:
+            inside_release = False
+        if inside_release:
+            legacy_bundle_profile = (candidate == (BUNDLE / "machine.json").resolve(strict=False) and
+                                     not shared_devices.exists() and shared.get("enabled") is not True)
+            if not legacy_bundle_profile:
+                if shared.get("enabled") is not True:
+                    raise PipelineError("a profile inside the app release must be in this device's ignored devices config folder")
+                try:
+                    scripts_dir = BUNDLE / "scripts"
+                    if str(scripts_dir) not in sys.path:
+                        sys.path.insert(0, str(scripts_dir))
+                    from shared_workspace import validate_device_config_profile
+                    validate_device_config_profile(candidate, self.profile, BUNDLE)
+                except Exception as exc:
+                    raise PipelineError(f"invalid device-scoped machine profile: {exc}") from exc
         if shared.get("enabled") is True:
             release_value = shared.get("release_root")
             release = Path(os.path.expandvars(os.path.expanduser(str(release_value)))) if release_value else None
@@ -498,7 +509,7 @@ def episode_manifest_path(code: str, ld: Ld | None = None,
 
 
 def assert_writable_path(path: str | os.PathLike, ld: Ld | None = None) -> Path:
-    """In shared mode, allow writes under the active instance only, never the release tree."""
+    """In shared mode, allow writes only to this device's configured roots/workspace."""
     ld = ld or Ld()
     target = Path(path).expanduser().resolve()
     if not device_workspace_enabled(ld.profile):
@@ -515,9 +526,33 @@ def assert_writable_path(path: str | os.PathLike, ld: Ld | None = None) -> Path:
     if target == instance / "workspace.json" or any(
             target == allowed or target.is_relative_to(allowed) for allowed in allowed_roots):
         return target
-    raise PipelineError(f"shared mode forbids writing to the release tree: {target}; "
-                        f"use only this instance's manifest/logs/references/cut-pad-images folders "
-                        f"under {instance}")
+    devices = workspace_release_root(ld.profile) / "devices"
+    try:
+        relative_instance = instance.relative_to(devices.resolve())
+    except ValueError as exc:
+        raise PipelineError(f"active instance is outside the device workspace tree: {instance}") from exc
+    if len(relative_instance.parts) != 3 or relative_instance.parts[1] != "episodes":
+        raise PipelineError(f"active instance has an invalid device workspace path: {instance}")
+    device_root = devices / relative_instance.parts[0]
+    protected_device_dirs = tuple(device_root / name for name in
+                                  ("episodes", "local device config", "plans"))
+    for name in ("downloads_root", "dvd_root", "work", "probe", "avs", "audio",
+                 "subs", "out", "prores", "stack", "logs", "upscale_root"):
+        raw = (ld.profile.get("roots") or {}).get(name)
+        if not raw:
+            continue
+        configured = Path(os.path.expandvars(os.path.expanduser(str(raw)))).resolve()
+        try:
+            configured.relative_to(device_root.resolve())
+        except ValueError:
+            continue
+        if any(configured == protected or configured.is_relative_to(protected)
+               for protected in protected_device_dirs):
+            continue
+        if target == configured or target.is_relative_to(configured):
+            return target
+    raise PipelineError(f"shared device output path is outside its configured roots: {target}; "
+                        f"device root={device_root}; episode workspace={instance}")
 
 
 def redact_shared_text(text: str, ld: Ld) -> str:

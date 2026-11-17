@@ -1,5 +1,7 @@
 # Machine-local profiles; keep only the portable generic profile template.
 /machine*.json
+/machine*.json.backup-*
+/*-intake-plan*.json
 !/machine.example.json
 !/machine-macos.example.json
 !/machine-linux-x86_64.example.json
@@ -9,6 +11,7 @@
 # the public source-only export. Keep the generic schema/template.
 /episodes/*.json
 !/episodes/_template.json
+/episodes/*/
 /reference-pool/
 /reference-runs/
 /devices/

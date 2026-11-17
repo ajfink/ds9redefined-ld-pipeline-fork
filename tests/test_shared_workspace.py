@@ -16,10 +16,12 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ROOT))
 
 import shared_workspace  # noqa: E402
-from ldcommon import (PipelineError, assert_writable_path, episode_manifest_path,
+from ldcommon import (Ld, PipelineError, assert_writable_path, episode_manifest_path,
                       shared_instance_root)  # noqa: E402
 from shared_workspace import (LockError, configure_shared_profile,
-                              initialize_workspace, resolve_instance_workspace)  # noqa: E402
+                              bootstrap_device_profile, initialize_workspace,
+                              resolve_instance_workspace)  # noqa: E402
+from run_stage import load_profile as load_stage_profile  # noqa: E402
 
 
 class SharedWorkspaceTests(unittest.TestCase):
@@ -33,6 +35,53 @@ class SharedWorkspaceTests(unittest.TestCase):
     def tearDown(self):
         self.identity_env.stop()
         self.device_identity_root.cleanup()
+
+    def test_bootstrap_creates_device_folder_then_bound_profile_and_reuses_identity(self):
+        with tempfile.TemporaryDirectory() as temp:
+            bundle = Path(temp) / "fromstuntokill-v15-app"
+            bundle.mkdir()
+            (bundle / "machine.example.json").write_bytes(
+                (ROOT / "machine.example.json").read_bytes())
+
+            profile_path, created = bootstrap_device_profile(
+                bundle, system="Windows", machine="DEVICE-BOOTSTRAP")
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            # Derive the folder from the profile location to avoid duplicating ID logic.
+            device_root = profile_path.parents[1]
+            self.assertTrue(created)
+            self.assertEqual(profile_path, device_root / "local device config" / "machine.json")
+            self.assertTrue(profile["shared"]["enabled"])
+            self.assertEqual(Path(profile["shared"]["release_root"]).resolve(), bundle.resolve())
+            self.assertEqual(profile["shared"]["device_name"], "DEVICE-BOOTSTRAP")
+            self.assertRegex(profile["shared"]["device_instance_id"], r"^[0-9A-F]{8}$")
+            for name in ("work", "probe", "avs", "audio", "subs", "out", "prores",
+                         "stack", "logs", "downloads_root", "dvd_root"):
+                self.assertEqual(Path(profile["roots"][name]).parent, device_root)
+                self.assertTrue(Path(profile["roots"][name]).is_dir())
+            second_path, second_created = bootstrap_device_profile(
+                bundle, system="Windows", machine="device-bootstrap")
+            self.assertEqual(second_path, profile_path)
+            self.assertFalse(second_created)
+
+            with patch.object(shared_workspace, "ROOT", bundle), \
+                    patch("run_stage.ROOT", bundle), patch("ldcommon.BUNDLE", bundle):
+                loaded_path, loaded = shared_workspace.load_profile(str(profile_path))
+                loaded_ld = Ld(profile_path)
+                stage_path, stage_profile = load_stage_profile(str(profile_path))
+            self.assertEqual(loaded_path, profile_path.resolve())
+            self.assertEqual(loaded["machine"], "DEVICE-BOOTSTRAP")
+            self.assertEqual(loaded_ld.profile_path, profile_path)
+            self.assertEqual(stage_path, profile_path.resolve())
+            self.assertEqual(stage_profile["machine"], "DEVICE-BOOTSTRAP")
+
+            profile["shared"]["device_instance_id"] = "FFFFFFFF"
+            profile_path.write_text(json.dumps(profile), encoding="utf-8")
+            with patch.object(shared_workspace, "ROOT", bundle), \
+                    patch("ldcommon.BUNDLE", bundle):
+                with self.assertRaisesRegex(LockError, "device-local|device instance|profile inside"):
+                    shared_workspace.load_profile(str(profile_path))
+                with self.assertRaisesRegex(PipelineError, "invalid device-scoped machine profile"):
+                    Ld(profile_path)
 
     def test_ensure_creates_readme_relative_workspace_and_reuses_it(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -343,11 +392,14 @@ class SharedWorkspaceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             bundle = Path(temp) / "ld-pipeline"
             devices = bundle / "devices"
-            instance = devices / "DEVICE-A1B2C3D4" / "episodes" / "S01E07"
+            device_root = devices / "DEVICE-A1B2C3D4"
+            instance = device_root / "episodes" / "S01E07"
             (instance / "manifest").mkdir(parents=True)
             (instance / "logs").mkdir()
             (instance / "references").mkdir()
             (instance / "cut-pad-images").mkdir()
+            work_root = device_root / "work"
+            work_root.mkdir()
             devices.mkdir(exist_ok=True, parents=True)
             (instance / "workspace.json").write_text(json.dumps({
                 "release_root": ".",
@@ -355,8 +407,10 @@ class SharedWorkspaceTests(unittest.TestCase):
                 "machine": "DEVICE", "episode": "S01E07", "instance_id": "A1B2C3D4"}),
                 encoding="utf-8")
             profile = {"machine": "DEVICE", "shared": {"enabled": True,
-                                                           "release_root": str(bundle),
-                                                           "device_name": "DEVICE"}}
+                                                            "release_root": str(bundle),
+                                                            "device_name": "DEVICE",
+                                                            "device_instance_id": "A1B2C3D4"},
+                       "roots": {"work": str(work_root)}}
             fake_ld = SimpleNamespace(profile=profile, profile_path=Path(temp) / "local-profile.json")
             env = {"LDP_INSTANCE_ROOT": str(instance)}
             with patch.object(__import__("ldcommon"), "BUNDLE", bundle), \
@@ -365,10 +419,19 @@ class SharedWorkspaceTests(unittest.TestCase):
                                  instance / "manifest" / "S01E07.json")
                 self.assertEqual(assert_writable_path(instance / "logs" / "stage.log", fake_ld),
                                  instance / "logs" / "stage.log")
+                self.assertEqual(assert_writable_path(work_root / "DS9" / "probe.npy", fake_ld),
+                                 work_root / "DS9" / "probe.npy")
                 with self.assertRaises(PipelineError):
                     assert_writable_path(bundle / "README.md", fake_ld)
                 with self.assertRaises(PipelineError):
+                    assert_writable_path(device_root / "local device config" / "machine.json", fake_ld)
+                with self.assertRaises(PipelineError):
                     assert_writable_path(devices / "OTHER" / "episodes" / "S01E07" / "manifest" / "x.json", fake_ld)
+                bad_profile = {**profile, "roots": {
+                    "work": str(device_root / "local device config")}}
+                bad_ld = SimpleNamespace(profile=bad_profile, profile_path=fake_ld.profile_path)
+                with self.assertRaises(PipelineError):
+                    assert_writable_path(device_root / "local device config" / "oops.json", bad_ld)
 
     def test_reference_and_cut_pad_publication_refuse_overwrites_and_preserve_provenance(self):
         with tempfile.TemporaryDirectory() as temp:

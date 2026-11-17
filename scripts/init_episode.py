@@ -290,10 +290,6 @@ def main() -> int:
                 dvd_spec = {"root": "dvd_root", "name": rel.as_posix()}
             except ValueError:
                 pass
-        if shared_mode and "path" in dvd_spec:
-            raise PipelineError(
-                "shared mode keeps machine-local absolute paths out of the shared manifest; "
-                "add this DVD library to the local profile roots.dvd_root and retry")
         dvd_info = subprocess.run([ld.ffprobe(), "-v", "error", "-show_entries",
             "stream=codec_type,codec_name,channels:format=duration:format_tags=title", "-of", "json", str(dvd)],
             capture_output=True, text=True, encoding="utf-8", errors="replace")
@@ -357,7 +353,7 @@ def main() -> int:
             code, title, ".vpy" if (ld.profile.get("os") or "windows").casefold() == "darwin" else ".avs"),
         "deliverable": "pre_upscale", "deliverable_tracks": ["ld"],
         "mux_tracks": ["ld"], "ld_audio_source": "ld_synced",
-        "_init_note": ("DVD/download locations use machine profile roots when possible and explicit paths only for outside roots. "
+        "_init_note": ("DVD/download locations use machine profile roots when possible; an explicitly selected outside DVD path is recorded in this device-scoped manifest. "
                         "Episode measurements are intentionally null; measure them before running stage scripts. "
                         "No-DVD mode is permitted only after the user explicitly chose --no-dvd; DVD-derived tracks are unavailable."),
     })

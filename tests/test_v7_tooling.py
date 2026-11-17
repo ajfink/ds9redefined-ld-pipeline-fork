@@ -15,7 +15,7 @@ import dependency_lock  # noqa: E402
 from dependency_lock import LockError, read_lock, target_for, version_relation  # noqa: E402
 from doctor import parse_windows_preflight  # noqa: E402
 from generate_runbooks import OUTPUTS, generated_text  # noqa: E402
-from run_stage import (STAGES, make_action, requires_doctor, validate_command,
+from run_stage import (STAGES, doctor_command, make_action, requires_doctor, validate_command,
                        write_stage_report)  # noqa: E402
 
 
@@ -96,6 +96,17 @@ class StageRunnerTests(unittest.TestCase):
         self.assertTrue(requires_doctor("init-episode"))
         self.assertTrue(requires_doctor("stack-reference"))
         self.assertTrue(requires_doctor("encode-final"))
+
+    def test_doctor_does_not_require_existing_manifest_for_either_initializer(self):
+        profile = {"os": "windows", "python": {"interpreter": sys.executable}}
+        profile_path = Path("C:/machine.json")
+        instance = Path("C:/app/devices/device-id/episodes/S01E12")
+        for stage in ("init-episode", "init-local-episode"):
+            command = doctor_command(profile, profile_path, stage, "S01E12", instance)
+            self.assertNotIn("--episode", command)
+            self.assertEqual(command[command.index("--instance-root") + 1], str(instance))
+        later = doctor_command(profile, profile_path, "validate-inputs", "S01E12", instance)
+        self.assertEqual(later[later.index("--episode") + 1], "S01E12")
 
     def test_default_stage_plan_is_allowlisted_and_argument_vector_based(self):
         with tempfile.TemporaryDirectory(prefix="Power Shell ") as tmp:

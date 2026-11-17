@@ -13,9 +13,11 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import re
 import secrets
 import shutil
+import socket
 import struct
 import sys
 from datetime import datetime, timezone
@@ -65,8 +67,6 @@ def load_profile(path: str | None) -> tuple[Path, dict]:
     profile_path = Path(os.path.expandvars(os.path.expanduser(path))).resolve()
     if not profile_path.is_file():
         raise LockError(f"local profile not found: {profile_path}")
-    if profile_path.is_relative_to(ROOT.resolve()):
-        raise LockError("machine.json must be outside the shared release folder; profiles are device-local")
     try:
         profile = json.loads(profile_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -80,6 +80,7 @@ def load_profile(path: str | None) -> tuple[Path, dict]:
     release = Path(os.path.expandvars(os.path.expanduser(str(release_value)))).resolve()
     if release != ROOT.resolve():
         raise LockError(f"shared.release_root ({release}) must match this code bundle ({ROOT})")
+    validate_device_config_profile(profile_path, profile, release)
     return profile_path, profile
 
 
@@ -236,6 +237,197 @@ def _write_device_identity(path: Path, device: str, machine: str | None,
             return _load_device_identity(path, device, machine)
     finally:
         temp.unlink(missing_ok=True)
+
+
+def validate_device_config_profile(profile_path: Path, profile: dict,
+                                   release_root: Path | None = None) -> bool:
+    """Allow an in-release profile only inside its own verified device config folder.
+
+    Ordinary shared-release paths remain invalid for machine profiles. This narrow
+    exception is for ``devices/<device>-<id>/local device config/machine.json`` and
+    requires the matching machine-local identity marker, so another device cannot
+    accidentally use this profile merely because it can see the shared folder.
+    """
+    release = (release_root or workspace_release_root(profile)).resolve()
+    candidate = Path(profile_path).expanduser().resolve(strict=False)
+    try:
+        candidate.relative_to(release)
+    except ValueError:
+        return False
+
+    shared = profile.get("shared") or {}
+    if shared.get("enabled") is not True or workspace_release_root(profile) != release:
+        raise LockError("a profile inside the release must enable this exact shared release")
+    machine = str(profile.get("machine") or "").strip()
+    device_label = safe_component(str(shared.get("device_name") or machine or "device"))
+    instance_id = str(shared.get("device_instance_id") or "").upper()
+    if not machine or not DEVICE_ID_RE.fullmatch(instance_id):
+        raise LockError("device-local shared profile needs machine and an 8-character device_instance_id")
+    expected = (release / "devices" / f"{device_label}-{instance_id}" /
+                "local device config" / "machine.json").resolve(strict=False)
+    if candidate != expected:
+        raise LockError(
+            "machine profile inside the shared release must be this device's "
+            "devices/<device>-<id>/local device config/machine.json")
+    for path in (release / "devices", expected.parent.parent, expected.parent, expected):
+        if path.is_symlink():
+            raise LockError(f"device-local configuration path may not contain symlinks: {path}")
+    identity_path = device_identity_path(device_label)
+    if identity_path.is_symlink() or not identity_path.is_file():
+        raise LockError("this device's local identity marker is missing or unsafe")
+    stored_id = _load_device_identity(identity_path, device_label, machine)
+    if stored_id != instance_id:
+        raise LockError("device profile instance id does not match this machine's local identity")
+    return True
+
+
+def _template_for_platform(bundle_root: Path, system: str | None = None) -> tuple[dict, str]:
+    system = (system or platform.system()).casefold()
+    target_os = "windows" if system in ("windows", "win32") else "darwin" if system in ("darwin", "macos") else "linux"
+    template_name = {
+        "windows": "machine.example.json",
+        "darwin": "machine-macos.example.json",
+        "linux": "machine-linux-x86_64.example.json",
+    }[target_os]
+    template_path = bundle_root / template_name
+    try:
+        value = json.loads(template_path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LockError(f"cannot read device profile template {template_path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise LockError(f"device profile template must be an object: {template_path}")
+    return value, target_os
+
+
+def _existing_avisynth_plugin_dir(machine: str) -> str | None:
+    """Reuse one unambiguous, verified plugin path from this machine's prior profiles."""
+    local = Path(os.environ.get("LOCALAPPDATA") or
+                 (Path.home() / "AppData" / "Local"))
+    directory = local / "ld-pipeline" / "profiles"
+    found: set[str] = set()
+    if not directory.is_dir():
+        return None
+    for path in directory.glob("machine*.json"):
+        try:
+            profile = json.loads(path.read_text(encoding="utf-8-sig"))
+            if str(profile.get("machine", "")).casefold() != machine.casefold():
+                continue
+            value = str((profile.get("tools") or {}).get("avisynth_plugin_dir") or "").strip()
+            plugins = Path(os.path.expandvars(os.path.expanduser(value))) if value else None
+            if (plugins and plugins.is_dir() and
+                    all((plugins / name).is_file()
+                        for name in ("ffms2.dll", "RemapFrames_x64.dll"))):
+                found.add(str(plugins.resolve()))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+    return next(iter(found)) if len(found) == 1 else None
+
+
+def bootstrap_device_profile(bundle_root: Path, *, system: str | None = None,
+                             machine: str | None = None) -> tuple[Path, bool]:
+    """Create the device directory first, then its ignored, device-bound profile.
+
+    The stable id lives in the user's local config directory as a small identity
+    pointer; the full machine settings live under the device's ignored release
+    subtree. No existing profile or device workspace is overwritten.
+    """
+    release = Path(bundle_root).expanduser().resolve(strict=True)
+    # Canonicalize host casing so the bootstrap finds identities previously
+    # created from Windows COMPUTERNAME (usually uppercase) as well as socket hostname.
+    machine_name = str(machine or socket.gethostname()).strip().upper()
+    if not machine_name:
+        raise LockError("machine/device name is empty")
+    device = safe_component(machine_name)
+    identity_path = device_identity_path(device)
+    if identity_path.is_symlink():
+        raise LockError(f"refusing device-identity symlink: {identity_path}")
+    try:
+        identity_path.resolve(strict=False).relative_to(release)
+    except ValueError:
+        pass
+    else:
+        raise LockError("machine-local device identity marker must stay outside the app release")
+    if identity_path.is_file():
+        instance_id = _load_device_identity(identity_path, device, machine_name)
+    else:
+        instance_id = _write_device_identity(
+            identity_path, device, machine_name, secrets.token_hex(4).upper())
+
+    device_root = release / "devices" / f"{device}-{instance_id}"
+    for path in (release / "devices", device_root):
+        if path.is_symlink():
+            raise LockError(f"device workspace path may not be a symlink: {path}")
+    device_root.mkdir(parents=True, exist_ok=True)
+    config_dir = device_root / "local device config"
+    if config_dir.is_symlink():
+        raise LockError(f"device configuration directory may not be a symlink: {config_dir}")
+    config_dir.mkdir(exist_ok=True)
+    profile_path = config_dir / "machine.json"
+
+    if profile_path.is_file():
+        try:
+            existing = json.loads(profile_path.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise LockError(f"existing device profile is invalid and was not changed: {profile_path}: {exc}") from exc
+        validate_device_config_profile(profile_path, existing, release)
+        return profile_path, False
+    if profile_path.exists() or profile_path.is_symlink():
+        raise LockError(f"refusing non-regular device profile path: {profile_path}")
+
+    profile, target_os = _template_for_platform(release, system)
+    profile["machine"] = machine_name
+    profile["os"] = target_os
+    profile["shared"] = {
+        "enabled": True,
+        "release_root": str(release),
+        "device_name": machine_name,
+        "device_instance_id": instance_id,
+    }
+    profile["_readme"] = (
+        "Device-scoped, Git-ignored machine configuration at "
+        "devices/<device>-<id>/local device config/machine.json. It is validated against "
+        "this machine's local identity marker and must not be copied to another device.")
+    roots = profile.setdefault("roots", {})
+    folder_names = {
+        "downloads_root": "downloads", "dvd_root": "dvd", "work": "work",
+        "probe": "probe", "avs": "avs", "audio": "audio", "subs": "subs",
+        "out": "out", "prores": "prores", "stack": "stack", "logs": "logs",
+        "upscale_root": "upscale",
+    }
+    for key, folder in folder_names.items():
+        roots[key] = str(device_root / folder)
+        (device_root / folder).mkdir(parents=True, exist_ok=True)
+    roots["downloads_template"] = "{series} {episode} LaserDisc"
+    roots["runbook_dir"] = str(release)
+    profile.setdefault("notes", []).append(
+        "This ignored profile belongs only to the verified device folder above. "
+        "Episode manifests and durable workflow logs are stored below its per-episode devices workspace.")
+    plugin_dir = _existing_avisynth_plugin_dir(machine_name)
+    if plugin_dir:
+        profile.setdefault("tools", {})["avisynth_plugin_dir"] = plugin_dir
+
+    temp = profile_path.with_name(f".machine.{os.getpid()}.{secrets.token_hex(6)}.tmp")
+    try:
+        with temp.open("x", encoding="utf-8", newline="\n") as stream:
+            json.dump(profile, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(temp, profile_path)
+            created = True
+        except FileExistsError:
+            created = False
+    except OSError as exc:
+        raise LockError(f"could not create device-local profile {profile_path}: {exc}") from exc
+    finally:
+        temp.unlink(missing_ok=True)
+    try:
+        saved = json.loads(profile_path.read_text(encoding="utf-8-sig"))
+        validate_device_config_profile(profile_path, saved, release)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LockError(f"cannot verify created device profile {profile_path}: {exc}") from exc
+    return profile_path, created
 
 
 def record_device_identity(profile: dict, device: str, instance_id: str) -> str:

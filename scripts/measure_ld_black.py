@@ -78,6 +78,21 @@ def best_overlap(run_rows: list[dict], start_s: float, end_s: float) -> dict | N
     return {**best, "overlap_seconds": best_seconds}
 
 
+def descriptor_luma_means(descriptors) -> Any:
+    """Compute float64 row means without making a full float64 descriptor copy.
+
+    Descriptor arrays are memory-mapped by ``load_desc`` and can be large. NumPy's
+    float64 accumulator preserves the existing mean precision while limiting the
+    additional allocation to the one-dimensional means vector.
+    """
+    import numpy as np
+
+    values = np.asanyarray(descriptors)
+    if values.ndim != 2 or not values.shape[1]:
+        raise PipelineError(f"descriptor array must be a non-empty 2D matrix; got {values.shape}")
+    return np.mean(values, axis=1, dtype=np.float64)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--episode", required=True)
@@ -94,7 +109,7 @@ def main() -> int:
         master_path = ep.path("master_descriptors")
         master = load_desc(master_path, "master", ep.code, ep.path("stack_master"))
         import numpy as np
-        means = np.asarray(master, dtype=np.float64).mean(axis=1)
+        means = descriptor_luma_means(master)
         thresholds = {}
         for threshold in args.thresholds:
             thresholds[str(threshold)] = luma_runs(means, threshold, FPS, args.min_duration)

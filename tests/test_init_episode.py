@@ -113,6 +113,69 @@ class InitEpisodeFileKeyTests(unittest.TestCase):
             self.assertEqual(manifest["archive_item"], "VOY-S01E01-LaserDisc-Copies")
             self.assertTrue((root / "probe" / "VOY").is_dir())
 
+    def test_shared_initializer_records_explicit_dvd_outside_device_profile_root(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bundle = root / "bundle"
+            (bundle / "episodes").mkdir(parents=True)
+            (bundle / "episodes" / "_template.json").write_bytes(
+                (ROOT / "episodes" / "_template.json").read_bytes())
+            downloads_root = root / "downloads"
+            downloads = downloads_root / "DS9 S01E07 LaserDisc"
+            downloads.mkdir(parents=True)
+            files = {
+                "DS9-S01E07-Q-Less-L1.tbc": b"synthetic tbc",
+                "DS9-S01E07-Q-Less-L1.tbc.json": b"{}",
+            }
+            rows, remote_files = [], []
+            for name, payload in files.items():
+                (downloads / name).write_bytes(payload)
+                digest = hashlib.md5(payload).hexdigest()
+                rows.append({"Name": name, "Bytes": str(len(payload)), "MD5": digest,
+                             "Status": "verified", "ArchiveId": "DS9-S01E07-LaserDisc-Copies"})
+                remote_files.append({"name": name, "size": str(len(payload)), "md5": digest})
+            with (downloads / "download-manifest.csv").open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.DictWriter(stream, fieldnames=rows[0].keys())
+                writer.writeheader()
+                writer.writerows(rows)
+            configured_dvd_root = root / "configured-dvd"
+            configured_dvd_root.mkdir()
+            dvd = root / "Video" / "Vortex.mkv"
+            dvd.parent.mkdir()
+            dvd.write_bytes(b"DVD fixture")
+            profile = {"os": "windows", "machine": "TEST", "shared": {
+                "enabled": True, "release_root": str(bundle), "device_name": "TEST",
+                "device_instance_id": "1234ABCD"},
+                "roots": {"downloads_root": str(downloads_root),
+                          "downloads_template": "DS9 {episode} LaserDisc",
+                          "dvd_root": str(configured_dvd_root)}}
+            fake_ld = SimpleNamespace(profile=profile, profile_path=root / "machine.json",
+                                      ffprobe=lambda: sys.executable)
+            instance = bundle / "devices" / "TEST-1234ABCD" / "episodes" / "S01E07"
+            target = instance / "manifest" / "S01E07.json"
+            remote = {"files": remote_files,
+                      "metadata": {"title": "DS9-S01E07-LaserDisc-Copies"}}
+            args = ["init_episode.py", "--url",
+                    "https://archive.org/details/DS9-S01E07-LaserDisc-Copies",
+                    "--downloads", str(downloads), "--series", "DS9", "--dvd", str(dvd)]
+            with patch.object(init_module, "BUNDLE", bundle), \
+                    patch.object(init_module, "Ld", return_value=fake_ld), \
+                    patch.object(init_module, "shared_instance_root", return_value=instance), \
+                    patch.object(init_module, "episode_manifest_path",
+                                 side_effect=lambda code, ld, series=None: target), \
+                    patch.object(init_module, "assert_writable_path", side_effect=lambda path, ld: Path(path)), \
+                    patch.object(init_module, "urlopen") as urlopen, \
+                    patch.object(init_module.subprocess, "run", return_value=SimpleNamespace(
+                        returncode=0, stdout=json.dumps({"streams": [{"codec_type": "video"}]}), stderr="")), \
+                    patch.object(init_module, "title_from_dvd", return_value="Q-Less"), \
+                    patch.object(sys, "argv", args):
+                urlopen.return_value.__enter__.return_value.read.return_value = json.dumps(remote).encode()
+                self.assertEqual(init_module.main(), 0)
+
+            manifest = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["files"]["dvd"]["path"], str(dvd.resolve()))
+            self.assertNotIn("roots", manifest)
+
 
 if __name__ == "__main__":
     unittest.main()

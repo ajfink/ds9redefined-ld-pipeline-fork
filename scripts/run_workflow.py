@@ -23,6 +23,7 @@ import json
 import os
 import queue
 import re
+import re
 import shlex
 import signal
 import subprocess
@@ -48,7 +49,7 @@ from run_stage import STAGES, load_profile  # noqa: E402
 from shared_workspace import resolve_instance_workspace  # noqa: E402
 
 PLAN_SCHEMA = "ld-pipeline-workflow-plan-v1"
-STATE_SCHEMA = "ld-pipeline-workflow-state-v1"
+STATE_SCHEMA = "ld-pipeline-workflow-state-v2"
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 STEP_ID_RE = JOB_ID_RE
 CHUNK_BYTES = 4 * 1024 * 1024
@@ -185,9 +186,11 @@ def expand_operator_inputs(plan: dict) -> dict:
         if not isinstance(key, str) or not isinstance(value, str) or not value.strip():
             raise WorkflowError(f"_operator_inputs_EDIT.{key} must be a non-empty string")
         if key == "dvd_mode" and value != "no-dvd":
-            raise WorkflowError(
-                "_operator_inputs_EDIT.dvd_mode: this intake template supports only 'no-dvd'; "
-                "DVD-backed intake requires a separate plan with the exact --dvd path")
+            instructions = " ".join(str(item) for item in plan.get("_instructions_DO_NOT_EDIT", [])).casefold()
+            if "supports only explicit no-dvd intake" in instructions:
+                raise WorkflowError(
+                    "_operator_inputs_EDIT.dvd_mode: this intake template supports only 'no-dvd'; "
+                    "DVD-backed intake requires a separate plan with the exact --dvd path")
         if key == "cut_pad_images" and value not in ("use", "skip"):
             raise WorkflowError("_operator_inputs_EDIT.cut_pad_images must be 'use' or 'skip'")
         if "REPLACE_" in value or "YOUR_ACCOUNT" in value:
@@ -220,7 +223,9 @@ def expand_operator_inputs(plan: dict) -> dict:
 def load_plan(path: Path) -> tuple[dict, bytes]:
     try:
         raw = path.read_bytes()
-        plan = json.loads(raw.decode("utf-8"))
+        # PowerShell's UTF-8 Set-Content commonly writes a BOM; accept both that
+        # form and plain UTF-8 JSON plans.
+        plan = json.loads(raw.decode("utf-8-sig"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise WorkflowError(f"cannot read workflow plan {path}: {exc}") from exc
     if not isinstance(plan, dict) or plan.get("schema") != PLAN_SCHEMA:
@@ -243,9 +248,12 @@ def load_plan(path: Path) -> tuple[dict, bytes]:
     series = str(requested_series or embedded_series or "DS9").upper()
     if series not in ("DS9", "VOY"):
         raise WorkflowError("series, when supplied, must be 'DS9' or 'VOY'")
+    recorded_identity = plan.get("identity")
     plan["series"] = series
     plan["episode"] = episode.upper()
     plan["identity"] = f"{series}:{episode.upper()}"
+    if recorded_identity not in (None, plan["identity"]):
+        raise WorkflowError("plan.identity conflicts with plan.series/episode")
     if job_id is None and (not isinstance(plan.get("episode_title"), str) or not plan["episode_title"].strip()):
         raise WorkflowError("episode_title is required when job_id is omitted; the runner generates an ID from it")
     profile = plan.get("profile")
@@ -272,14 +280,23 @@ def load_plan(path: Path) -> tuple[dict, bytes]:
         if not isinstance(step_id, str) or not STEP_ID_RE.fullmatch(step_id) or step_id in seen_ids:
             raise WorkflowError(f"{where}.id must be unique and use 1-64 letters, digits, dots, underscores, or hyphens")
         seen_ids.add(step_id)
+        kind = step.get("kind", "stage")
+        if kind not in ("stage", "review"):
+            raise WorkflowError(f"{where}.kind must be 'stage' or 'review'")
         stage = step.get("stage")
-        if stage not in STAGES:
+        if kind == "stage" and stage not in STAGES:
             raise WorkflowError(f"{where}.stage is not an allowlisted run_stage name: {stage!r}")
+        if kind == "review":
+            prompt = step.get("prompt")
+            if not isinstance(prompt, str) or not prompt.strip():
+                raise WorkflowError(f"{where}.prompt is required for a review step")
         args = step.get("args", [])
         if not isinstance(args, list) or any(not isinstance(arg, str) or "\x00" in arg for arg in args):
             raise WorkflowError(f"{where}.args must be an array of strings (one argument per entry)")
         inputs = _absolute_path_list(step.get("inputs", []), f"{where}.inputs")
         outputs = _absolute_path_list(step.get("outputs", []), f"{where}.outputs")
+        if kind == "review" and (not inputs or outputs):
+            raise WorkflowError(f"{where} review steps need evidence inputs and must not declare outputs")
         if any(_paths_overlap(source, target) for source in inputs for target in outputs):
             raise WorkflowError(f"{where} input/output paths must not overlap; list an in-place-mutated artifact as an output only")
         if not inputs and not outputs:
@@ -287,7 +304,7 @@ def load_plan(path: Path) -> tuple[dict, bytes]:
         retry = step.get("resume_policy", "inspect")
         if retry not in ("inspect", "download"):
             raise WorkflowError(f"{where}.resume_policy must be 'inspect' or 'download'")
-        if retry == "download" and stage != "download":
+        if retry == "download" and (kind != "stage" or stage != "download"):
             raise WorkflowError(f"{where}: only the allowlisted download stage may use resume_policy='download'")
         if stage == "download" and retry == "inspect":
             # Conservative default. The author must opt into the downloader's
@@ -299,6 +316,26 @@ def load_plan(path: Path) -> tuple[dict, bytes]:
         publish = step.get("publish_references", [])
         if not isinstance(publish, list) or any(not isinstance(item, str) or not item for item in publish):
             raise WorkflowError(f"{where}.publish_references must be an array of non-empty paths")
+        if kind == "review":
+            if not isinstance(step.get("for_stage"), str):
+                raise WorkflowError(f"{where}.for_stage must name the stage whose evidence is reviewed")
+            if step.get("args") or step.get("report_out") or publish:
+                raise WorkflowError(f"{where} is a review gate, not an executable stage")
+    for index, step in enumerate(steps):
+        if step.get("kind", "stage") == "stage" and STAGES[step["stage"]].get("review_gate"):
+            if index + 1 >= len(steps):
+                raise WorkflowError(f"{step['stage']} must be followed by an explicit human review step")
+            following = steps[index + 1]
+            if (following.get("kind") != "review" or
+                    following.get("for_stage") != step["stage"]):
+                raise WorkflowError(f"{step['stage']} must be followed immediately by a review step with for_stage={step['stage']!r}")
+        if step.get("kind") == "review":
+            if index == 0:
+                raise WorkflowError("review step must follow the stage that produced its evidence")
+            previous = steps[index - 1]
+            if (previous.get("kind", "stage") != "stage" or
+                    previous.get("stage") != step.get("for_stage")):
+                raise WorkflowError(f"review step {step['id']} must immediately follow its declared stage")
     return plan, raw
 
 
@@ -329,6 +366,8 @@ def workflow_logs(profile_path: Path, profile: dict, plan: dict,
         logs.mkdir(exist_ok=True)
     elif not logs.parent.is_dir():
         raise WorkflowError(f"profile roots.logs must already exist for workflow state: {logs.parent}")
+    elif plan.get("series", "DS9") == "DS9" and not logs.is_dir():
+        raise WorkflowError(f"profile roots.logs must already exist for workflow state: {logs}")
     return logs, None, env_exports, warning
 
 
@@ -460,7 +499,8 @@ def _fresh_state(plan: dict, plan_digest: str, profile_digest: str) -> dict:
         "decisions": decisions,
         "status": "PENDING",
         "active_step": None,
-        "steps": [{"id": step["id"], "stage": step["stage"], "status": "PENDING"}
+        "steps": [{"id": step["id"], "kind": step.get("kind", "stage"),
+                   "stage": step.get("stage"), "status": "PENDING"}
                   for step in plan["steps"]],
     }
 
@@ -479,19 +519,15 @@ def validate_resume_state(state: dict, plan: dict, plan_digest: str,
         "profile_sha256": profile_digest,
         "fingerprint_policy": plan.get("fingerprint_policy", "balanced"),
     }
-    changed = []
-    for key, value in expected.items():
-        actual = state.get(key)
-        if key == "series" and actual is None:
-            actual = "DS9"
-        elif key == "identity" and actual is None:
-            actual = f"DS9:{state.get('episode', '')}"
-        if actual != value:
-            changed.append(key)
+    changed = [key for key, value in expected.items()
+               if (state.get(key, "DS9" if key == "series" else
+                             f"DS9:{state.get('episode', '')}" if key == "identity" else None) != value)]
     if changed:
         raise WorkflowError("cannot resume: plan/profile/workflow identity changed: " + ", ".join(changed))
-    recorded = [(row.get("id"), row.get("stage")) for row in state.get("steps", [])]
-    current = [(row["id"], row["stage"]) for row in plan["steps"]]
+    recorded = [(row.get("id"), row.get("kind", "stage"), row.get("stage"))
+                for row in state.get("steps", [])]
+    current = [(row["id"], row.get("kind", "stage"), row.get("stage"))
+               for row in plan["steps"]]
     if recorded != current:
         raise WorkflowError("cannot resume: ordered workflow steps differ from the saved state")
 
@@ -538,6 +574,29 @@ def _display(command: list[str]) -> str:
     return subprocess.list2cmdline(command) if os.name == "nt" else shlex.join(command)
 
 
+STANDARD_OUTPUT_RE = re.compile(
+    r"(?:\b(?:warn(?:ing)?|error|failed|failure|fail|limit|blocked|critical|fatal|exception|traceback)\b"
+    r"|\bworkflow\b|\breview(?: required| approved)?\b|\bstage runner error\b"
+    r"|\bstage report:|\bprogress\b|\b\d+\s*/\s*\d+\b|(?<!\w)\d{1,3}%(?!\w))",
+    re.IGNORECASE)
+
+
+def standard_output_line(line: str) -> bool:
+    """Keep notable diagnostics and gate/status lines in the concise console view."""
+    return bool(STANDARD_OUTPUT_RE.search(line))
+
+
+def configure_console() -> None:
+    """Keep diagnostic streaming safe on Windows code pages without Unicode glyphs."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
 def _stop_child_tree(proc: subprocess.Popen) -> None:
     """Stop the launched stage process tree, not only its Python wrapper."""
     if os.name == "nt":
@@ -575,7 +634,7 @@ def _stop_child_tree(proc: subprocess.Popen) -> None:
 
 def _run_child(command: list[str], env: dict[str, str], log,
                redactions: list[tuple[str, str]], state: dict,
-               state_path: Path) -> int:
+               state_path: Path, *, verbose: bool = True) -> int:
     safe_command = redact_shared_text(_display(command), redactions)
     log.write(f"\n[{utc_now()}] COMMAND: {safe_command}\n")
     log.flush()
@@ -605,6 +664,7 @@ def _run_child(command: list[str], env: dict[str, str], log,
     thread.start()
     line_count = 0
     last_line: str | None = None
+    recent_lines: list[str] = []
     eof = False
     try:
         while not eof:
@@ -622,15 +682,24 @@ def _run_child(command: list[str], env: dict[str, str], log,
             safe_line = redact_shared_text(line, redactions)
             log.write(safe_line)
             log.flush()
-            sys.stdout.write(safe_line)
-            sys.stdout.flush()
+            recent_lines.append(safe_line.rstrip("\r\n"))
+            if len(recent_lines) > 40:
+                del recent_lines[0]
+            if verbose or standard_output_line(safe_line):
+                sys.stdout.write(safe_line)
+                sys.stdout.flush()
             last_line = line.rstrip("\r\n")
             line_count += 1
             if line_count % 25 == 0:
                 state["heartbeat_utc"] = utc_now()
                 state["steps"][state["active_index"]]["last_output"] = redact_shared_text(last_line[-500:], redactions)
                 save_state(state_path, state, redactions)
-        return proc.wait()
+        rc = proc.wait()
+        if rc and not verbose:
+            print("Recent stage output (full details are retained in the workflow log):", flush=True)
+            for detail in recent_lines:
+                print(detail, flush=True)
+        return rc
     except KeyboardInterrupt:
         _stop_child_tree(proc)
         raise
@@ -646,8 +715,23 @@ def _load_state(path: Path) -> dict:
         raise WorkflowError(f"cannot read saved workflow state {path}: {exc}") from exc
 
 
-def run_plan(plan_path: Path, *, execute: bool, resume: bool) -> int:
+def run_plan(plan_path: Path, *, execute: bool, resume: bool,
+             approve_steps: set[str] | None = None,
+             deny_steps: set[str] | None = None, verbose: bool = True) -> int:
     plan, raw = load_plan(plan_path)
+    approve_steps = approve_steps or set()
+    deny_steps = deny_steps or set()
+    review_ids = {step["id"] for step in plan["steps"] if step.get("kind") == "review"}
+    unknown_approvals = approve_steps - review_ids
+    if unknown_approvals:
+        raise WorkflowError("--approve names an unknown review step: " + ", ".join(sorted(unknown_approvals)))
+    unknown_denials = deny_steps - review_ids
+    if unknown_denials:
+        raise WorkflowError("--deny names an unknown review step: " + ", ".join(sorted(unknown_denials)))
+    if approve_steps & deny_steps:
+        raise WorkflowError("a review step cannot be approved and denied in the same invocation")
+    if (approve_steps or deny_steps) and not resume:
+        raise WorkflowError("review steps can only be approved or denied while resuming a waiting workflow")
     plan_path = plan_path.resolve()
     profile_path, profile = load_profile(plan["profile"])
     profile_digest = _profile_digest(profile_path)
@@ -660,7 +744,7 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool) -> int:
 
     if not execute:
         job_label = plan.get("job_id") or f"auto-generated from {plan['episode_title']!r} at execution time"
-        print(f"PLAN {job_label} V{(ROOT / 'WORKFLOW_VERSION').read_text(encoding='ascii').strip()} episode={plan['identity']}")
+        print(f"PLAN {job_label} V{(ROOT / 'WORKFLOW_VERSION').read_text(encoding='ascii').strip()} episode={plan['episode']}")
         print(f"profile: {redact_shared_text(str(profile_path), redactions)}")
         if shared and not instance_root:
             print("status/log destination: resolved device workspace on execution (or profile roots.logs fallback); dry-run creates neither")
@@ -668,6 +752,10 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool) -> int:
             print(f"status/log destination: {redact_shared_text(str(logs), redactions)}")
         print(f"fingerprint policy: {plan.get('fingerprint_policy', 'balanced')}")
         for index, step in enumerate(plan["steps"], 1):
+            if step.get("kind") == "review":
+                print(f"{index}. {step['id']} [REVIEW GATE] {step['prompt']}")
+                print(f"   evidence inputs={len(step.get('inputs', []))}")
+                continue
             command = _command(plan, step, profile_path, instance_root)
             print(f"{index}. {step['id']} [{step['stage']}] -> {_display(command)}")
             print(f"   verify inputs={len(step.get('inputs', []))} outputs={len(step.get('outputs', []))} resume={step.get('resume_policy', 'inspect')}")
@@ -685,7 +773,8 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool) -> int:
             if not state_path.is_file():
                 raise WorkflowError(f"--resume requested but state does not exist: {state_path}")
         else:
-            state_path = find_resume_state(logs, digest, profile_digest, plan["episode"], plan["series"])
+            state_path = find_resume_state(logs, digest, profile_digest, plan["episode"],
+                                          plan.get("series", "DS9"))
             job_id = _load_state(state_path).get("job_id")
             if not isinstance(job_id, str) or not JOB_ID_RE.fullmatch(job_id):
                 raise WorkflowError(f"saved workflow state has an invalid generated job ID: {state_path}")
@@ -693,10 +782,12 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool) -> int:
     else:
         job_id = plan.get("job_id")
         if job_id is None:
-            job_id = generate_job_id(plan["episode"], plan["episode_title"], series=plan["series"])
+            job_id = generate_job_id(plan["episode"], plan["episode_title"],
+                                     series=plan.get("series", "DS9"))
             while ((logs / f"workflow-{job_id}.json").exists() or
-                 (logs / f"workflow-{job_id}.log").exists()):
-                job_id = generate_job_id(plan["episode"], plan["episode_title"], series=plan["series"])
+                   (logs / f"workflow-{job_id}.log").exists()):
+                job_id = generate_job_id(plan["episode"], plan["episode_title"],
+                                         series=plan.get("series", "DS9"))
             plan["job_id"] = job_id
     state_path = logs / f"workflow-{job_id}.json"
     log_path = logs / f"workflow-{job_id}.log"
@@ -709,6 +800,8 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool) -> int:
         if resume:
             state = _load_state(state_path)
             validate_resume_state(state, plan, digest, profile_digest)
+            if state.get("status") == "REJECTED":
+                raise WorkflowError("this workflow job was rejected at a human review gate and is terminal; create a new plan after reconciliation")
             if not log_path.is_file():
                 raise WorkflowError(f"workflow log is missing; refusing to resume without evidence: {log_path}")
         else:
@@ -717,8 +810,9 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool) -> int:
             with state_path.open("x", encoding="utf-8"):
                 pass
             with log_path.open("x", encoding="utf-8") as log:
-                log.write(f"workflow={plan['job_id']} episode={plan['episode']} series={plan['series']} "
-                          f"identity={plan['identity']} version={state['workflow_version']}\n")
+                log.write(f"workflow={plan['job_id']} identity={plan.get('identity', 'DS9:' + plan['episode'])} "
+                          f"episode={plan['episode']} series={plan.get('series', 'DS9')} "
+                          f"version={state['workflow_version']}\n")
                 log.write(f"plan_sha256={digest}\nprofile_sha256={profile_digest}\n")
                 decisions = redact_shared_text(json.dumps(state.get("decisions", []), ensure_ascii=False), redactions)
                 log.write("explicit_decisions=" + decisions + "\n")
@@ -728,22 +822,94 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool) -> int:
 
         env = os.environ.copy()
         env["LDP_PROFILE"] = str(profile_path)
-        env["LDP_SERIES"] = plan["series"]
-        env["LDP_EPISODE"] = plan["episode"]
-        env["LDP_IDENTITY"] = plan["identity"]
+        env["LDP_SERIES"] = plan.get("series", "DS9")
+        env["LDP_IDENTITY"] = plan.get("identity", f"DS9:{plan['episode']}")
+        env.setdefault("PYTHONIOENCODING", "utf-8:replace")
+        if verbose:
+            env["PYTHONUNBUFFERED"] = "1"
         env.update(shell_exports)
         if instance_root:
             env["LDP_INSTANCE_ROOT"] = instance_root
+            env["LDP_EPISODE"] = plan["episode"]
+        else:
             env["LDP_EPISODE"] = plan["episode"]
         state["status"] = "RUNNING"
         save_state(state_path, state, redactions)
 
         try:
             with log_path.open("a", encoding="utf-8", newline="\n") as log:
+                log.write(f"\n[{utc_now()}] output_mode={'verbose' if verbose else 'standard'}\n")
+                log.flush()
                 for index, step in enumerate(plan["steps"]):
                     saved = state["steps"][index]
                     inputs = step.get("inputs", [])
                     outputs = step.get("outputs", [])
+                    if step.get("kind") == "review":
+                        if saved["status"] == "PASS":
+                            _verify_passed_step(saved, step, fingerprint_policy)
+                            print(f"SKIP verified approved review: {step['id']}")
+                            continue
+                        if saved["status"] == "REJECTED":
+                            raise WorkflowError(
+                                f"review step {step['id']} was denied; this job is terminal. "
+                                "Correct/reconcile the evidence and create a new plan.")
+                        if saved["status"] not in ("PENDING", "WAITING_APPROVAL"):
+                            raise WorkflowError(f"review step {step['id']} has unexpected state {saved['status']}")
+                        was_waiting = saved["status"] == "WAITING_APPROVAL"
+                        if step["id"] in approve_steps and not was_waiting:
+                            raise WorkflowError(f"review step {step['id']} is not currently waiting for approval")
+                        if step["id"] in deny_steps and not was_waiting:
+                            raise WorkflowError(f"review step {step['id']} is not currently waiting for approval")
+                        current_inputs = file_fingerprints(inputs, policy=fingerprint_policy)
+                        if saved["status"] == "PENDING":
+                            saved["input_fingerprints"] = current_inputs
+                            saved["prompt"] = step["prompt"]
+                            saved["status"] = "WAITING_APPROVAL"
+                            saved["started_utc"] = utc_now()
+                        elif _fingerprint_payload(current_inputs) != (saved.get("input_fingerprints") or []):
+                            raise WorkflowError(f"review evidence changed for {step['id']}; rerun the preceding stage and review again")
+                        if step["id"] in deny_steps:
+                            saved["status"] = "REJECTED"
+                            saved["finished_utc"] = utc_now()
+                            saved["denial"] = {"denied_by": getpass.getuser(),
+                                                "denied_at_utc": utc_now()}
+                            saved.pop("prompt", None)
+                            state["status"] = "REJECTED"
+                            state["finished_utc"] = saved["finished_utc"]
+                            state["active_step"] = None
+                            save_state(state_path, state, redactions)
+                            with log_path.open("a", encoding="utf-8", newline="\n") as denial_log:
+                                denial_log.write("\nREVIEW DENIED " + json.dumps({
+                                    "step": step["id"], **saved["denial"]}, ensure_ascii=False) + "\n")
+                            print(f"REVIEW DENIED [{step['id']}] by {saved['denial']['denied_by']}")
+                            return 4
+                        if step["id"] not in approve_steps:
+                            state["status"] = "WAITING_APPROVAL"
+                            state["active_step"] = step["id"]
+                            state["active_index"] = index
+                            save_state(state_path, state, redactions)
+                            prompt = redact_shared_text(step["prompt"], redactions)
+                            print(f"REVIEW REQUIRED [{step['id']}]: {prompt}")
+                            command = [sys.executable, str(Path(__file__).resolve()),
+                                       "--plan", str(plan_path), "--execute", "--resume",
+                                       "--approve", step["id"]]
+                            print("After reviewing the evidence, approve with: " +
+                                  redact_shared_text(_display(command), redactions))
+                            return 3
+                        saved["status"] = "PASS"
+                        saved["finished_utc"] = utc_now()
+                        saved["approval"] = {"approved_by": getpass.getuser(),
+                                              "approved_at_utc": utc_now()}
+                        saved["output_fingerprints"] = []
+                        saved.pop("prompt", None)
+                        state["status"] = "RUNNING"
+                        state["active_step"] = None
+                        save_state(state_path, state, redactions)
+                        with log_path.open("a", encoding="utf-8", newline="\n") as approval_log:
+                            approval_log.write("\nREVIEW APPROVED " + json.dumps({
+                                "step": step["id"], **saved["approval"]}, ensure_ascii=False) + "\n")
+                        print(f"REVIEW APPROVED [{step['id']}] by {saved['approval']['approved_by']}")
+                        continue
                     if saved["status"] == "PASS":
                         _verify_passed_step(saved, step, fingerprint_policy)
                         print(f"SKIP verified completed step: {step['id']}")
@@ -771,7 +937,8 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool) -> int:
                     started = time.monotonic()
                     command = _command(plan, step, profile_path, instance_root)
                     try:
-                        rc = _run_child(command, env, log, redactions, state, state_path)
+                        rc = _run_child(command, env, log, redactions, state, state_path,
+                                        verbose=verbose)
                     except KeyboardInterrupt:
                         saved["status"] = "INTERRUPTED"
                         saved["finished_utc"] = utc_now()
@@ -820,15 +987,30 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool) -> int:
 
 
 def main() -> int:
+    configure_console()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--plan", required=True, help="immutable JSON workflow plan")
     parser.add_argument("--execute", action="store_true", help="execute; default is a read-only plan")
     parser.add_argument("--resume", action="store_true", help="resume this exact saved job after verifying plan/profile/files")
+    output_group = parser.add_mutually_exclusive_group()
+    output_group.add_argument("--verbose", action="store_true",
+                              help="stream all child-stage output to the console (the default; full logs are always saved)")
+    output_group.add_argument("--standard-output", action="store_true",
+                              help="show warnings, errors, gates, and summaries; retain complete output in the workflow log")
+    review_group = parser.add_mutually_exclusive_group()
+    review_group.add_argument("--approve", action="append", default=[], metavar="STEP_ID",
+                              help="approve a named review while resuming after personally reviewing its evidence")
+    review_group.add_argument("--deny", action="append", default=[], metavar="STEP_ID",
+                              help="deny a named waiting review; this marks the job rejected and terminal")
     args = parser.parse_args()
-    if args.resume and not args.execute:
-        parser.error("--resume requires --execute")
+    if (args.resume or args.approve or args.deny) and not args.execute:
+        parser.error("--resume/--approve/--deny require --execute")
+    if (args.approve or args.deny) and not args.resume:
+        parser.error("--approve/--deny require --resume")
     try:
-        return run_plan(Path(args.plan), execute=args.execute, resume=args.resume)
+        return run_plan(Path(args.plan), execute=args.execute, resume=args.resume,
+                        approve_steps=set(args.approve), deny_steps=set(args.deny),
+                        verbose=not args.standard_output)
     except (OSError, json.JSONDecodeError, LockError, WorkflowError) as exc:
         print(f"WORKFLOW ERROR: {exc}", file=sys.stderr)
         return 2

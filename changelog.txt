@@ -215,3 +215,47 @@ FROM Version 14 -> Version 15
   verification **17/17 PASS** (3 FAIL before the fix) and `validate --stage retime` 35/0; no
   download/encode/remux ran for release validation. See `V15-RELEASE.md` and the
   authoring-device V15 change record.
+
+FromStunToKill V15 app integration (2026-11-16)
+- Added the optional Tk desktop intake/review UI on the V15 workflow base, retaining explicit
+  human review/deny gates and V9/V10 DS9 plan compatibility. Archive mode infers series; local
+  mode retains the explicit DS9/VOY selector and fingerprinted local-source intake.
+- Added report-only V15 retime-break preparation and a candidate review table. Recording uses
+  a separate immutable, review-gated plan and the V15 digest-checked/backup/atomic writer.
+- Kept OpenCode help optional, audited, and disabled by default; excluded retrospective
+  changelogs, release histories, and queues from its repair-source packet.
+- Reduced the descriptor luma report's temporary memory by calculating float64 row means from
+  the mapped descriptor array without creating a full float64 matrix copy; no runtime benchmark
+  or cross-platform speedup is claimed.
+- Fixed the Open local folder/file callback's missing `resolve_local_source` import, which caused
+  a Tkinter `NameError` after selection; added a callback regression test for series/episode form
+  population.
+- Changed profile bootstrap to reserve the device identity and create `devices/<DEVICE>-<ID>/`
+  before placing the Git-ignored machine profile at `local device config/machine.json`. Profile
+  loading permits this exact device-bound location only when the machine-local identity marker
+  matches; work roots and durable logs are scoped to the unique device subtree. Other profiles
+  remain untouched.
+- Cleared `REPLACE_…` / `YOUR_ACCOUNT` instructional values when loading template fields, so DVD
+  mode and cut-PAD choices stay empty until the operator explicitly selects valid values.
+- Made episode title optional (an explicit `Title not supplied (SERIES:SxxExx)` manifest value is
+  used when omitted, with a reminder to replace it before downstream processing). Require the
+  no-DVD cut-PAD choice only in no-DVD mode; DVD-backed plans record it as not applicable.
+- Limited the shared profile's downloads-root/template constraint to Archive download plans;
+  local intake may select its existing capture folder outside that future-download destination.
+- Removed the separate Save Plan action. Preview auto-saves the immutable plan under the active
+  device's plans folder; direct Run on a new intake saves/previews first and requires a second
+  click to execute. Names advance to the next unused filename without overwriting prior plans.
+- Kept intake fields editable through preview; changed values invalidate the current intake
+  snapshot and produce a fresh plan on the next Preview/Run. Fields freeze only after Run is
+  confirmed, and edited plans are previewed before any execution.
+- Allowed Doctor and dependency preflight to validate only this device's identity-bound profile
+  under its ignored device folder. Initializer doctor checks no longer demand the manifest they
+  are about to create; stage write guards permit only the active episode workspace or configured
+  roots under this device folder (never the sibling device, profile config, plans, or episode tree).
+  A writable shared root remains a warning, not an automatic block.
+- Allowed explicitly selected local capture and DVD paths outside the device profile's default
+  downloads/DVD roots; their paths are recorded only in the unique device episode manifest.
+- Validation: **314 passed, 7 skipped (321 tests run)**; compilation, generated-runbook check,
+  PowerShell parse, GUI smoke, and Windows device-profile preflight (**67 pass, 1 conditional
+  warning, 0 fail**) passed. No media download or processing was performed.
+  See `FROMSTUNTOKILL-V15-APP.md`.

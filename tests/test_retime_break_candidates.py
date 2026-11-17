@@ -19,6 +19,8 @@ sys.path.insert(0, str(ROOT))
 from ldcommon import PipelineError  # noqa: E402
 from prepare_retime_breaks import (build_candidate_report, detect_dvd_silences,
                                    resolve_dvd_audio, threshold_intervals)  # noqa: E402
+from measure_ld_black import descriptor_luma_means  # noqa: E402
+from measure_ld_black import descriptor_luma_means  # noqa: E402
 import prepare_retime_breaks  # noqa: E402
 from record_retime_breaks import (LockError, _manifest_lock, apply_candidates)  # noqa: E402
 import record_retime_breaks  # noqa: E402
@@ -37,6 +39,20 @@ def align_for(intervals: list[tuple[float, float]], offset: float = 0.0) -> np.n
 
 
 class CandidatePairingTests(unittest.TestCase):
+    def test_luma_reduction_matches_float64_reference(self):
+        descriptors = np.asarray([[0.25, 1.25, 2.25], [10.5, 11.5, 12.5]], dtype=np.float32)
+        expected = np.asarray(descriptors, dtype=np.float64).mean(axis=1)
+        actual = descriptor_luma_means(descriptors)
+        np.testing.assert_array_equal(actual, expected)
+        self.assertEqual(actual.dtype, np.float64)
+
+    def test_descriptor_luma_means_preserve_float64_results_without_full_conversion(self):
+        descriptors = np.asarray([[0.25, 1.25, 2.25], [10.5, 11.5, 12.5]], dtype=np.float32)
+        expected = np.asarray(descriptors, dtype=np.float64).mean(axis=1)
+        actual = descriptor_luma_means(descriptors)
+        np.testing.assert_array_equal(actual, expected)
+        self.assertEqual(actual.dtype, np.float64)
+
     def test_unique_interval_pair_is_reported_without_offsets(self):
         ld = [{"label": "B1", "start_s": 10.0, "end_s": 11.0,
                "start_frame": 300, "end_frame_exclusive": 330}]

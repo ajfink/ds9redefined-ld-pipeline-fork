@@ -4,8 +4,10 @@
   Python dependency the runbook needs, on THIS machine.
 
 .DESCRIPTION
-  Reads machine.json next to this script (copy machine.example.json and fill it
-  in, or let discovery do it with -Write). Nothing else in the pipeline should
+  Reads an explicit device-local machine profile (the desktop app creates one
+  under its unique devices/<device>-<id>/local device config folder) or, for a
+  standalone legacy bundle, machine.json beside this script. Discovery can fill
+  a new profile with -Write. Nothing else in the pipeline should
   hard-code a drive letter, a user profile or a tool version.
 
   Exit codes: 0 = all required checks PASS (warnings allowed)
@@ -32,13 +34,46 @@ if (-not $Profile -and $env:LDP_PROFILE) { $Profile = $env:LDP_PROFILE }
 if (-not $Profile) { $Profile = Join-Path $here 'machine.json' }
 $template = Join-Path $here 'machine.example.json'
 $sharedDevices = Join-Path $here 'devices'
+
+function Test-DeviceScopedProfile([string]$Candidate, [string]$ReleaseRoot) {
+    try {
+        if (-not (Test-Path -LiteralPath $Candidate -PathType Leaf)) { return $false }
+        $machineProfile = Get-Content -LiteralPath $Candidate -Raw | ConvertFrom-Json
+        $shared = $machineProfile.shared
+        if (-not $shared -or $shared.enabled -ne $true) { return $false }
+        if ([string]::IsNullOrWhiteSpace([string]$machineProfile.machine) -or
+            $machineProfile.machine -ine $env:COMPUTERNAME) { return $false }
+        if (-not $shared.release_root -or
+            [IO.Path]::GetFullPath([string]$shared.release_root) -ine [IO.Path]::GetFullPath($ReleaseRoot)) { return $false }
+        $device = [string]$shared.device_name
+        if ([string]::IsNullOrWhiteSpace($device)) { $device = [string]$machineProfile.machine }
+        $device = (($device -replace '[^A-Za-z0-9._-]+', '-') -replace '^[._-]+|[._-]+$', '')
+        $id = ([string]$shared.device_instance_id).ToUpperInvariant()
+        if (-not $device -or $id -notmatch '^[0-9A-F]{8}$') { return $false }
+        $expected = Join-Path $ReleaseRoot "devices\$device-$id\local device config\machine.json"
+        if ([IO.Path]::GetFullPath($Candidate) -ine [IO.Path]::GetFullPath($expected)) { return $false }
+
+        $identityRoot = if ($env:LDP_DEVICE_ID_DIR) { $env:LDP_DEVICE_ID_DIR } else { Join-Path $HOME '.config\ld-pipeline\device-identities' }
+        $identityPath = Join-Path $identityRoot "$device.json"
+        if (-not (Test-Path -LiteralPath $identityPath -PathType Leaf)) { return $false }
+        $identity = Get-Content -LiteralPath $identityPath -Raw | ConvertFrom-Json
+        return ($identity.schema -eq 'ld-pipeline-device-identity-v1' -and
+                $identity.device_name -eq $device -and
+                $identity.machine -eq $machineProfile.machine -and
+                ([string]$identity.instance_id).ToUpperInvariant() -eq $id)
+    } catch {
+        return $false
+    }
+}
+
 if ((Test-Path -LiteralPath $sharedDevices -PathType Container) -and -not $explicitProfile) {
-    Write-Host "Shared release detected at $here - set LDP_PROFILE to a local machine.json outside the release tree."
+    Write-Host "Shared release detected at $here - select this device's config under devices/<device>-<id>/local device config."
     exit 2
 }
 if ((Test-Path -LiteralPath $sharedDevices -PathType Container) -and
-    [System.IO.Path]::GetFullPath($Profile).StartsWith(([System.IO.Path]::GetFullPath($here).TrimEnd('\') + '\'), [StringComparison]::OrdinalIgnoreCase)) {
-    Write-Host "Shared release profiles must be local and outside ${here}: $Profile"
+    [System.IO.Path]::GetFullPath($Profile).StartsWith(([System.IO.Path]::GetFullPath($here).TrimEnd('\') + '\'), [StringComparison]::OrdinalIgnoreCase) -and
+    -not (Test-DeviceScopedProfile $Profile $here)) {
+    Write-Host "Profile inside the shared release must be this machine's verified device config: $Profile"
     exit 2
 }
 
@@ -300,8 +335,12 @@ return out
 }
 Add-Result 'avs:qtgmc' 'WARN' 'conditional: verify QTGMC and dependencies only if cadence analysis finds interlaced/hybrid inserts'
 
-foreach ($leaf in 'download_archive.ps1', 'init_episode.py', 'validate_episode.py',
-    'extract_video_descriptors.py', 'measure_dvd_alignment.py', 'measure_break_edges.py', 'measure_audio_rate.py',
+foreach ($leaf in 'download_archive.ps1', 'init_episode.py', 'init_local_episode.py', 'local_source.py',
+    'workflow_app.py', 'workflow_app_model.py', 'review_popup.py', 'opencode_help.py',
+    'pad_review.py', 'render_stack.py', 'retime_break_review.py', 'validate_episode.py',
+    'extract_video_descriptors.py', 'measure_dvd_alignment.py', 'measure_break_edges.py',
+    'prepare_retime_breaks.py', 'record_retime_breaks.py', 'retime_break_candidates.py',
+    'measure_audio_rate.py',
     'build_map.ps1', 'encode_episode.ps1', 'build_stack_project.py', 'retime_dvd_assets.py',
     'check_space_budget.py', 'stage_clock.py', 'run_workflow.py',
     'measure_pad_audio.py', 'measure_ld_black.py', 'efm_paths.py') {

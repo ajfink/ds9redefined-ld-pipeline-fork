@@ -27,13 +27,14 @@ from dependency_lock import (LockError, compare_lock, profile_platform,
                              redact_shared_text, resolve_interpreter,
                              shared_redactions, target_for)
 from ldcommon import shared_instance_root
+from shared_workspace import safe_component, validate_device_config_profile
 
 
 def profile_path(value: str | None) -> Path:
     chosen = value or os.environ.get("LDP_PROFILE")
     devices = ROOT / "devices"
     if not chosen and devices.is_dir():
-        raise LockError("shared release detected; pass --profile pointing to a local machine.json outside the release tree")
+        raise LockError("shared release detected; use this device's profile under devices/<device>-<id>/local device config")
     if chosen:
         path = Path(os.path.expandvars(os.path.expanduser(chosen))).resolve()
     else:
@@ -43,9 +44,14 @@ def profile_path(value: str | None) -> Path:
     if devices.is_dir():
         try:
             path.relative_to(ROOT.resolve())
-            raise LockError("machine profile must be outside the shared release tree")
         except ValueError:
             pass
+        else:
+            try:
+                profile = json.loads(path.read_text(encoding="utf-8-sig"))
+                validate_device_config_profile(path, profile, ROOT)
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise LockError(f"cannot read device profile {path}: {exc}") from exc
     return path
 
 
@@ -107,6 +113,19 @@ def resolve_tool(value: str | None) -> str | None:
     if p.is_file():
         return str(p.resolve())
     return shutil.which(expanded)
+
+
+def shared_workspace_ready(shared_report: dict) -> bool:
+    """Shared runs are ready when the active instance and device-scoped roots verify.
+
+    A writable checkout root remains a reported warning, not a gate: every write
+    root must already have passed the exact-device-subtree check above, and all
+    per-episode state is bound to the active workspace.
+    """
+    if shared_report.get("enabled") is not True:
+        return True
+    return (shared_report.get("instance_ready") is True and
+            shared_report.get("device_roots_scoped") is True)
 
 
 def linux_preflight(profile: dict, profile_file: Path, interpreter: str,
@@ -228,8 +247,12 @@ def main() -> int:
                                     ", ".join(missing_dirs))
             else:
                 manifest_dir = None
-            write_roots = ("downloads_root", "work", "probe", "avs", "audio", "subs",
-                           "out", "prores", "stack", "logs")
+            write_roots = ("downloads_root", "dvd_root", "work", "probe", "avs", "audio",
+                           "subs", "out", "prores", "stack", "logs", "upscale_root")
+            device_name = safe_component(str(shared_config.get("device_name") or
+                                             profile.get("machine") or "device"))
+            device_id = str(shared_config.get("device_instance_id") or "").upper()
+            device_root = devices / f"{device_name}-{device_id}"
             misplaced = []
             for name in write_roots:
                 raw = (profile.get("roots") or {}).get(name)
@@ -238,13 +261,21 @@ def main() -> int:
                 candidate = Path(os.path.expandvars(os.path.expanduser(str(raw)))).resolve()
                 try:
                     candidate.relative_to(release)
-                    misplaced.append(f"roots.{name}={candidate}")
                 except ValueError:
-                    pass
+                    continue
+                try:
+                    device_relative = candidate.relative_to(device_root.resolve())
+                    if (not device_relative.parts or
+                            device_relative.parts[0].casefold() in
+                            {"episodes", "local device config", "plans"}):
+                        raise ValueError
+                except ValueError:
+                    misplaced.append(f"roots.{name}={candidate}")
             if misplaced:
-                raise LockError("write roots must remain outside the shared release tree: " +
+                raise LockError("write roots inside the shared release must stay under this device's folder: " +
                                 "; ".join(misplaced))
             shared_report.update({
+                "device_roots_scoped": True,
                 "instance_ready": instance is not None,
                 "instance_root": str(instance) if instance else None,
                 "manifest_dir": str(manifest_dir) if manifest_dir else None,
@@ -252,8 +283,9 @@ def main() -> int:
                 "device_write_scope": (str(devices / "<device-instance>") if devices.is_dir()
                                        else "unavailable; device-local fallback is used"),
                 "release_root_acl_warning": (
-                    "the current process appears able to write the release root; configure the "
-                    "share ACL read-only for the release tree and writable only under this device's devices/<device-instance>/ folder"
+                    "the current process appears able to write the release root; active workflow outputs are "
+                    "validated under this device's ignored devices/<device-instance>/ subtree; read-only "
+                    "release ACLs are still recommended for shared deployments"
                     if os.access(release, os.W_OK) else
                     "release-root write access is not reported for this process"),
                 "release_root_writable_for_process": os.access(release, os.W_OK),
@@ -282,9 +314,7 @@ def main() -> int:
             "macos": "macOS arm64 end-to-end workflow demonstrated on M5 (S01E10); fresh-device setup is not independently certified",
             "linux": "UNTESTED: x86_64 dependency/capability candidate only; do not process a delivery",
         }[target_os]
-        shared_ready = (shared_report.get("enabled") is not True or
-                        (shared_report.get("instance_ready") is True and
-                         shared_report.get("release_root_writable_for_process") is not True))
+        shared_ready = shared_workspace_ready(shared_report)
         ready = bool(platform_report.get("ok") and lock_report.get("ok") and
                      profile_os == target_os and target_os != "linux" and shared_ready)
         report = {

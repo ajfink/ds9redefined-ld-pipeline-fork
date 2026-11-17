@@ -8,12 +8,38 @@
 
 $script:LdBundle = Split-Path -Parent $PSScriptRoot
 
+function Test-LdDeviceScopedProfile {
+    param([Parameter(Mandatory)][string]$ProfilePath, [Parameter(Mandatory)]$Profile)
+    $shared = $Profile.shared
+    if (-not $shared -or $shared.enabled -ne $true -or
+        -not $shared.release_root -or
+        [IO.Path]::GetFullPath([string]$shared.release_root) -ine [IO.Path]::GetFullPath($script:LdBundle)) { return $false }
+    if ([string]::IsNullOrWhiteSpace([string]$Profile.machine) -or
+        $Profile.machine -ine $env:COMPUTERNAME) { return $false }
+    $device = [string]$shared.device_name
+    if ([string]::IsNullOrWhiteSpace($device)) { $device = [string]$Profile.machine }
+    $device = (($device -replace '[^A-Za-z0-9._-]+', '-') -replace '^[._-]+|[._-]+$', '')
+    $id = ([string]$shared.device_instance_id).ToUpperInvariant()
+    if (-not $device -or $id -notmatch '^[0-9A-F]{8}$') { return $false }
+    $expected = Join-Path $script:LdBundle "devices\$device-$id\local device config\machine.json"
+    if ([IO.Path]::GetFullPath($ProfilePath) -ine [IO.Path]::GetFullPath($expected)) { return $false }
+    $identityRoot = if ($env:LDP_DEVICE_ID_DIR) { $env:LDP_DEVICE_ID_DIR } else { Join-Path $HOME '.config\ld-pipeline\device-identities' }
+    $identityPath = Join-Path $identityRoot "$device.json"
+    if (-not (Test-Path -LiteralPath $identityPath -PathType Leaf)) { return $false }
+    try { $identity = Get-Content -LiteralPath $identityPath -Raw | ConvertFrom-Json }
+    catch { return $false }
+    return ($identity.schema -eq 'ld-pipeline-device-identity-v1' -and
+            $identity.device_name -eq $device -and
+            $identity.machine -eq $Profile.machine -and
+            ([string]$identity.instance_id).ToUpperInvariant() -eq $id)
+}
+
 function Get-LdProfile {
     <# Returns the machine profile object, or fails with an actionable message. #>
     $p = $env:LDP_PROFILE
     $sharedDevices = Join-Path $script:LdBundle 'devices'
     if (-not $p -and (Test-Path -LiteralPath $sharedDevices -PathType Container)) {
-        throw "shared release detected at $script:LdBundle - set LDP_PROFILE to a local profile outside the release tree"
+        throw "shared release detected at $script:LdBundle - use this device's profile under devices/<device>-<id>/local device config"
     }
     if (-not $p) { $p = Join-Path $script:LdBundle 'machine.json' }
     if (-not (Test-Path -LiteralPath $p)) {
@@ -28,7 +54,9 @@ function Get-LdProfile {
         $bundleFull = [System.IO.Path]::GetFullPath($script:LdBundle).TrimEnd('\') + '\'
         $profileFull = [System.IO.Path]::GetFullPath($p)
         if ($profileFull.StartsWith($bundleFull, [StringComparison]::OrdinalIgnoreCase)) {
-            throw "shared release profile must be outside ${script:LdBundle}: $p"
+            if (-not (Test-LdDeviceScopedProfile $p $profile)) {
+                throw "profile inside shared release must be this device's verified local device config: $p"
+            }
         }
         if (-not $profile.shared -or -not $profile.shared.enabled -or
             [System.IO.Path]::GetFullPath([string]$profile.shared.release_root) -ne [System.IO.Path]::GetFullPath($script:LdBundle)) {
@@ -80,13 +108,42 @@ function Assert-LdWritablePath {
     if (-not $target.StartsWith($bundle, [StringComparison]::OrdinalIgnoreCase)) { return }
     if (-not $env:LDP_INSTANCE_ROOT) { throw "shared-release writes inside the README folder require a device workspace" }
     $instance = [System.IO.Path]::GetFullPath($env:LDP_INSTANCE_ROOT).TrimEnd('\') + '\'
-    $allowed = @('manifest','logs','references','cut-pad-images') | ForEach-Object {
+    $instanceAllowed = @('manifest','logs','references','cut-pad-images') | ForEach-Object {
         [System.IO.Path]::GetFullPath((Join-Path $instance $_)).TrimEnd('\') + '\'
     }
-    foreach ($root in $allowed) {
+    foreach ($root in $instanceAllowed) {
         if ($target.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { return }
     }
-    throw "shared mode forbids writing to the release tree: $target; use the active instance's manifest/logs/references/cut-pad-images folder or a local output root"
+
+    $devices = [System.IO.Path]::GetFullPath((Join-Path $script:LdBundle 'devices')).TrimEnd('\') + '\'
+    if (-not $instance.StartsWith($devices, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "active episode instance is outside this release's devices folder: $instance"
+    }
+    $relative = $instance.Substring($devices.Length).TrimEnd('\').Split('\')
+    if ($relative.Count -ne 3 -or $relative[1] -ne 'episodes') {
+        throw "active episode instance has an invalid devices path: $instance"
+    }
+    $deviceRoot = [System.IO.Path]::GetFullPath((Join-Path $devices $relative[0])).TrimEnd('\')
+    $protected = @('episodes','local device config','plans') | ForEach-Object {
+        [System.IO.Path]::GetFullPath((Join-Path $deviceRoot $_)).TrimEnd('\')
+    }
+    foreach ($root in $protected) {
+        if ($target -ieq $root -or $target.StartsWith(($root + '\'), [StringComparison]::OrdinalIgnoreCase)) {
+            throw "shared write path targets a protected device folder: $target"
+        }
+    }
+    $writeRoots = @('downloads_root','dvd_root','work','probe','avs','audio','subs',
+                    'out','prores','stack','logs','upscale_root')
+    foreach ($name in $writeRoots) {
+        $value = $Profile.roots.$name
+        if (-not $value) { continue }
+        $configured = [System.IO.Path]::GetFullPath([string]$value).TrimEnd('\')
+        if ($configured -ine $deviceRoot -and
+            -not $configured.StartsWith(($deviceRoot + '\'), [StringComparison]::OrdinalIgnoreCase)) { continue }
+        if ($target -ieq $configured -or
+            $target.StartsWith(($configured + '\'), [StringComparison]::OrdinalIgnoreCase)) { return }
+    }
+    throw "shared mode forbids writing outside this device's configured roots/workspace: $target; device root=$deviceRoot"
 }
 
 function Set-LdEpisodeWorkspace {

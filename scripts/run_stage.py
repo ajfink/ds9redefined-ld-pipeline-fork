@@ -28,7 +28,8 @@ from dependency_lock import (LockError, profile_platform, redact_shared_text,
                              resolve_interpreter, shared_redactions)  # noqa: E402
 from ldcommon import (Ld, PipelineError, device_workspace_enabled, parse_episode_identity,
                       shared_instance_root, workspace_release_root)  # noqa: E402
-from shared_workspace import resolve_instance_workspace  # noqa: E402
+from shared_workspace import (resolve_instance_workspace,
+                              validate_device_config_profile)  # noqa: E402
 
 STAGES = {
     "download": {"kind": "download", "write": True},
@@ -42,13 +43,15 @@ STAGES = {
     "validate-encode": {"kind": "validate", "manifest_stage": "encode", "write": False},
     "validate-padfix": {"kind": "validate", "manifest_stage": "padfix", "write": False},
     "validate-deliverable": {"kind": "validate", "manifest_stage": "deliverable", "write": False},
-    "stack-reference": {"kind": "python", "script": "select_stack_reference.py", "gate": "inputs", "write": True},
+    "stack-reference": {"kind": "python", "script": "select_stack_reference.py", "gate": "inputs", "review_gate": True, "write": True},
+    "init-local-episode": {"kind": "python", "script": "init_local_episode.py", "write": True},
+    "render-stack": {"kind": "python", "script": "render_stack.py", "gate": "inputs", "review_gate": True, "write": True},
     "build-map": {"kind": "map", "gate": "stack", "write": True},
     "motion-trace": {"kind": "python", "script": "build_motion_trace.py", "gate": "stack", "write": True},
     "master-descriptors": {"kind": "python", "script": "extract_video_descriptors.py", "fixed_args": ["--source", "master"], "gate": "stack", "write": True},
     "dvd-descriptors": {"kind": "python", "script": "extract_video_descriptors.py", "fixed_args": ["--source", "dvd"], "gate": "stack", "write": True},
     "measure-dvd-alignment": {"kind": "python", "script": "measure_dvd_alignment.py", "gate": "stack", "write": True},
-    "prepare-retime-breaks": {"kind": "python", "script": "prepare_retime_breaks.py", "gate": "stack", "write": True},
+    "prepare-retime-breaks": {"kind": "python", "script": "prepare_retime_breaks.py", "gate": "stack", "review_gate": True, "write": True},
     "record-retime-breaks": {"kind": "python", "script": "record_retime_breaks.py", "gate": "inputs", "write": True},
     "measure-break-edges": {"kind": "python", "script": "measure_break_edges.py", "gate": "stack", "write": True},
     "measure-audio-rate": {"kind": "python", "script": "measure_audio_rate.py", "write": True},
@@ -73,7 +76,7 @@ def load_profile(path: str | None) -> tuple[Path, dict]:
     chosen = path or os.environ.get("LDP_PROFILE")
     devices = ROOT / "devices"
     if not chosen and devices.is_dir():
-        raise LockError("shared release detected; provide --profile to a local profile outside the release tree")
+        raise LockError("shared release detected; provide this device's profile under devices/<device>-<id>/local device config")
     chosen = chosen or str(ROOT / "machine.json")
     p = Path(os.path.expandvars(os.path.expanduser(chosen))).resolve()
     if not p.is_file():
@@ -85,13 +88,14 @@ def load_profile(path: str | None) -> tuple[Path, dict]:
     if devices.is_dir():
         try:
             p.relative_to(ROOT.resolve())
-            raise LockError("device-workspace profiles must be outside the README/release folder")
         except ValueError:
             pass
+        else:
+            validate_device_config_profile(p, profile, ROOT)
     if device_workspace_enabled(profile) and workspace_release_root(profile) != ROOT.resolve():
         raise LockError(f"workspace/shared release root must match this README/code folder: {ROOT}")
     if devices.is_dir() and not device_workspace_enabled(profile):
-        raise LockError("this README folder has devices/ data; use an external profile with shared.enabled=true")
+            raise LockError("this README folder has devices/ data; use a verified device profile with shared.enabled=true")
     return p, profile
 
 
@@ -188,6 +192,17 @@ def requires_doctor(stage: str) -> bool:
     parallel; all other write stages retain the complete doctor gate.
     """
     return bool(STAGES[stage]["write"] and stage != "download")
+
+
+def doctor_command(profile: dict, profile_path: Path, stage: str, episode: str,
+                   instance_root: Path | None = None) -> list[str]:
+    """Build the read-only doctor call; initializers must not require a manifest yet."""
+    command = [py(profile), str(SCRIPTS / "doctor.py"), "--profile", str(profile_path), "--json"]
+    if stage not in ("init-episode", "init-local-episode"):
+        command.extend(("--episode", episode))
+    if instance_root:
+        command.extend(("--instance-root", str(instance_root)))
+    return command
 
 
 def display(command: list[str]) -> str:
@@ -310,11 +325,7 @@ def main() -> int:
             raise LockError("--instance-root/--publish-reference require shared.enabled=true in the selected profile")
         doctor = None
         if requires_doctor(args.stage):
-            doctor = [py(profile), str(SCRIPTS / "doctor.py"), "--profile", str(profile_path), "--json"]
-            if args.stage != "init-episode":
-                doctor += ["--episode", episode_code]
-            if instance:
-                doctor += ["--instance-root", str(instance)]
+            doctor = doctor_command(profile, profile_path, args.stage, episode_code, instance)
         gates = ([validate_command(episode_code, profile, spec["gate"])] if spec.get("gate") else [])
         if args.stage == "remux":
             gates.append(validate_command(episode_code, profile, "encode"))
