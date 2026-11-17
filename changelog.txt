@@ -258,4 +258,20 @@ FromStunToKill V15 app integration (2026-11-16)
 - Validation: **314 passed, 7 skipped (321 tests run)**; compilation, generated-runbook check,
   PowerShell parse, GUI smoke, and Windows device-profile preflight (**67 pass, 1 conditional
   warning, 0 fail**) passed. No media download or processing was performed.
-  See `FROMSTUNTOKILL-V15-APP.md`.
+   See `FROMSTUNTOKILL-V15-APP.md`.
+
+FromStunToKill app branch V16 (2026-11-17)
+FROM Version 15 -> Version 16 (app branch only; production `main` and W remain V15)
+- Added visual, human PAD cut/RIFE classification and an immutable manifest recorder with
+  cut-PAD policy checks, exact warning acknowledgement, review gates, and unique RIFE retry
+  directories using exact source-frame flanks.
+- Added EFMSink source/log/WAV/report provenance verification and separate human capture
+  selection with input-order PAD mapping, report rationale, manifest backup, and validator checks.
+- Added advisory Orc progress/stall heartbeats without automatic process termination and
+  unique paired audio-rate diagnostic report paths.
+- Added checksum-verified device/episode backup and dry-run/no-overwrite/no-merge restore.
+- Included the boundary-orphan PAD fix; map-matched boundary PADs still stop fail-closed.
+- Validation: **365 passed, 7 skipped** (372 tests); compileall, warnings-as-errors imports,
+  generated-runbook check, all 7 PowerShell parsers, and diff check passed. Fixtures only; no real
+  media, final encode/remux, or fresh-Mac runtime. Reconstructed Mac evidence gaps stay open in
+  `V16-QUEUE.md`.

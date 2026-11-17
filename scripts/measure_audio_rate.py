@@ -24,7 +24,6 @@ import json
 import subprocess
 import sys
 from datetime import datetime, timezone
-from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -146,6 +145,18 @@ def robust_line_fit(x, y) -> tuple[float, float, float, tuple[float, float]]:
     return slope, intercept, residual_mad, loo
 
 
+def unique_report_pair(out: Path, summary: Path) -> tuple[Path, Path]:
+    """Allocate a fresh, paired immutable report name after a rerun."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    for index in range(10000):
+        suffix = stamp if index == 0 else f"{stamp}-{index}"
+        candidate_out = out.with_name(f"{out.stem}-{suffix}{out.suffix}")
+        candidate_summary = summary.with_name(f"{summary.stem}-{suffix}{summary.suffix}")
+        if not candidate_out.exists() and not candidate_summary.exists():
+            return candidate_out, candidate_summary
+    raise PipelineError(f"could not allocate a unique report pair beside {out}")
+
+
 def summarize_saved_report(path: Path, min_corr: float) -> dict:
     """Recompute OLS/robust summaries from a saved window TSV; performs no media I/O."""
     import numpy as np
@@ -214,6 +225,10 @@ def main() -> int:
     if args.from_report:
         saved = Path(args.from_report)
         summary_out = Path(args.summary_out) if args.summary_out else saved.with_suffix(".robust-summary.json")
+        if not args.summary_out and summary_out.exists():
+            summary_out = summary_out.with_name(
+                f"{summary_out.stem}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}"
+                f"{summary_out.suffix}")
         assert_writable_path(summary_out, ld)
         if summary_out.exists():
             raise PipelineError(f"refusing to overwrite summary: {summary_out}")
@@ -338,6 +353,8 @@ def main() -> int:
     print("Compare with the runbook's fade-midpoint fit and picture-map rate. If they disagree, inspect the mixes/windows or STOP; do not apply this number automatically.")
     out=Path(args.out) if args.out else (ep.path("audio_rate_report") if ep.data.get("files",{}).get("audio_rate_report") else ld.probe()/f"{ep.code}-audio-rate-diagnostic.tsv")
     summary_out = Path(args.summary_out) if args.summary_out else out.with_suffix(".summary.json")
+    if not args.out and not args.summary_out and (out.exists() or summary_out.exists()):
+        out, summary_out = unique_report_pair(out, summary_out)
     assert_writable_path(out, ld)
     assert_writable_path(summary_out, ld)
     if out.exists() or summary_out.exists():

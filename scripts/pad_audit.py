@@ -48,6 +48,20 @@ def source_id_for_capture(project: Path, capture: str) -> int:
     raise PipelineError(f"{project}: no TBC source node labeled {capture!r}")
 
 
+def boundary_orphan_frames(candidate_frames: list[int], matched_candidates: set[int],
+                           frame_count: int) -> set[int]:
+    """Exclude boundary orphans, while failing closed for boundary repair candidates."""
+    if frame_count < 1:
+        raise PipelineError("source-derived clip has no frames")
+    boundaries = {frame for frame in candidate_frames if frame in (0, frame_count - 1)}
+    unsafe = boundaries & matched_candidates
+    if unsafe:
+        raise PipelineError(
+            "a predicted PAD is at a clip boundary; neighbor-based audit is undefined: "
+            f"{sorted(unsafe)}")
+    return boundaries
+
+
 def reference_map_ranges(project: Path, source_id: int = 1) -> list[int]:
     """PAD_1 output indices of the frame_map fed by source_id.
 
@@ -222,6 +236,10 @@ def main() -> int:
         raise PipelineError(f"descriptor cache has {len(raw)} frames, expected {ep.frame_count}")
     if len(raw) <= max(cand, default=0):
         raise PipelineError("descriptor cache is shorter than the encode")
+    matched_candidates = {candidate for _, _, candidate, _ in matches}
+    boundary_orphans = boundary_orphan_frames(cand, matched_candidates, len(raw))
+    if boundary_orphans:
+        print(f"boundary orphan(s) excluded from neighbor score: {sorted(boundary_orphans)}")
     frames = np.array(cand, dtype=int)
     dmax = np.array([raw[i].max() for i in frames])
     v = raw.astype(np.float32)
@@ -229,9 +247,11 @@ def main() -> int:
     n = np.linalg.norm(v, axis=1, keepdims=True)
     n[n == 0] = 1
     v /= n
-    if np.any((frames <= 0) | (frames >= len(raw) - 1)):
-        raise PipelineError("a single-frame black is at a clip boundary; neighbor-based audit is undefined")
-    score = np.array([1.0 - float(np.dot(v[i - 1], v[i + 1])) for i in frames])
+    score = np.array([
+        np.nan if int(i) in boundary_orphans else
+        1.0 - float(np.dot(v[i - 1], v[i + 1]))
+        for i in frames
+    ], dtype=np.float64)
     zero = np.array([raw[i].max() == 0 for i in range(len(raw))])
     ix = np.arange(1, len(raw) - 1)
     ok = (~zero[ix - 1]) & (~zero[ix]) & (~zero[ix + 1])
@@ -250,8 +270,12 @@ def main() -> int:
         for j, (a, i, d) in enumerate(blips):
             near = min(in_range, key=lambda pq: abs(pq[1] - i)) if in_range else (None, None)
             is_pad = near[1] is not None and abs(near[1] - i) <= TOLERANCE_FRAMES
-            w.writerow((i, f"{i/F24:.6f}", f"{d:.6f}", int(dmax[j]), f"{score[j]:.6f}",
-                        f"{100.0 * float((base <= score[j]).mean()):.2f}", near[0], int(is_pad)))
+            score_value = float(score[j])
+            score_text = f"{score_value:.6f}" if np.isfinite(score_value) else ""
+            percentile_text = (f"{100.0 * float((base <= score_value).mean()):.2f}"
+                               if np.isfinite(score_value) and len(base) else "")
+            w.writerow((i, f"{i/F24:.6f}", f"{d:.6f}", int(dmax[j]), score_text,
+                        percentile_text, near[0], int(is_pad)))
 
     repair = sorted(c for _, _, c, _ in matches)
     repair_file = probe / f"{ep.code}-pad-repair-frames.txt"

@@ -199,7 +199,9 @@ def discover_review_items(episode: str, manifest_path: Path, profile_path: Path,
                 replacement = _inside(source, probe, "RIFE replacement image")
             except (OSError, PadReviewError):
                 continue
-            neighbor_dir = probe / "rife-padframes-local" / label / "neighbors"
+            # The PNG path in the report is authoritative. Newer RIFE plans use a
+            # unique per-run directory so a retry never overwrites prior evidence.
+            neighbor_dir = replacement.parent.parent / "neighbors"
             before = neighbor_dir / f"prev_{frame:06d}.png"
             after = neighbor_dir / f"next_{frame:06d}.png"
             if video is None:

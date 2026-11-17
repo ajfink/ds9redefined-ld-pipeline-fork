@@ -1,8 +1,9 @@
 # Workflow versioning
 
-**Authoritative workflow version: 15.** `WORKFLOW_VERSION` is the machine-readable counter;
-the release source is Z `main`. W source synchronization will preserve its dirty V7-based Git
-metadata and unrelated local changes; do not reset/rebase that checkout as part of V15.
+**This checkout's workflow version: 16 (FromStunToKill app branch).** `WORKFLOW_VERSION` is the
+machine-readable counter for this branch. Production Z `main` and the W shared tree remain at
+Version 15; this app-branch increment is not a production release or a W sync. Preserve W's
+dirty/stale Git metadata and unrelated local changes; do not reset/rebase that checkout.
 
 ## What requires a version change
 
@@ -67,15 +68,16 @@ live instruction sources.
 | 13 | `LENOVO-LEGION-5`, 2026-11-16; from Version 12 | Made empty break-edge windows fail closed; added cut-PAD DVD-still policy/provenance; stabilized per-machine workspace identity; accepted PEP 440 target-or-newer direct-package checks; isolated macOS OpenCV QC environment; added act-cut A/V window splitting, Orc progress/checkpoint resume, bounded exact-frame extraction, EFM/fade helper tests, and a transfer-time prep checklist. | **165 passed, 7 skipped**; Python compilation, warning-as-error imports, generated-runbook checks, and diff checks passed. W S01E09's local act-cut patch has real QC evidence, but the Z port is synthetic-only. No S01E12 break adjudication or real-media run is claimed; no new Mac VapourSynth runtime validation or Linux support claim. See `V13-RELEASE.md`, `V13-QUEUE.md`, and the authoring-device workflow log. |
 | 14 | `LENOVO-LEGION-5`, 2026-11-16; from Version 13 | Added a metadata-only tree of Section 31 Archive uploads and natural-language resolver, plus canonical `SERIES:SxxExx` identity throughout VOY manifests, workspaces, artifact roots, Python/PowerShell stages, workflow state, locks, logs, and resume. Bare legacy identities remain DS9; DS9 paths/plans are unchanged. TNG combined-item-only remains blocked. | **188 passed, 7 skipped** (195 tests); compilation/imports, generated docs, diff checks, PowerShell parser checks, and mock same-code/resume tests passed. Catalog metadata only; no media downloaded. W source files synchronized, while its existing Git metadata/local changes were preserved. See `V14-QUEUE.md` and `V14-RELEASE.md`. |
 | 15 | `LENOVO-LEGION-5`, 2026-11-16; from Version 14 | Made changelogs retrospective-only for live jobs; pinned each retime segment after `atempo`; made the generated-output silence threshold explicit; preserved valid before/after edge evidence independently; added report-only DVD/LD break pairing and an explicit review/hash-confirmed, backed-up/atomic recorder that leaves offsets null. Added prepare/record stages and regressions. | **224 passed, 7 skipped** (231 tests); compileall, warnings-as-errors V15 imports, generated docs/plain-text, all 7 PowerShell parsers, and diff checks passed. Real-media validation on S01E12's existing media: retime output-gap verification **17/17 PASS** (3 FAIL before the fix) and `validate --stage retime` 35/0; no download/encode/remux ran for release validation. See `V15-QUEUE.md` and `V15-RELEASE.md`. |
+| 16 | `LENOVO-LEGION-5`, 2026-11-16; app-branch increment from Version 15 | Added human PAD classification before RIFE with immutable reviewed decisions and existing cut-PAD safeguards; exact source-frame RIFE flanks and unique run folders; EFM source/log/WAV/report provenance and separate human capture selection; advisory Orc stall heartbeat; unique audio-rate reports; checksum-verified device/episode backup and no-merge restore. Also merged the prior boundary-orphan PAD fix into this app branch. | **365 passed, 7 skipped** (372 tests); compileall, warnings-as-errors imports, generated-runbook check, all 7 PowerShell parsers, and diff check passed. Fixture/unit tests only. No real media decode/RIFE/Orc run, final encode/remux, real workspace restore, or new Mac/Linux support claim. **Not published to production `main`; W remains V15.** Device recovery gaps remain in `V16-QUEUE.md`. |
 
-The `fromstuntokill-v15-app` branch is an optional desktop-app overlay on the V15 core.
-It adds concrete GUI intake plans, local-source intake, reviewed app workflow gates, and a
-candidate-report review screen; see `FROMSTUNTOKILL-V15-APP.md` for integration-specific
-scope and validation. It does not change the production V15 release record above.
+The GitHub `fromstuntokill-app` branch is an optional desktop-app integration. Its V16 marker
+does not change the production V15 release record or authorize syncing to W. See
+`FROMSTUNTOKILL-V15-APP.md` for historical V15 integration and
+`FROMSTUNTOKILL-V16-APP.md` for the current app-branch scope and validation.
 
 Version records are in `W:\ld-pipeline-execution-log.md`: Version 1 section 16, Version 2 section 17,
 Version 3 sections 18-19, Version 4 section 21, Version 5 sections 22-23, Version 6 section 27, Version 7 sections 28-31,
-Version 8 section 34, Version 9 section 37, Version 10 section 39, Version 11 section 44, and Version 12 section 46. The V13 authoring-device log is under `devices/LENOVO-LEGION-5-D02C1DA9/WORKFLOW-V13-CHANGE.md`; V14/V15 authoring-device records are `devices/LENOVO-LEGION-5-D02C1DA9/WORKFLOW-V14-CHANGE.md` and `devices/LENOVO-LEGION-5-D02C1DA9/WORKFLOW-V15-CHANGE.md`. E07 findings are in `Z:\S01E07-flow-log.md` and
+Version 8 section 34, Version 9 section 37, Version 10 section 39, Version 11 section 44, Version 12 section 46, and the app-branch V16 record is section 56 of the authoring execution log. The V13 authoring-device log is under `devices/LENOVO-LEGION-5-D02C1DA9/WORKFLOW-V13-CHANGE.md`; V14/V15 authoring-device records are `devices/LENOVO-LEGION-5-D02C1DA9/WORKFLOW-V14-CHANGE.md` and `devices/LENOVO-LEGION-5-D02C1DA9/WORKFLOW-V15-CHANGE.md`. E07 findings are in `Z:\S01E07-flow-log.md` and
 `Z:\work\logs\S01E07-v5-rerun.md`.
 The M5 source/adoption evidence is in `W:\M5 Mac LaserDisc Project Updates Log.md`; its
 machine-local checkout is separate from the W shared-release tree. This V13 sync updates the

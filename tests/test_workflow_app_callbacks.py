@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import json
+import queue
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +13,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import workflow_app  # noqa: E402
 from workflow_app_model import read_intake_template  # noqa: E402
+import shared_workspace  # noqa: E402
 
 
 class FakeVariable:
@@ -31,6 +33,17 @@ class FakeLabel:
 
     def configure(self, **options):
         self.options.update(options)
+
+
+class FakeRoot:
+    def __init__(self):
+        self.idle_callbacks = []
+
+    def after_idle(self, callback):
+        self.idle_callbacks.append(callback)
+
+    def after(self, _milliseconds, _callback):
+        return None
 
 
 class WorkflowAppCallbackTests(unittest.TestCase):
@@ -147,6 +160,240 @@ class WorkflowAppCallbackTests(unittest.TestCase):
             self.assertEqual(action, "preview")
             self.assertIn(str(new_plan), command)
             self.assertNotIn("--execute", command)
+
+    def test_successful_intake_run_is_marked_for_automatic_stack_continuation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "completed-intake-plan.json"
+            path.write_text("{}\n", encoding="utf-8")
+            app = workflow_app.WorkflowApp.__new__(workflow_app.WorkflowApp)
+            app.plan_path = path
+            app.plan = {"steps": [
+                {"stage": "init-local-episode"}, {"stage": "validate-inputs"}]}
+            app.template = None
+            app.plan_from_intake = False
+            app.previewed_plan_hash = "current"
+            app.auto_advance_after_run = False
+            app.auto_run_after_preview = False
+            app._require_preview = lambda: True
+            app._set_form_editable = lambda _editable: None
+            app._logging_args = lambda: []
+            commands = []
+            app._start_process = lambda command, action: commands.append((command, action))
+
+            app._launch("run")
+
+            self.assertTrue(app.auto_advance_after_run)
+            self.assertEqual(commands[0][1], "run")
+            self.assertIn("--execute", commands[0][0])
+
+    def test_nonfinal_run_needs_no_extra_confirmation_and_arms_auto_stack(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "intake-plan.json"
+            path.write_text("{}\n", encoding="utf-8")
+            app = workflow_app.WorkflowApp.__new__(workflow_app.WorkflowApp)
+            app.plan_path = path
+            app.plan = {"steps": [{"stage": "init-local-episode"},
+                                  {"stage": "validate-inputs"}]}
+            app.template = None
+            app.plan_from_intake = False
+            app._require_preview = lambda: True
+            app._set_form_editable = lambda editable: setattr(app, "form_editable", editable)
+            app._logging_args = lambda: []
+            app.form_editable = True
+            app.auto_advance_after_run = False
+            commands = []
+            app._start_process = lambda command, action: commands.append((command, action))
+            with patch.object(workflow_app.messagebox, "askyesno",
+                              side_effect=AssertionError("nonfinal run should not add another confirmation")):
+                app._launch("run")
+            self.assertTrue(app.auto_advance_after_run)
+            self.assertFalse(app.form_editable)
+            self.assertEqual(commands[0][1], "run")
+
+    def test_successful_intake_completion_dispatches_automatic_stack_transition(self):
+        app = workflow_app.WorkflowApp.__new__(workflow_app.WorkflowApp)
+        app.output_queue = queue.Queue()
+        app.output_queue.put("__WORKFLOW_DONE__0")
+        app.pending_action = "run"
+        app.pending_plan_hash = None
+        app.pending_review_step = None
+        app.waiting_review_step = None
+        app.auto_advance_after_run = True
+        app.auto_run_after_preview = False
+        app.process = object()
+        app.root = FakeRoot()
+        app.status = FakeVariable()
+        app._set_running = lambda _running: None
+        app._cleanup_pad_previews = lambda: None
+        transitions = []
+        app._auto_start_stack_reference = lambda: transitions.append("stack-reference")
+
+        app._drain_output()
+
+        self.assertEqual(len(app.root.idle_callbacks), 1)
+        app.root.idle_callbacks[0]()
+        self.assertEqual(transitions, ["stack-reference"])
+
+    def test_only_intake_plans_are_eligible_for_automatic_stack_continuation(self):
+        app = workflow_app.WorkflowApp.__new__(workflow_app.WorkflowApp)
+        app.plan = {"steps": [{"stage": "download"}, {"stage": "init-episode"},
+                              {"stage": "validate-inputs"}]}
+        self.assertTrue(app._is_intake_completion_plan())
+        app.plan = {"steps": [{"stage": "validate-inputs"}, {"stage": "stack-reference"},
+                              {"kind": "review", "for_stage": "stack-reference"}]}
+        self.assertFalse(app._is_intake_completion_plan())
+
+    def test_successful_intake_run_automatically_schedules_stack_continuation(self):
+        app = workflow_app.WorkflowApp.__new__(workflow_app.WorkflowApp)
+        app.output_queue = queue.Queue()
+        app.output_queue.put("__WORKFLOW_DONE__0")
+        app.pending_action = "run"
+        app.pending_plan_hash = None
+        app.pending_review_step = None
+        app.waiting_review_step = None
+        app.auto_advance_after_run = True
+        app.auto_run_after_preview = False
+        app.process = object()
+        app.root = FakeRoot()
+        app.status = FakeVariable()
+        app._set_running = lambda _running: None
+        app._cleanup_pad_previews = lambda: None
+        continued = []
+        app._auto_start_stack_reference = lambda: continued.append(True)
+
+        app._drain_output()
+
+        self.assertEqual(len(app.root.idle_callbacks), 1)
+        app.root.idle_callbacks[0]()
+        self.assertEqual(continued, [True])
+
+    def test_failed_pad_record_clears_pending_automatic_rife_continuation(self):
+        app = workflow_app.WorkflowApp.__new__(workflow_app.WorkflowApp)
+        app.output_queue = queue.Queue()
+        app.output_queue.put("__WORKFLOW_DONE__1")
+        app.pending_action = "run"
+        app.pending_plan_hash = None
+        app.pending_review_step = None
+        app.waiting_review_step = None
+        app.auto_advance_after_run = False
+        app.auto_run_after_preview = False
+        app.auto_start_rife_after_pad_record = True
+        app.process = object()
+        app.root = FakeRoot()
+        app.status = FakeVariable()
+        app._set_running = lambda _running: None
+        app._cleanup_pad_previews = lambda: None
+
+        app._drain_output()
+
+        self.assertFalse(app.auto_start_rife_after_pad_record)
+        self.assertEqual(app.root.idle_callbacks, [])
+
+    def test_stage_plan_auto_saves_under_episode_workspace_without_file_dialog(self):
+        with tempfile.TemporaryDirectory() as temporary, tempfile.TemporaryDirectory() as identity_dir:
+            bundle = Path(temporary) / "app"
+            bundle.mkdir()
+            (bundle / "machine.example.json").write_bytes(
+                (workflow_app.ROOT / "machine.example.json").read_bytes())
+            (bundle / "WORKFLOW_VERSION").write_text("15\n", encoding="ascii")
+            with patch.dict("os.environ", {"LDP_DEVICE_ID_DIR": identity_dir}, clear=False), \
+                    patch.object(shared_workspace, "ROOT", bundle):
+                profile_path, _ = shared_workspace.bootstrap_device_profile(
+                    bundle, system="Windows", machine="DEVICE-STAGEPLAN")
+                profile = json.loads(profile_path.read_text(encoding="utf-8"))
+                workspace = shared_workspace.create_workspace(
+                    profile_path, profile, "S01E12", series="DS9")
+            instance = Path(workspace["instance_root"])
+            plan = {
+                "schema": "ld-pipeline-workflow-plan-v1",
+                "job_id": "stack-reference-test",
+                "episode": "S01E12", "series": "DS9", "identity": "DS9:S01E12",
+                "episode_title": "Vortex", "profile": str(profile_path),
+                "instance_root": str(instance), "fingerprint_policy": "balanced",
+                "decisions": [], "steps": [{"id": "validate", "stage": "validate-inputs",
+                                               "inputs": [str(instance / "manifest" / "S01E12.json")],
+                                               "outputs": []}],
+            }
+            app = workflow_app.WorkflowApp.__new__(workflow_app.WorkflowApp)
+            app.root = None
+            app.plan_path = None
+            app.plan = None
+            app.plan_from_intake = True
+            app.intake_plan_snapshot = "old"
+            app.template = {}
+            app.previewed_plan_hash = None
+            app.waiting_review_step = None
+            app.opencode_help_results = {}
+            app.source_label = FakeLabel()
+            app.status = FakeVariable()
+            app.form_editable = True
+            app.console_expanded = True
+            app._set_form_editable = lambda editable: setattr(app, "form_editable", editable)
+            app._update_review_choices = lambda: None
+            app._append_output = lambda _text: None
+
+            with patch.object(workflow_app, "ROOT", bundle), \
+                    patch.object(shared_workspace, "ROOT", bundle), \
+                    patch.dict("os.environ", {"LDP_DEVICE_ID_DIR": identity_dir}, clear=False), \
+                    patch.object(workflow_app.filedialog, "asksaveasfilename") as chooser:
+                self.assertTrue(app._save_app_stage_plan(plan, "stack-reference-plan.json", "stack reference"))
+
+            self.assertEqual(app.plan_path.parent, instance / "plans")
+            self.assertTrue(app.plan_path.is_file())
+            self.assertFalse(app.plan_from_intake)
+            self.assertFalse(app.form_editable)
+            chooser.assert_not_called()
+
+    def test_reviewed_pad_choices_create_record_plan_with_a_human_gate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile = root / "machine.json"
+            profile.write_text("{}\n", encoding="utf-8")
+            instance = root / "devices" / "MAC-ABCD1234" / "episodes" / "S01E12"
+            instance.mkdir(parents=True)
+            manifest = instance / "manifest.json"
+            manifest.write_text(json.dumps({"title": "Vortex"}), encoding="utf-8")
+            evidence = root / "probe"
+            evidence.mkdir()
+            report_path = instance / "plans" / "decision.json"
+            report_path.parent.mkdir()
+            report_path.write_text("{}\n", encoding="utf-8")
+            for name in ("audit.tsv", "repair.txt", "fullres.tsv"):
+                (evidence / name).write_text("fixture\n", encoding="utf-8")
+            report = {
+                "identity": "DS9:S01E12", "review_note": "visual review confirmed dim scene",
+                "manifest_path": str(manifest.resolve()),
+                "candidates": [{"frame": 54922, "classification": "rife"}],
+                "evidence": {
+                    "pad_audit": str(evidence / "audit.tsv"),
+                    "repair_frames": str(evidence / "repair.txt"),
+                    "fullres_report": str(evidence / "fullres.tsv"),
+                },
+            }
+            app = workflow_app.WorkflowApp.__new__(workflow_app.WorkflowApp)
+            app.root = None
+            app.values = {"fingerprint_policy": FakeVariable("full")}
+            app._current_episode_context = lambda: (
+                "S01E12", "DS9", str(profile), str(manifest), str(instance))
+            saved = []
+            app._save_app_stage_plan = lambda plan, filename, scope: saved.append(
+                (plan, filename, scope)) or True
+            launched = []
+            app._launch = lambda action: launched.append(action)
+            app.status = FakeVariable()
+
+            self.assertTrue(app._save_pad_classification_plan(report_path, "a" * 64, report))
+
+            plan, filename, scope = saved[0]
+            self.assertEqual(filename, "DS9-S01E12-pad-classification-plan.json")
+            self.assertEqual(plan["fingerprint_policy"], "full")
+            self.assertEqual(plan["steps"][0]["stage"], "record-pad-classifications")
+            self.assertIn("--apply", plan["steps"][0]["args"])
+            self.assertEqual(plan["steps"][1]["kind"], "review")
+            self.assertEqual(plan["steps"][1]["for_stage"], "record-pad-classifications")
+            self.assertTrue(app.auto_start_rife_after_pad_record)
+            self.assertTrue(app.auto_run_after_preview)
+            self.assertEqual(launched, ["preview"])
 
     def test_default_machine_profile_is_created_under_unique_device_folder(self):
         app = workflow_app.WorkflowApp.__new__(workflow_app.WorkflowApp)

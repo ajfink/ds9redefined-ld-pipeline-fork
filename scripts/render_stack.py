@@ -12,8 +12,11 @@ import argparse
 import json
 import os
 import re
+import queue
 import subprocess
 import sys
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +29,8 @@ WRITTEN_RE = re.compile(r"Successfully\s+wrote\s+([\d,]+)\s+frames", re.IGNORECA
 UNRECOVERABLE_RE = re.compile(r"unrecoverable(?:\s+samples?)?\D{0,20}([\d,]+)", re.IGNORECASE)
 PAIR_NUMBER = r"\d+(?:,\d{3})*"
 PAIR_RE = re.compile(rf"(?:\bpairs?\s*[:=]\s*({PAIR_NUMBER})|({PAIR_NUMBER})\s+pairs?\b)", re.IGNORECASE)
+ORC_HEARTBEAT_SECONDS = 60
+ORC_STALL_WARNING_SECONDS = 20 * 60
 
 
 def configure_console() -> None:
@@ -216,6 +221,16 @@ def write_report(path: Path, report: dict, ld: Ld) -> None:
         stream.write(safe)
 
 
+def progress_heartbeat(elapsed_s: float, last_progress_s: float, pid: int,
+                       process_alive: bool, master_bytes: int) -> tuple[str, bool]:
+    """Return a visible heartbeat and whether the run has crossed the advisory stall threshold."""
+    idle_s = max(0.0, elapsed_s - last_progress_s)
+    message = (f"ORC PROGRESS WATCHDOG: pid={pid}; elapsed={elapsed_s:.0f}s; "
+               f"no log/output progress={idle_s:.0f}s; process_alive={process_alive}; "
+               f"master_bytes={master_bytes}; no automatic kill/retry")
+    return message, idle_s >= ORC_STALL_WARNING_SECONDS
+
+
 def main() -> int:
     configure_console()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -269,10 +284,50 @@ def main() -> int:
     except OSError as exc:
         raise PipelineError(f"could not start Orc render: {exc}") from exc
     assert proc.stdout is not None
-    for line in proc.stdout:
+    output_lines: queue.Queue[str | None] = queue.Queue()
+
+    def read_output() -> None:
+        try:
+            for child_line in proc.stdout:
+                output_lines.put(child_line)
+        finally:
+            output_lines.put(None)
+
+    reader = threading.Thread(target=read_output, name="orc-stack-render-output", daemon=True)
+    reader.start()
+    started_monotonic = time.monotonic()
+    last_progress = started_monotonic
+    last_master = (master.stat().st_size, master.stat().st_mtime_ns) if master.exists() else (0, 0)
+    next_stall_notice = ORC_STALL_WARNING_SECONDS
+    while True:
+        try:
+            line = output_lines.get(timeout=ORC_HEARTBEAT_SECONDS)
+        except queue.Empty:
+            now = time.monotonic()
+            if master.exists():
+                stat = master.stat()
+                current_master = (stat.st_size, stat.st_mtime_ns)
+                if current_master != last_master:
+                    last_master = current_master
+                    last_progress = now
+            elapsed = now - started_monotonic
+            heartbeat, stalled = progress_heartbeat(
+                elapsed, last_progress - started_monotonic, proc.pid,
+                proc.poll() is None, last_master[0])
+            print(heartbeat, flush=True)
+            if stalled and elapsed >= next_stall_notice:
+                print("ORC STALL WARNING: preserve the process/log/output evidence and inspect manually; "
+                      "this wrapper will not kill or restart a potentially locked Orc process.", flush=True)
+                next_stall_notice = elapsed + ORC_STALL_WARNING_SECONDS
+            continue
+        if line is None:
+            break
         lines.append(line)
         print(line, end="", flush=True)
+        if "progress:" in line.casefold() or "decoding frames:" in line.casefold():
+            last_progress = time.monotonic()
     proc.stdout.close()
+    reader.join(timeout=5)
     orc_exit = proc.wait()
     text = "".join(lines)
     report = {

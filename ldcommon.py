@@ -522,7 +522,7 @@ def assert_writable_path(path: str | os.PathLike, ld: Ld | None = None) -> Path:
     instance = shared_instance_root(ld.profile, ld.profile_path,
                                     os.environ.get("LDP_EPISODE"))
     allowed_roots = (instance / "manifest", instance / "logs", instance / "references",
-                     instance / "cut-pad-images")
+                     instance / "cut-pad-images", instance / "plans", instance / "reviews")
     if target == instance / "workspace.json" or any(
             target == allowed or target.is_relative_to(allowed) for allowed in allowed_roots):
         return target

@@ -108,7 +108,7 @@ function Assert-LdWritablePath {
     if (-not $target.StartsWith($bundle, [StringComparison]::OrdinalIgnoreCase)) { return }
     if (-not $env:LDP_INSTANCE_ROOT) { throw "shared-release writes inside the README folder require a device workspace" }
     $instance = [System.IO.Path]::GetFullPath($env:LDP_INSTANCE_ROOT).TrimEnd('\') + '\'
-    $instanceAllowed = @('manifest','logs','references','cut-pad-images') | ForEach-Object {
+    $instanceAllowed = @('manifest','logs','references','cut-pad-images','plans','reviews') | ForEach-Object {
         [System.IO.Path]::GetFullPath((Join-Path $instance $_)).TrimEnd('\') + '\'
     }
     foreach ($root in $instanceAllowed) {

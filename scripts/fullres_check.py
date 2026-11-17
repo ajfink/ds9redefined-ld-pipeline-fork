@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))         # sibling modules (vspipe_util)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # ldcommon
-from ldcommon import Ld, PipelineError, load_episode  # noqa: E402
+from ldcommon import Ld, PipelineError, assert_writable_path, load_episode  # noqa: E402
 from vspipe_util import run_source_ffmpeg  # noqa: E402
 
 W, H = 768, 484
@@ -61,6 +61,7 @@ def main() -> int:
     ap.add_argument("--episode", required=True)
     ap.add_argument("--list", help="frame list file (default: <code>-pad-repair-frames.txt)")
     ap.add_argument("--encode", help="override source-derived video path (defaults to avs_encode)")
+    ap.add_argument("--out", help="new full-raster report path (default: <code>-pad-fullres.tsv)")
     args = ap.parse_args()
 
     import numpy as np
@@ -78,10 +79,22 @@ def main() -> int:
             f"full-raster PAD check must read the source-derived script "
             f"(.avs/.vpy), not encoded video: {video}")
 
-    frames = [int(x) for x in list_path.read_text(encoding="utf-8").split() if x.strip()]
+    try:
+        frames = [int(x) for x in list_path.read_text(encoding="utf-8").split() if x.strip()]
+    except (OSError, ValueError) as exc:
+        raise PipelineError(f"cannot parse candidate frame list {list_path}: {exc}") from exc
+    if len(set(frames)) != len(frames):
+        raise PipelineError(f"candidate frame list contains duplicate indices: {list_path}")
+    invalid = [frame for frame in frames if frame < 0 or frame >= ep.frame_count]
+    if invalid:
+        raise PipelineError(f"candidate frames must be within 0..{ep.frame_count - 1}: {invalid[:20]}")
+    out = Path(args.out).expanduser().resolve() if args.out else probe / f"{ep.code}-pad-fullres.tsv"
+    out = assert_writable_path(out, ld)
+    if out.exists() or out.is_symlink():
+        raise PipelineError(f"refusing to overwrite full-raster report: {out}")
+    out.parent.mkdir(parents=True, exist_ok=True)
     if not frames:
-        out = probe / f"{ep.code}-pad-fullres.tsv"
-        with out.open("w", newline="", encoding="utf-8") as fh:
+        with out.open("x", newline="", encoding="utf-8") as fh:
             csv.writer(fh, delimiter="\t").writerow(("frame", "rgb_max", "rgb_mean"))
         print(f"PASS - no confirmed PAD repair frames; wrote empty evidence table: {out}")
         return 0
@@ -93,8 +106,7 @@ def main() -> int:
     mm = max(v[1] for v in res.values())
     print(f"full-raster: {len(res)} frames, observed max rgb_max={mx}, max rgb_mean={mm:.9f}, "
           f"failures={len(bad)}")
-    out = probe / f"{ep.code}-pad-fullres.tsv"
-    with out.open("w", newline="", encoding="utf-8") as fh:
+    with out.open("x", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh, delimiter="\t")
         w.writerow(("frame", "rgb_max", "rgb_mean"))
         for f in sorted(res):

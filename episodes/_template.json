@@ -35,6 +35,10 @@
   },
   "audio": {
     "capture": "",
+    "capture_selection": null,
+    "capture_selection_history": [],
+    "efm_provenance_required": true,
+    "efm_provenance": {},
     "pad_frames": null,
     "skip_s": null,
     "rate_fit_ppm": null,

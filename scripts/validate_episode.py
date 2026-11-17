@@ -14,6 +14,8 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -64,6 +66,168 @@ def resolve(ep, key: str) -> Path | None:
 
 def nonnull(data: dict, section: str, key: str) -> bool:
     return isinstance(data.get(section), dict) and data[section].get(key) is not None
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def validate_efm_capture_provenance(checks: Checks, ep, ld: Ld, capture: dict,
+                                    wav_path: Path | None) -> None:
+    """Require the selected native WAV to be tied to an Orc log for this exact TBC."""
+    audio = ep.data.get("audio") or {}
+    if audio.get("efm_provenance_required") is not True:
+        checks.add("WARN", "efm-capture-provenance",
+                   "legacy manifest predates V16 EFM log/source binding; recover provenance before a new delivery")
+        return
+    provenance_map = audio.get("efm_provenance") or {}
+    if not isinstance(provenance_map, dict):
+        checks.add("FAIL", "efm-capture-provenance", "audio.efm_provenance must be an object")
+        return
+    entries = provenance_map.get(str(capture.get("label", "")))
+    if not isinstance(entries, list) or not entries or not isinstance(entries[-1], dict):
+        checks.add("FAIL", "efm-capture-provenance",
+                   f"no verified Orc-log/WAV provenance for selected capture {capture.get('label')!r}")
+        return
+    entry = entries[-1]
+    selection = audio.get("capture_selection") or {}
+    checks.require(selection.get("schema") == "ld-pipeline-efm-capture-selection-v1" and
+                   selection.get("capture") == capture.get("label") and
+                   selection.get("verified_provenance_sha256") == entry.get("report_sha256") and
+                   selection.get("verified_provenance_report") == entry.get("report_path") and
+                   len(str(selection.get("selection_note", "")).strip()) >= 8 and
+                   selection.get("alignment_map") == ep.data.get("alignment_map"),
+                   "efm-capture-selection", "explicit selection note and provenance match the current manifest/map")
+    checks.require(audio.get("pad_frames") == selection.get("pad_frames"),
+                   "efm-capture-pad-frames", "audio.pad_frames matches the selected capture's Orc input order")
+    instance_value = os.environ.get("LDP_INSTANCE_ROOT")
+    if not instance_value:
+        checks.add("FAIL", "efm-capture-provenance", "active device episode workspace is unavailable")
+        return
+    instance = Path(instance_value).expanduser().resolve(strict=True)
+    relative = Path(str(entry.get("report_path", "")))
+    if relative.is_absolute() or any(part in ("..", "") for part in relative.parts) or relative.parts[:1] != ("references",):
+        checks.add("FAIL", "efm-capture-provenance", "stored provenance report path is not workspace-relative")
+        return
+    report_path = instance / relative
+    try:
+        if report_path.is_symlink():
+            raise OSError("provenance report is a symlink")
+        report_path.resolve(strict=True).relative_to((instance / "references").resolve(strict=True))
+        report_bytes = report_path.read_bytes()
+        report = json.loads(report_bytes.decode("utf-8-sig"))
+    except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        checks.add("FAIL", "efm-capture-provenance", f"verified report is missing or unsafe: {exc}")
+        return
+    checks.require(hashlib.sha256(report_bytes).hexdigest() == entry.get("report_sha256"),
+                   "efm-provenance-report-hash", "report digest matches the manifest evidence reference")
+    checks.require(report.get("schema") == "ld-pipeline-efm-capture-provenance-v1" and
+                   report.get("status") == "VERIFIED" and
+                   report.get("identity") == ep.identity and
+                   report.get("capture") == capture.get("label"),
+                   "efm-provenance-identity", "verified report is bound to this episode and selected capture")
+    checks.require(report.get("source_tbc") == capture.get("tbc_file") and
+                   str(report.get("source_tbc_manifest_md5") or "").lower() ==
+                   str(capture.get("tbc_md5", "")).lower() and
+                   report.get("source_tbc_bytes") == capture.get("tbc_bytes"),
+                   "efm-provenance-source", "verified report names the selected manifest TBC and source size/hash evidence")
+    try:
+        tbc_name = str(capture.get("tbc_file", ""))
+        tbc_relative = Path(tbc_name)
+        downloads = ep.downloads().resolve(strict=True)
+        source_tbc = downloads / tbc_relative
+        tbc_ok = (bool(tbc_name) and not tbc_relative.is_absolute() and
+                  len(tbc_relative.parts) == 1 and not any(part in (".", "..") for part in tbc_relative.parts) and
+                  not source_tbc.is_symlink() and source_tbc.is_file() and
+                  source_tbc.stat().st_size == capture.get("tbc_bytes"))
+        if tbc_ok and capture.get("tbc_md5"):
+            tbc_ok = (md5(source_tbc).lower() == str(capture.get("tbc_md5")).lower() and
+                      report.get("source_tbc_fingerprint") == {
+                          "method": "manifest-md5", "md5": str(capture.get("tbc_md5")).lower()})
+        elif tbc_ok:
+            inventory = ((ep.data.get("source_provenance") or {}).get("inventory") or {})
+            source = next((row for row in inventory.get("captures", [])
+                           if row.get("label") == capture.get("label")), {})
+            expected_fingerprint = ((source.get("files") or {}).get("tbc") or {})
+            actual_fingerprint = fingerprint_file(
+                source_tbc, str(inventory.get("fingerprint_policy") or ""))
+            tbc_ok = (expected_fingerprint.get("name") == capture.get("tbc_file") and
+                      expected_fingerprint.get("sha256") == actual_fingerprint.get("sha256") and
+                      expected_fingerprint.get("hash_scope") == actual_fingerprint.get("hash_scope") and
+                      report.get("source_tbc_fingerprint") == {
+                          "method": "local-inventory-sha256", **actual_fingerprint})
+        if tbc_ok:
+            json_name = str(capture.get("json_file", ""))
+            json_relative = Path(json_name)
+            metadata = downloads / json_relative
+            tbc_ok = (bool(json_name) and not json_relative.is_absolute() and
+                      len(json_relative.parts) == 1 and not any(part in (".", "..") for part in json_relative.parts) and
+                      not metadata.is_symlink() and metadata.is_file() and
+                      metadata.stat().st_size == capture.get("json_bytes"))
+            if tbc_ok and capture.get("json_md5"):
+                json_md5 = md5(metadata).lower()
+                tbc_ok = (json_md5 == str(capture.get("json_md5")).lower() and
+                          report.get("source_tbc_json_fingerprint") == {
+                              "method": "manifest-md5", "md5": json_md5})
+            elif tbc_ok:
+                inventory = ((ep.data.get("source_provenance") or {}).get("inventory") or {})
+                source = next((row for row in inventory.get("captures", [])
+                               if row.get("label") == capture.get("label")), {})
+                expected_fingerprint = ((source.get("files") or {}).get("json") or {})
+                actual_fingerprint = fingerprint_file(
+                    metadata, str(inventory.get("fingerprint_policy") or ""))
+                tbc_ok = (expected_fingerprint.get("name") == capture.get("json_file") and
+                          expected_fingerprint.get("sha256") == actual_fingerprint.get("sha256") and
+                          expected_fingerprint.get("hash_scope") == actual_fingerprint.get("hash_scope") and
+                          report.get("source_tbc_json_fingerprint") == {
+                              "method": "local-inventory-sha256", **actual_fingerprint})
+            tbc_ok = (tbc_ok and report.get("source_tbc_json") == capture.get("json_file") and
+                      report.get("source_tbc_json_bytes") == capture.get("json_bytes") and
+                      str(report.get("source_tbc_json_md5") or "").lower() ==
+                      str(capture.get("json_md5", "")).lower())
+    except (AttributeError, OSError, PipelineError, TypeError, ValueError):
+        tbc_ok = False
+    checks.require(tbc_ok,
+                   "efm-provenance-tbc", "selected TBC still exists at the manifest size")
+    checks.require(isinstance(report.get("path_checks"), dict) and
+                   all(report["path_checks"].get(key) is True for key in
+                       ("loaded_tbc", "tbc_metadata", "efm_output", "efm_report", "efm_success")),
+                   "efm-provenance-log", "Orc log source/output path checks all passed")
+    if wav_path is None or not wav_path.is_file():
+        checks.add("FAIL", "efm-provenance-wav", "selected native EFM WAV is missing")
+        return
+    wav_relative = Path(str(report.get("wav_relative_path", "")))
+    if wav_relative.is_absolute() or any(part in ("..", "") for part in wav_relative.parts):
+        checks.add("FAIL", "efm-provenance-wav-path", "report WAV path is not audio-root-relative")
+        return
+    expected_wav = (ld.root("audio") / wav_relative).resolve(strict=False)
+    checks.require(expected_wav == wav_path.resolve(strict=False),
+                   "efm-provenance-wav-path", "provenance WAV path matches files.ld_native")
+    try:
+        wav_ok = (not wav_path.is_symlink() and wav_path.stat().st_size == report.get("wav_size_bytes") and
+                  sha256(wav_path) == report.get("wav_sha256") and
+                  entry.get("wav_sha256") == report.get("wav_sha256"))
+    except OSError:
+        wav_ok = False
+    checks.require(wav_ok, "efm-provenance-wav-hash",
+                   "native WAV size and SHA-256 match the verified decode")
+    efm_report_relative = Path(str(report.get("efm_report_relative_path", "")))
+    if efm_report_relative.is_absolute() or any(part in ("..", "") for part in efm_report_relative.parts):
+        checks.add("FAIL", "efm-provenance-text-report", "EFMSink report path is not audio-root-relative")
+    else:
+        efm_report_path = ld.root("audio") / efm_report_relative
+        try:
+            report_ok = (efm_report_path.is_file() and
+                         efm_report_path.stat().st_size == report.get("efm_report_size_bytes") and
+                         sha256(efm_report_path) == report.get("efm_report_sha256"))
+        except OSError:
+            report_ok = False
+        checks.require(report_ok, "efm-provenance-text-report",
+                       "EFMSink report still matches its recorded size and SHA-256")
 
 
 def validate_local_inventory(checks: Checks, episode_data: dict, captures: list[dict],
@@ -289,7 +453,10 @@ def main() -> int:
                       "audio.dvd_free_approved", "promote only via the explicit no-DVD audio stage")
             c.require(d.get("audio", {}).get("absolute_av_reference_available") is False,
                       "audio.absolute_av_reference", "record that no external DVD A/V reference was available")
-        c.file(resolve(ep, "ld_native"), "ld-native-WAV")
+        native = resolve(ep, "ld_native")
+        c.file(native, "ld-native-WAV")
+        if selected_cap:
+            validate_efm_capture_provenance(c, ep, ld, selected_cap, native)
         c.file(resolve(ep, "ld_corrected"), "ld-corrected-WAV")
         c.file(resolve(ep, "ld_synced"), "sample-accurate-LD-synced-FLAC")
 

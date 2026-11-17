@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -38,6 +39,7 @@ from workflow_app_model import (WorkflowAppError, build_intake_plan,
                                  inspect_stack_console, build_stack_console_plan,
                                 write_new_plan)  # noqa: E402
 from pad_review import PadReviewWindow, PreviewCache  # noqa: E402
+from pad_classification_review import PadClassificationReviewWindow  # noqa: E402
 from review_popup import HumanReviewPopup  # noqa: E402
 from retime_break_review import (RetimeBreakReviewError,
                                  RetimeBreakReviewWindow)  # noqa: E402
@@ -60,10 +62,17 @@ def _form_value_from_template(value: Any) -> str:
 def _next_intake_plan_filename(episode: str, directory: Path = ROOT) -> str:
     """Suggest a fresh immutable plan name without overwriting prior plans."""
     base = f"{episode.strip().upper() or 'episode'}-intake-plan"
-    candidate = f"{base}.json"
+    return _next_available_filename(f"{base}.json", directory)
+
+
+def _next_available_filename(filename: str, directory: Path) -> str:
+    requested = Path(filename).name
+    base = Path(requested).stem
+    suffix = Path(requested).suffix or ".json"
+    candidate = f"{base}{suffix}"
     index = 2
     while (Path(directory) / candidate).exists():
-        candidate = f"{base}-{index}.json"
+        candidate = f"{base}-{index}{suffix}"
         index += 1
     return candidate
 
@@ -80,6 +89,31 @@ def _device_plan_directory(profile_path: Path, bundle_root: Path = ROOT) -> Path
             relative.parts[2] != "machine.json"):
         raise WorkflowAppError("selected profile is not in the verified device config folder")
     directory = devices / relative.parts[0] / "plans"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def _episode_plan_directory(plan: dict[str, Any], bundle_root: Path = ROOT) -> Path:
+    """Resolve and validate the active device/episode plans directory."""
+    profile_path = Path(str(plan.get("profile", ""))).expanduser().resolve(strict=True)
+    instance_value = plan.get("instance_root")
+    if not isinstance(instance_value, str) or not instance_value.strip():
+        raise WorkflowAppError("stage plans require the active device episode workspace")
+    instance = Path(instance_value).expanduser().resolve(strict=True)
+    from shared_workspace import (LockError, validate_device_config_profile,
+                                  validate_instance)
+    try:
+        profile = json.loads(profile_path.read_text(encoding="utf-8-sig"))
+        if not validate_device_config_profile(profile_path, profile, bundle_root):
+            raise WorkflowAppError("stage-plan profile is not this app's device-scoped profile")
+        identity = str(plan.get("identity") or
+                       f"{plan.get('series', 'DS9')}:{plan.get('episode', '')}")
+        validated = validate_instance(str(instance), profile_path, profile, identity)
+    except WorkflowAppError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, LockError, TypeError, ValueError) as exc:
+        raise WorkflowAppError(f"cannot validate device episode plan directory: {exc}") from exc
+    directory = validated / "plans"
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 
@@ -193,6 +227,9 @@ class WorkflowApp:
         self.plan: dict[str, Any] | None = None
         self.plan_from_intake = False
         self.intake_plan_snapshot: str | None = None
+        self.auto_advance_after_run = False
+        self.auto_run_after_preview = False
+        self.auto_start_rife_after_pad_record = False
         self.form_editable = True
         self.field_widgets: dict[str, ttk.Widget] = {}
         self.browse_buttons: dict[str, ttk.Button] = {}
@@ -202,6 +239,9 @@ class WorkflowApp:
         self.pending_plan_hash: str | None = None
         self.pending_review_step: str | None = None
         self.waiting_review_step: str | None = None
+        self.auto_advance_after_run = False
+        self.auto_run_after_preview = False
+        self.auto_start_rife_after_pad_record = False
         self.active_review_popup: HumanReviewPopup | None = None
         self.opencode_help_audit: dict[str, Any] | None = None
         self.opencode_help_process: subprocess.Popen | None = None
@@ -210,6 +250,7 @@ class WorkflowApp:
         self.output_queue: queue.Queue[str] = queue.Queue()
         self.pad_review_windows: list[PadReviewWindow] = []
         self.pad_review_caches: set[PreviewCache] = set()
+        self.pad_classification_window: PadClassificationReviewWindow | None = None
         self.values["archive_url"].trace_add("write", self._archive_url_changed)
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -347,7 +388,7 @@ class WorkflowApp:
         ToolTip(self.preview_button,
                 "For a new intake, this automatically saves an immutable plan under your unique device folder, then previews it. "
                 "Review the preview before running anything.")
-        self.run_button = ttk.Button(actions, text="Run plan…", command=lambda: self._launch("run"))
+        self.run_button = ttk.Button(actions, text="Run", command=lambda: self._launch("run"))
         self.run_button.pack(side="left", padx=5)
         self.resume_button = ttk.Button(actions, text="Resume", command=lambda: self._launch("resume"))
         self.resume_button.pack(side="left", padx=5)
@@ -357,8 +398,11 @@ class WorkflowApp:
         self.review_box.pack(side="left")
         self.approve_button = ttk.Button(actions, text="Open review…", command=self._approve)
         self.approve_button.pack(side="left", padx=5)
-        self.pad_review_button = ttk.Button(actions, text="Review PAD frames", command=self._review_pad_frames)
+        self.pad_review_button = ttk.Button(actions, text="Review PAD output", command=self._review_pad_frames)
         self.pad_review_button.pack(side="left", padx=5)
+        self.pad_classify_button = ttk.Button(
+            actions, text="Classify PAD candidates", command=self._classify_pad_candidates)
+        self.pad_classify_button.pack(side="left", padx=5)
 
         self.status = tk.StringVar(value="Load an intake plan, or open an existing workflow plan.")
         ttk.Label(outer, textvariable=self.status, wraplength=940).pack(anchor="w", pady=(0, 6))
@@ -397,6 +441,16 @@ class WorkflowApp:
         ToolTip(self.prepare_retime_button,
                 "Create a report-only V15 LD-threshold and DVD-silence candidate plan. "
                 "All episode-specific pairing parameters must be supplied explicitly.")
+        self.select_efm_button = ttk.Button(
+            console_header, text="Select verified EFM capture…", command=self._select_efm_capture)
+        self.select_efm_button.pack(side="right", padx=(0, 6))
+        ToolTip(self.select_efm_button,
+                "Only verified per-capture EFM provenance reports are eligible. The selected WAV's capture and Orc input paths are checked before the manifest is updated.")
+        self.verify_efm_button = ttk.Button(
+            console_header, text="Verify EFM decode…", command=self._verify_efm_capture)
+        self.verify_efm_button.pack(side="right", padx=(0, 6))
+        ToolTip(self.verify_efm_button,
+                "Bind one EFMSink log/WAV/report to the manifest-declared TBC capture. This does not rank or select the capture.")
         self.stage_console_button = ttk.Button(console_header, text="Build next stack plan", command=self._stage_console)
         self.stage_console_button.pack(side="right")
         ToolTip(self.stage_console_button,
@@ -595,6 +649,9 @@ class WorkflowApp:
         self.plan = None
         self.plan_from_intake = False
         self.intake_plan_snapshot = None
+        self.auto_advance_after_run = False
+        self.auto_run_after_preview = False
+        self.auto_start_rife_after_pad_record = False
         self.previewed_plan_hash = None
         self.waiting_review_step = None
         self.opencode_help_results.clear()
@@ -896,6 +953,9 @@ class WorkflowApp:
         self.plan = data
         self.plan_from_intake = False
         self.intake_plan_snapshot = None
+        self.auto_advance_after_run = False
+        self.auto_run_after_preview = False
+        self.auto_start_rife_after_pad_record = False
         self.previewed_plan_hash = None
         self.waiting_review_step = None
         self.opencode_help_results.clear()
@@ -939,6 +999,38 @@ class WorkflowApp:
         self._set_form_editable(False)
         self._update_review_choices()
         self._update_mode_controls()
+        if self._intake_plan_has_passed():
+            self.status.set("This intake plan already passed. Automatically continuing to the next stack-reference review point.")
+            self.root.after_idle(self._auto_start_stack_reference)
+
+    def _intake_plan_has_passed(self) -> bool:
+        """Recognize this exact immutable intake plan's completed workflow state."""
+        plan = self.plan or {}
+        if not self._is_intake_completion_plan() or not plan.get("instance_root"):
+            return False
+        digest = self._plan_digest()
+        profile_value = plan.get("profile")
+        if not digest or not isinstance(profile_value, str):
+            return False
+        try:
+            profile_digest = hashlib.sha256(Path(profile_value).read_bytes()).hexdigest()
+            logs = Path(plan["instance_root"]) / "logs"
+            for state_path in logs.glob("workflow-*.json"):
+                try:
+                    state = json.loads(state_path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                series = str(plan.get("series", "DS9")).upper()
+                episode = str(plan.get("episode", "")).upper()
+                if (state.get("status") == "PASS" and
+                        state.get("plan_sha256") == digest and
+                        state.get("profile_sha256") == profile_digest and
+                        str(state.get("episode", "")).upper() == episode and
+                        str(state.get("series", "DS9")).upper() == series):
+                    return True
+        except OSError:
+            return False
+        return False
 
     def _update_mode_controls(self) -> None:
         mode = self.values["dvd_mode"].get().casefold()
@@ -1063,6 +1155,9 @@ class WorkflowApp:
         self.plan = plan
         self.plan_from_intake = True
         self.intake_plan_snapshot = self._current_intake_snapshot()
+        self.auto_advance_after_run = False
+        self.auto_run_after_preview = False
+        self.auto_start_rife_after_pad_record = False
         self.previewed_plan_hash = None
         self.source_label.configure(text=f"Saved plan: {self.plan_path}")
         # Keep the intake editable through preview. If a value changes, the next
@@ -1093,7 +1188,48 @@ class WorkflowApp:
         self.review_box.configure(values=reviews)
         self.review_choice.set(reviews[0] if reviews else "")
 
-    def _launch(self, action: str) -> None:
+    def _is_intake_completion_plan(self) -> bool:
+        steps = (self.plan or {}).get("steps", [])
+        if any(step.get("kind") == "review" for step in steps):
+            return False
+        stages = [step.get("stage") for step in steps
+                  if step.get("kind", "stage") == "stage"]
+        return stages in (["init-local-episode", "validate-inputs"],
+                          ["download", "init-episode", "validate-inputs"])
+
+    def _auto_start_stack_reference(self) -> None:
+        """Continue a successful intake into the next bounded stack-reference plan."""
+        if self.process and self.process.poll() is None:
+            return
+        try:
+            episode, series, profile, manifest, instance = self._current_episode_context()
+            if not episode or not profile or not manifest or not instance:
+                raise WorkflowAppError("completed intake has no active device episode workspace")
+            context = inspect_stack_console(
+                Path(profile), Path(manifest), episode, Path(instance), series=series)
+            if context.get("phase") != "reference":
+                raise WorkflowAppError(
+                    "intake completed, but this episode already has a stack project or master. "
+                    "Review its current manifest/evidence and build the next plan explicitly.")
+            plan = build_stack_console_plan(
+                context, fingerprint_policy=(self.values["fingerprint_policy"].get().strip() or "balanced"))
+            plan["decisions"].append({
+                "id": "automatic-continuation",
+                "value": "operator initiated Run; continue from verified intake to the first human review gate",
+            })
+        except WorkflowAppError as exc:
+            self.status.set(f"Intake passed; automatic stack continuation paused: {exc}")
+            messagebox.showinfo("Intake complete; review needed", str(exc), parent=self.root)
+            return
+        if not self._save_app_stage_plan(
+                plan, f"{context['identity'].replace(':', '-')}-stack-reference-plan.json",
+                "stack reference"):
+            return
+        self.auto_run_after_preview = True
+        self.status.set("Intake passed. The stack-reference plan is auto-saved; previewing it before the first human review gate.")
+        self._launch("preview")
+
+    def _launch(self, action: str, *, automatic: bool = False) -> None:
         options = {"preview": [], "run": ["--execute"], "resume": ["--execute", "--resume"]}
         if action not in options:
             return
@@ -1106,7 +1242,7 @@ class WorkflowApp:
             if action == "run":
                 # A new/edited form must be previewed before it can be executed.
                 action = "preview"
-                self.status.set("Plan auto-saved. Previewing current values; keep editing if needed, then click Run plan to execute.")
+                self.status.set("Plan auto-saved. Previewing current values; keep editing if needed, then click Run to execute.")
         elif not has_plan:
             messagebox.showerror("No workflow plan",
                                  "Preview an intake to auto-save its plan, or open an existing plan first.",
@@ -1117,12 +1253,14 @@ class WorkflowApp:
         if action == "run":
             stages = [step.get("stage") for step in (self.plan or {}).get("steps", [])
                       if step.get("kind", "stage") == "stage"]
-            text = "Run this plan's allowlisted stages?\n\n" + " → ".join(stages)
-            if any(stage in ("encode-final", "remux") for stage in stages):
+            final_delivery = any(stage in ("encode-final", "remux") for stage in stages)
+            if final_delivery and not automatic:
+                text = "Run this plan's allowlisted stages?\n\n" + " → ".join(stages)
                 text += "\n\nThis plan includes final encoding or remuxing. Confirm only if that work is approved."
-            if not messagebox.askyesno("Confirm workflow execution", text, parent=self.root):
-                return
+                if not messagebox.askyesno("Confirm workflow execution", text, parent=self.root):
+                    return
             self._set_form_editable(False)
+            self.auto_advance_after_run = (not automatic and self._is_intake_completion_plan())
         self._start_process([sys.executable, str(RUN_WORKFLOW), "--plan", str(self.plan_path),
                              *options[action], *self._logging_args()], action)
 
@@ -1436,29 +1574,9 @@ class WorkflowApp:
             messagebox.showerror("Could not build stack plan", str(exc), parent=self.root)
             return
 
-        destination = filedialog.asksaveasfilename(
-            title="Save a new stack-stage plan", initialdir=str(ROOT),
-            initialfile=f"{series}-{episode}-{context['phase']}-plan.json", defaultextension=".json",
-            filetypes=(("JSON plans", "*.json"),))
-        if not destination:
-            return
-        try:
-            saved = write_new_plan(Path(destination), stage_plan)
-        except (WorkflowAppError, OSError) as exc:
-            messagebox.showerror("Stack plan not saved", str(exc), parent=self.root)
-            return
-        self.plan_path = saved
-        self.plan = stage_plan
-        self.previewed_plan_hash = None
-        self.waiting_review_step = None
-        self.opencode_help_results.clear()
-        self.source_label.configure(text=f"Stage plan: {saved}")
-        self._set_form_editable(False)
-        self._update_review_choices()
-        self.status.set(f"Built {context['phase']} phase plan. Preview it before running; human review remains required.")
-        self._append_output(f"Built {context['phase']} stage plan: {saved}\n")
-        if not self.console_expanded:
-            self._toggle_console()
+        self._save_app_stage_plan(
+            stage_plan, f"{series}-{episode}-{context['phase']}-plan.json",
+            f"{context['phase']} stack");
 
     def _current_episode_context(self) -> tuple[str, str, str, str, str]:
         """Resolve the GUI's current series, episode, profile, manifest, and workspace values."""
@@ -1490,14 +1608,10 @@ class WorkflowApp:
 
     def _save_app_stage_plan(self, plan: dict[str, Any], initial_name: str,
                              scope: str) -> bool:
-        destination = filedialog.asksaveasfilename(
-            title=f"Save a new {scope} plan", initialdir=str(ROOT),
-            initialfile=initial_name, defaultextension=".json",
-            filetypes=(("JSON plans", "*.json"),))
-        if not destination:
-            return False
         try:
-            saved = write_new_plan(Path(destination), plan)
+            plans_dir = _episode_plan_directory(plan, ROOT)
+            destination = plans_dir / _next_available_filename(initial_name, plans_dir)
+            saved = write_new_plan(destination, plan)
         except (WorkflowAppError, OSError) as exc:
             messagebox.showerror("Plan not saved", str(exc), parent=self.root)
             return False
@@ -1505,6 +1619,9 @@ class WorkflowApp:
         self.plan = plan
         self.plan_from_intake = False
         self.intake_plan_snapshot = None
+        self.auto_advance_after_run = False
+        self.auto_run_after_preview = False
+        self.auto_start_rife_after_pad_record = False
         self.template = None
         self.previewed_plan_hash = None
         self.waiting_review_step = None
@@ -1512,8 +1629,8 @@ class WorkflowApp:
         self.source_label.configure(text=f"{scope.title()} plan: {saved}")
         self._set_form_editable(False)
         self._update_review_choices()
-        self.status.set(f"Saved new {scope} plan. Preview it before execution; required human review remains in the plan.")
-        self._append_output(f"Saved new {scope} plan: {saved}\n")
+        self.status.set(f"Auto-saved {scope} plan under the episode workspace. Preview it before execution; required human review remains in the plan.")
+        self._append_output(f"Auto-saved {scope} plan: {saved}\n")
         if not self.console_expanded:
             self._toggle_console()
         return True
@@ -1685,6 +1802,545 @@ class WorkflowApp:
             if reviewer.cache:
                 self.pad_review_caches.add(reviewer.cache)
 
+    def _efm_episode_context(self) -> dict[str, Any]:
+        episode, series, profile_value, manifest_value, instance_value = self._current_episode_context()
+        if not all((episode, profile_value, manifest_value, instance_value)):
+            raise WorkflowAppError("resolve/open an episode plan with a device workspace before EFM review")
+        from ldcommon import Ld, load_episode
+        from shared_workspace import validate_device_config_profile, validate_instance
+        profile_path = Path(profile_value).expanduser().resolve(strict=True)
+        manifest_path = Path(manifest_value).expanduser().resolve(strict=True)
+        instance = Path(instance_value).expanduser().resolve(strict=True)
+        prior = {key: os.environ.get(key) for key in (
+            "LDP_PROFILE", "LDP_SERIES", "LDP_EPISODE", "LDP_IDENTITY", "LDP_INSTANCE_ROOT",
+            "LDP_MANIFEST_DIR", "LDP_INSTANCE_LOGS", "LDP_CUT_PAD_IMAGES", "LDP_INSTANCE_MODE")}
+        try:
+            os.environ.update({
+                "LDP_PROFILE": str(profile_path), "LDP_SERIES": series, "LDP_EPISODE": episode,
+                "LDP_IDENTITY": f"{series}:{episode}", "LDP_INSTANCE_ROOT": str(instance),
+                "LDP_MANIFEST_DIR": str(instance / "manifest"), "LDP_INSTANCE_LOGS": str(instance / "logs"),
+                "LDP_CUT_PAD_IMAGES": str(instance / "cut-pad-images"),
+                "LDP_INSTANCE_MODE": str((json.loads((instance / "workspace.json").read_text(encoding="utf-8-sig"))
+                                            .get("storage_mode") or "shared-release")),
+            })
+            ld = Ld(profile_path)
+            validate_device_config_profile(profile_path, ld.profile, ROOT)
+            validate_instance(str(instance), profile_path, ld.profile, f"{series}:{episode}")
+            ep = load_episode(f"{series}:{episode}", ld, series=series)
+            captures = ep.data.get("captures") or []
+            if not captures:
+                raise WorkflowAppError("episode manifest has no capture inventory")
+            return {"episode": episode, "series": series, "identity": f"{series}:{episode}",
+                    "profile": profile_path, "manifest": manifest_path, "instance": instance,
+                    "probe": ld.probe().resolve(strict=True), "audio_root": ld.root("audio").resolve(strict=True),
+                    "downloads": ep.downloads().resolve(strict=True), "captures": captures,
+                    "manifest_data": ep.data, "ld": ld}
+        except WorkflowAppError:
+            raise
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, PipelineError,
+                RuntimeError, TypeError, ValueError) as exc:
+            raise WorkflowAppError(f"cannot resolve active EFM workspace: {exc}") from exc
+        finally:
+            for key, value in prior.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+    def _verify_efm_capture(self) -> None:
+        if self.process and self.process.poll() is None:
+            messagebox.showwarning("Workflow is running", "Wait for the current command before verifying an EFM decode.", parent=self.root)
+            return
+        try:
+            context = self._efm_episode_context()
+        except WorkflowAppError as exc:
+            messagebox.showinfo("EFM verification unavailable", str(exc), parent=self.root)
+            return
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"Verify EFM decode provenance — {context['identity']}")
+        dialog.geometry("900x350")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        body = ttk.Frame(dialog, padding=12)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text=f"Verify source/log/WAV identity — {context['identity']}",
+                  font=("Segoe UI", 11, "bold")).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 8))
+        labels = [str(row.get("label", "")) for row in context["captures"]]
+        capture = tk.StringVar(value=labels[0] if labels else "")
+        ttk.Label(body, text="Capture").grid(row=1, column=0, sticky="w", pady=4)
+        capture_box = ttk.Combobox(body, textvariable=capture, values=labels, state="readonly", width=14)
+        capture_box.grid(row=1, column=1, sticky="w", pady=4)
+        values = {key: tk.StringVar() for key in ("orc_log", "wav", "efm_report")}
+        rows = (("orc_log", "Orc EFMSink log", "*.log"),
+                ("wav", "Decoded EFM WAV", "*.wav"),
+                ("efm_report", "EFMSink text report", "*.txt"))
+        for row_index, (key, label, pattern) in enumerate(rows, start=2):
+            ttk.Label(body, text=label).grid(row=row_index, column=0, sticky="w", pady=4)
+            ttk.Entry(body, textvariable=values[key]).grid(row=row_index, column=1, columnspan=2,
+                                                           sticky="ew", pady=4)
+            def browse(which=key, file_pattern=pattern):
+                selected = filedialog.askopenfilename(
+                    parent=dialog, title=f"Choose {which.replace('_', ' ')}",
+                    initialdir=str(context["instance"] / "logs"),
+                    filetypes=(("Expected file", file_pattern), ("All files", "*.*")))
+                if selected:
+                    values[which].set(selected)
+            ttk.Button(body, text="Browse…", command=browse).grid(row=row_index, column=3, padx=(6, 0), pady=4)
+
+        def set_defaults(*_args):
+            cap = capture.get().strip()
+            wav_candidates = [context["audio_root"] / context["episode"] / f"{cap}-efm.wav",
+                              context["audio_root"] / f"{context['episode']}-{cap}-efm.wav",
+                              context["audio_root"] / f"{cap}-efm.wav"]
+            wav_candidates = [path for path in wav_candidates if path.is_file()]
+            if len(wav_candidates) == 1:
+                wav = wav_candidates[0]
+                values["wav"].set(str(wav))
+                values["efm_report"].set(str(Path(str(wav) + ".txt")))
+            log_candidates = sorted((context["instance"] / "logs").glob(f"*{cap}*.log"))
+            if len(log_candidates) == 1:
+                values["orc_log"].set(str(log_candidates[0]))
+        capture_box.bind("<<ComboboxSelected>>", set_defaults)
+        set_defaults()
+        body.columnconfigure(1, weight=1)
+
+        def make_plan():
+            cap = capture.get().strip()
+            if not all(values[key].get().strip() for key in values):
+                messagebox.showerror("EFM evidence required", "Select the Orc log, WAV, and EFMSink text report.", parent=dialog)
+                return
+            source = next(row for row in context["captures"] if str(row.get("label")) == cap)
+            tbc = context["downloads"] / str(source["tbc_file"])
+            report_out = (context["instance"] / "references" /
+                          f"efm-provenance-{context['episode']}-{cap}-{uuid.uuid4().hex[:12]}.json")
+            manifest_sha256 = hashlib.sha256(context["manifest"].read_bytes()).hexdigest()
+            plan = {
+                "schema": "ld-pipeline-workflow-plan-v1",
+                "job_id": f"verify-efm-{context['episode'].lower()}-{cap.lower()}-{uuid.uuid4().hex[:12]}",
+                "episode": context["episode"], "series": context["series"], "identity": context["identity"],
+                "episode_title": str(context["manifest_data"].get("title") or context["episode"]),
+                "profile": str(context["profile"]), "manifest_path": str(context["manifest"]),
+                "instance_root": str(context["instance"]),
+                "fingerprint_policy": self.values["fingerprint_policy"].get().strip() or "balanced",
+                "decisions": [{"id": "efm-provenance-capture", "value": cap},
+                              {"id": "efm-provenance-report", "value": str(report_out)},
+                              {"id": "efm-provenance-manifest-sha256", "value": manifest_sha256}],
+                "steps": [{"id": "verify-efm-source-and-output-identity", "stage": "verify-efm-capture",
+                           "args": ["--capture", cap, "--orc-log", values["orc_log"].get().strip(),
+                                    "--wav", values["wav"].get().strip(),
+                                    "--efm-report", values["efm_report"].get().strip(),
+                                    "--report-out", str(report_out),
+                                    "--confirm-manifest-sha256", manifest_sha256],
+                           "inputs": [str(tbc), values["orc_log"].get().strip(),
+                                      values["wav"].get().strip(), values["efm_report"].get().strip()],
+                           "outputs": [str(context["manifest"]), str(report_out)]}],
+            }
+            if not self._save_app_stage_plan(
+                    plan, f"{context['series']}-{context['episode']}-verify-efm-{cap}-plan.json",
+                    "EFM provenance verification"):
+                return
+            self.auto_run_after_preview = True
+            self.status.set("The capture's log/source/WAV binding will be verified; this does not select the capture or choose an audio rate.")
+            dialog.destroy()
+            self._launch("preview")
+
+        buttons = ttk.Frame(body)
+        buttons.grid(row=5, column=0, columnspan=4, sticky="e", pady=(10, 0))
+        ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side="right", padx=5)
+        ttk.Button(buttons, text="Build verification plan", command=make_plan).pack(side="right")
+
+    def _select_efm_capture(self) -> None:
+        if self.process and self.process.poll() is None:
+            messagebox.showwarning("Workflow is running", "Wait for the current command before selecting an EFM capture.", parent=self.root)
+            return
+        try:
+            context = self._efm_episode_context()
+        except WorkflowAppError as exc:
+            messagebox.showinfo("EFM selection unavailable", str(exc), parent=self.root)
+            return
+        audio = context["manifest_data"].get("audio") or {}
+        provenance = audio.get("efm_provenance") or {}
+        verified = []
+        for row in context["captures"]:
+            label = str(row.get("label", ""))
+            history = provenance.get(label)
+            if not isinstance(history, list) or not history:
+                continue
+            entry = history[-1]
+            try:
+                report_path = context["instance"] / Path(str(entry["report_path"]))
+                if report_path.is_symlink():
+                    continue
+                report_path.resolve(strict=True).relative_to((context["instance"] / "references").resolve(strict=True))
+                report_data = json.loads(report_path.read_text(encoding="utf-8-sig"))
+                if (report_data.get("status") != "VERIFIED" or
+                        report_data.get("identity") != context["identity"] or
+                        report_data.get("capture") != label or
+                        hashlib.sha256(report_path.read_bytes()).hexdigest() != entry.get("report_sha256")):
+                    continue
+                wav_rel = Path(str(report_data.get("wav_relative_path", "")))
+                report_rel = Path(str(report_data.get("efm_report_relative_path", "")))
+                if (wav_rel.is_absolute() or report_rel.is_absolute() or
+                        any(part in ("..", "") for part in (*wav_rel.parts, *report_rel.parts))):
+                    continue
+                wav_path = (context["audio_root"] / wav_rel).resolve(strict=True)
+                efm_report_path = (context["audio_root"] / report_rel).resolve(strict=True)
+                if (not efm_report_path.is_file() or efm_report_path.stat().st_size != report_data.get("efm_report_size_bytes") or
+                        hashlib.sha256(efm_report_path.read_bytes()).hexdigest() != report_data.get("efm_report_sha256")):
+                    continue
+            except (OSError, ValueError, KeyError, UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            quality = report_data.get("quality_summary") or {}
+            verified.append((label, report_path, entry["report_sha256"], quality,
+                             efm_report_path, wav_path))
+        labels = [row[0] for row in verified]
+        if len(labels) != len(context["captures"]):
+            missing = sorted(set(str(row.get("label")) for row in context["captures"]) - set(labels))
+            messagebox.showwarning(
+                "EFM provenance incomplete",
+                "Verify the source/log/WAV/report binding for every capture before selection. Missing: " +
+                ", ".join(missing), parent=self.root)
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"Select native EFM capture — {context['identity']}")
+        dialog.geometry("860x430")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        body = ttk.Frame(dialog, padding=12)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text=f"Human capture selection — {context['identity']}",
+                  font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        ttk.Label(body, text="Reports are provenance-verified, not automatically ranked. Compare the error-correction/audio evidence and choose explicitly.",
+                  wraplength=820).pack(anchor="w", pady=(4, 8))
+        table = ttk.Treeview(body, columns=("capture", "assessment", "postc2", "c1", "c2", "missing", "concealed", "muted"),
+                             show="headings", height=7)
+        labels_by_column = {"capture": "Capture", "assessment": "EFM grade", "postc2": "Post-C2 loss %",
+                            "c1": "C1 errors %", "c2": "C2 errors %", "missing": "Missing sections",
+                            "concealed": "Concealed", "muted": "Muted"}
+        for key, heading in labels_by_column.items():
+            table.heading(key, text=heading)
+            table.column(key, width=110 if key != "capture" else 70, anchor="center")
+        table.pack(fill="x", pady=(0, 8))
+        for label, _path, _digest, quality, _efm_report, _wav in verified:
+            table.insert("", "end", values=(label, quality.get("assessment", "unknown"),
+                        quality.get("post_c2_data_loss_pct", "unknown"),
+                        quality.get("c1_uncorrectable_pct", "unknown"),
+                        quality.get("c2_uncorrectable_pct", "unknown"),
+                        quality.get("missing_sections", "unknown"),
+                        quality.get("concealed_samples", "unknown"),
+                        quality.get("muted_samples", "unknown")))
+        capture = tk.StringVar(value="")
+        ttk.Label(body, text="Selected capture").pack(anchor="w")
+        selector = ttk.Combobox(body, textvariable=capture, values=labels, state="readonly", width=14)
+        selector.pack(anchor="w", pady=(2, 6))
+        note = tk.StringVar()
+        ttk.Label(body, text="Selection note (required; explain the evidence used)").pack(anchor="w")
+        ttk.Entry(body, textvariable=note).pack(fill="x", pady=(2, 6))
+
+        def make_plan():
+            selected = capture.get().strip()
+            found = next((row for row in verified if row[0] == selected), None)
+            if not found:
+                messagebox.showerror("Capture required", "Choose one provenance-verified capture.", parent=dialog)
+                return
+            if len(note.get().strip()) < 8:
+                messagebox.showerror("Selection note required", "Explain the comparison in at least 8 characters.", parent=dialog)
+                return
+            label, report_path, digest, quality, _efm_report, selected_wav = found
+            selected_capture = next(row for row in context["captures"] if str(row.get("label")) == label)
+            selected_tbc = context["downloads"] / str(selected_capture["tbc_file"])
+            manifest_sha256 = hashlib.sha256(context["manifest"].read_bytes()).hexdigest()
+            plan = {
+                "schema": "ld-pipeline-workflow-plan-v1",
+                "job_id": f"select-efm-{context['episode'].lower()}-{label.lower()}-{uuid.uuid4().hex[:12]}",
+                "episode": context["episode"], "series": context["series"], "identity": context["identity"],
+                "episode_title": str(context["manifest_data"].get("title") or context["episode"]),
+                "profile": str(context["profile"]), "manifest_path": str(context["manifest"]),
+                "instance_root": str(context["instance"]),
+                "fingerprint_policy": self.values["fingerprint_policy"].get().strip() or "balanced",
+                "decisions": [{"id": "selected-efm-capture", "value": label},
+                              {"id": "efm-selection-note", "value": note.get().strip()},
+                              {"id": "efm-quality-summary", "value": quality},
+                              {"id": "efm-selection-manifest-sha256", "value": manifest_sha256}],
+                "steps": [
+                    {"id": "record-human-efm-capture-selection", "stage": "record-efm-capture",
+                     "args": ["--capture", label, "--provenance-report", str(report_path),
+                              "--confirm-provenance-sha256", digest,
+                              "--confirm-manifest-sha256", manifest_sha256,
+                              "--selection-note", note.get().strip(), "--apply"],
+                     "inputs": [str(row[1]) for row in verified] +
+                               [str(row[4]) for row in verified] + [str(selected_wav)] +
+                               [str(selected_tbc)] +
+                               [str(context["manifest_data"].get("files", {}).get("stack_project", {}).get("name", ""))],
+                     "outputs": [str(context["manifest"]) ]},
+                    {"id": "review-recorded-efm-capture", "kind": "review",
+                     "for_stage": "record-efm-capture",
+                     "prompt": (f"Review the selected capture {label}, the provenance report, selection rationale, "
+                                "recorded Orc source order/pad count, and updated manifest before continuing. "
+                                "No encode or remux is included."),
+                     "inputs": [str(context["manifest"]), str(report_path)], "outputs": []},
+                ],
+            }
+            # Resolve the stack project using the active machine profile, not a guessed root.
+            try:
+                from ldcommon import Ld, load_episode
+                prior = {key: os.environ.get(key) for key in (
+                    "LDP_PROFILE", "LDP_SERIES", "LDP_EPISODE", "LDP_IDENTITY", "LDP_INSTANCE_ROOT", "LDP_MANIFEST_DIR")}
+                try:
+                    os.environ.update({"LDP_PROFILE": str(context["profile"]), "LDP_SERIES": context["series"],
+                                       "LDP_EPISODE": context["episode"], "LDP_IDENTITY": context["identity"],
+                                       "LDP_INSTANCE_ROOT": str(context["instance"]),
+                                       "LDP_MANIFEST_DIR": str(context["instance"] / "manifest")})
+                    ld = Ld(context["profile"])
+                    ep = load_episode(context["identity"], ld, series=context["series"])
+                    plan["steps"][0]["inputs"][-1] = str(ep.path("stack_project").resolve(strict=True))
+                finally:
+                    for key, value in prior.items():
+                        if value is None:
+                            os.environ.pop(key, None)
+                        else:
+                            os.environ[key] = value
+            except (PipelineError, OSError) as exc:
+                messagebox.showerror("Cannot resolve Orc project", str(exc), parent=dialog)
+                return
+            if not self._save_app_stage_plan(
+                    plan, f"{context['series']}-{context['episode']}-record-efm-capture-plan.json",
+                    "human-selected EFM capture"):
+                return
+            self.auto_run_after_preview = True
+            self.status.set("Previewing the human EFM capture-selection plan; manifest mutation remains backed up and a separate review gate follows.")
+            dialog.destroy()
+            self._launch("preview")
+
+        buttons = ttk.Frame(body)
+        buttons.pack(fill="x", pady=(8, 0))
+        ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side="right", padx=5)
+        ttk.Button(buttons, text="Build selection plan", command=make_plan).pack(side="right")
+
+    def _classify_pad_candidates(self) -> None:
+        if self.process and self.process.poll() is None:
+            messagebox.showwarning("Workflow is running", "Open PAD classification after the current command finishes.",
+                                   parent=self.root)
+            return
+        if self.pad_classification_window and self.pad_classification_window.window:
+            self.pad_classification_window.window.lift()
+            return
+        episode, series, profile_value, manifest_value, instance_value = self._current_episode_context()
+        if not all((episode, profile_value, manifest_value, instance_value)):
+            messagebox.showwarning(
+                "PAD classification unavailable",
+                "Resolve/open an episode plan with a device workspace, profile, and manifest first.",
+                parent=self.root)
+            return
+        profile = Path(profile_value).expanduser()
+        manifest = Path(manifest_value).expanduser()
+        instance = Path(instance_value).expanduser()
+        if not profile.is_file() or not manifest.is_file() or not instance.is_dir():
+            messagebox.showerror("PAD classification unavailable",
+                                 "The active profile, manifest, or device workspace is missing.",
+                                 parent=self.root)
+            return
+
+        def released(cache: PreviewCache) -> None:
+            cache.cleanup()
+            self.pad_review_caches.discard(cache)
+            self.pad_classification_window = None
+
+        reviewer = PadClassificationReviewWindow(
+            self.root, episode, series, profile, manifest, instance,
+            on_report=self._save_pad_classification_plan, on_close=released)
+        self.pad_classification_window = reviewer
+        reviewer.show()
+        if reviewer.window is None:
+            self.pad_classification_window = None
+        elif reviewer.cache:
+            self.pad_review_caches.add(reviewer.cache)
+
+    def _save_pad_classification_plan(self, report_path: Path, report_sha256: str,
+                                      report: dict) -> bool:
+        """Save the human-reviewed manifest update as an immutable workflow plan."""
+        try:
+            episode, series, profile, manifest, instance = self._current_episode_context()
+            identity = f"{series}:{episode}"
+            if report.get("identity") != identity or report.get("manifest_path") != str(Path(manifest).resolve()):
+                raise WorkflowAppError("PAD classification report identity/path no longer matches the active plan")
+            manifest_path = Path(manifest).resolve(strict=True)
+            instance_root = Path(instance).resolve(strict=True)
+            plans = instance_root / "plans"
+            committed = report_path.with_name(report_path.stem + "-committed.json")
+            evidence = report.get("evidence") or {}
+            inputs = [report_path,
+                      Path(evidence["pad_audit"]),
+                      Path(evidence["repair_frames"]),
+                      Path(evidence["fullres_report"])]
+            counts = {kind: sum(row.get("classification") == kind for row in report["candidates"])
+                      for kind in ("cut", "rife")}
+            note = str(report.get("review_note", "")).strip()
+            plan = {
+                "schema": "ld-pipeline-workflow-plan-v1",
+                "job_id": f"pad-classify-{episode.lower()}-{uuid.uuid4().hex[:12]}",
+                "episode": episode, "series": series, "identity": identity,
+                "episode_title": str(json.loads(manifest_path.read_text(encoding="utf-8-sig")).get("title") or episode),
+                "profile": str(Path(profile).resolve(strict=True)),
+                "manifest_path": str(manifest_path),
+                "instance_root": str(instance_root),
+                "fingerprint_policy": self.values["fingerprint_policy"].get().strip() or "balanced",
+                "decisions": [
+                    {"id": "pad-classification-report-sha256", "value": report_sha256},
+                    {"id": "pad-classification-counts", "value": counts},
+                    {"id": "pad-review-note", "value": note},
+                    {"id": "final-encode-remux", "value": "not included; no encode/remux approval"},
+                ],
+                "steps": [
+                    {"id": "record-reviewed-pad-classifications",
+                     "stage": "record-pad-classifications",
+                     "args": ["--series", series, "--decision-file", str(report_path),
+                              "--confirm-review", identity,
+                              "--confirm-decision-sha256", report_sha256,
+                              "--review-note", note, "--apply"],
+                     "inputs": [str(path.resolve(strict=True)) for path in inputs],
+                     "outputs": [str(manifest_path), str(committed)]},
+                    {"id": "review-recorded-pad-classifications", "kind": "review",
+                     "for_stage": "record-pad-classifications",
+                     "prompt": ("Review the committed PAD classification record and updated manifest. "
+                                f"The human visual review selected {counts['cut']} cut PAD(s) and "
+                                f"{counts['rife']} non-cut/RIFE PAD(s). Confirm the frame list, "
+                                "backups, provenance, and any cut still/hold policy before continuing to RIFE. "
+                                "This approval does not authorize padfix, encode, or remux."),
+                     "inputs": [str(manifest_path), str(committed), str(report_path)],
+                     "outputs": []},
+                ],
+            }
+            if not self._save_app_stage_plan(
+                    plan, f"{series}-{episode}-pad-classification-plan.json",
+                    "human-reviewed PAD classification"):
+                return False
+        except (WorkflowAppError, OSError, KeyError, TypeError, ValueError,
+                json.JSONDecodeError) as exc:
+            messagebox.showerror("PAD decisions not planned", str(exc), parent=self.root)
+            return False
+        self.auto_start_rife_after_pad_record = True
+        self.auto_run_after_preview = True
+        self.status.set("The immutable PAD-record plan is saved. Previewing the manifest update; the explicit review gate remains before RIFE.")
+        self._launch("preview")
+        return True
+
+    def _auto_start_rife_replacements(self) -> None:
+        """Build a fresh, fingerprinted RIFE-only plan from committed human decisions."""
+        if self.process and self.process.poll() is None:
+            return
+        try:
+            episode, series, profile_value, manifest_value, instance_value = self._current_episode_context()
+            if not all((episode, profile_value, manifest_value, instance_value)):
+                raise WorkflowAppError("committed PAD review has no active device episode workspace")
+            manifest_path = Path(manifest_value).resolve(strict=True)
+            instance_root = Path(instance_value).resolve(strict=True)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+            review = (manifest.get("pads") or {}).get("pad_classification_review") or {}
+            decision_sha = str(review.get("decision_sha256") or "")
+            committed_path = None
+            for candidate in sorted((instance_root / "plans").glob("*-committed.json")):
+                try:
+                    row = json.loads(candidate.read_text(encoding="utf-8-sig"))
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                if row.get("status") == "COMMITTED" and row.get("identity") == f"{series}:{episode}" and row.get("manifest_sha256_after") == hashlib.sha256(manifest_path.read_bytes()).hexdigest() and row.get("decision_sha256") == decision_sha:
+                    committed_path = candidate
+                    committed_report = row
+                    break
+            if not committed_path:
+                raise WorkflowAppError("cannot find the committed PAD decision matching the current manifest")
+            report_evidence = committed_report.get("evidence") or {}
+            audit_path = Path(report_evidence["pad_audit"]).resolve(strict=True)
+            repair_path = Path(report_evidence["repair_frames"]).resolve(strict=True)
+            fullres_path = Path(report_evidence["fullres_report"]).resolve(strict=True)
+            candidate_frames = sorted({int(value) for value in repair_path.read_text(encoding="utf-8-sig").split()})
+            cut_frames = {int(frame) for frame in review.get("cut_frames", [])}
+            rife_frames = {int(frame) for frame in review.get("rife_frames", [])}
+            if cut_frames | rife_frames != set(candidate_frames) or cut_frames & rife_frames:
+                raise WorkflowAppError("committed PAD decision does not cover the exact repair candidate set")
+            from ldcommon import Ld, load_episode
+            env_keys = ("LDP_PROFILE", "LDP_SERIES", "LDP_EPISODE", "LDP_IDENTITY",
+                        "LDP_INSTANCE_ROOT", "LDP_MANIFEST_DIR", "LDP_INSTANCE_LOGS",
+                        "LDP_CUT_PAD_IMAGES", "LDP_INSTANCE_MODE")
+            prior_env = {key: os.environ.get(key) for key in env_keys}
+            try:
+                os.environ["LDP_PROFILE"] = str(Path(profile_value).resolve(strict=True))
+                os.environ["LDP_SERIES"] = series
+                os.environ["LDP_EPISODE"] = episode
+                os.environ["LDP_IDENTITY"] = f"{series}:{episode}"
+                os.environ["LDP_INSTANCE_ROOT"] = str(instance_root)
+                os.environ["LDP_MANIFEST_DIR"] = str(instance_root / "manifest")
+                os.environ["LDP_INSTANCE_LOGS"] = str(instance_root / "logs")
+                os.environ["LDP_CUT_PAD_IMAGES"] = str(instance_root / "cut-pad-images")
+                os.environ["LDP_INSTANCE_MODE"] = "shared-release"
+                ld = Ld(profile_value)
+                ep = load_episode(f"{series}:{episode}", ld, series=series)
+                probe_path = ld.probe().resolve(strict=True)
+                avs = ep.path("avs_encode").resolve(strict=True)
+            finally:
+                for key, value in prior_env.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+            label = str(manifest.get("pad_report_label") or episode)
+            run_id = uuid.uuid4().hex
+            work = probe_path / "rife-padframes-local" / label / run_id
+            args = ["--audit", str(audit_path), "--repair-frames", str(repair_path),
+                    "--fullres", str(fullres_path), "--run-id", run_id]
+            for frame in review.get("hold_frames", []):
+                args.extend(("--hold-cut", str(int(frame))))
+            for frame, image in sorted((review.get("cut_images") or {}).items(), key=lambda item: int(item[0])):
+                args.extend(("--cut-pad-image", f"{int(frame)}={image}"))
+            for frame in review.get("accepted_residual_frames", []):
+                args.extend(("--accept-residual", str(int(frame))))
+            image_inputs = [Path(path).resolve(strict=True) for path in (review.get("cut_images") or {}).values()]
+            avs = Path(manifest["files"]["avs_encode"]["name"])
+            # Resolve through the selected profile via the same manifest accessor used by the stage.
+            outputs = [probe_path / "rife-pad-replacements-local.tsv",
+                       work / "rife-cpu-tta.log"]
+            for frame in candidate_frames:
+                outputs.extend((work / "neighbors" / f"prev_{frame:06d}.png",
+                                work / "neighbors" / f"next_{frame:06d}.png",
+                                work / "interpolated" / f"pad_{frame:06d}.png"))
+            plan = {
+                "schema": "ld-pipeline-workflow-plan-v1",
+                "job_id": f"rife-{episode.lower()}-{run_id[:12]}",
+                "episode": episode, "series": series, "identity": f"{series}:{episode}",
+                "episode_title": str(manifest.get("title") or episode),
+                "profile": str(Path(profile_value).resolve(strict=True)),
+                "manifest_path": str(manifest_path),
+                "instance_root": str(instance_root),
+                "fingerprint_policy": self.values["fingerprint_policy"].get().strip() or "balanced",
+                "decisions": [
+                    {"id": "pad-decision-sha256", "value": decision_sha},
+                    {"id": "rife-run-id", "value": run_id},
+                    {"id": "rife-candidate-count", "value": len(rife_frames)},
+                    {"id": "final-encode-remux", "value": "not included; no encode/remux approval"},
+                ],
+                "steps": [{
+                    "id": "generate-reviewed-rife-replacements", "stage": "rife-replacements",
+                    "args": args,
+                    "inputs": [str(path.resolve(strict=True)) for path in
+                               (manifest_path, audit_path, repair_path, fullres_path, avs, committed_path, *image_inputs)],
+                    "outputs": [str(path.resolve(strict=False)) for path in outputs],
+                }],
+            }
+            if not self._save_app_stage_plan(
+                    plan, f"{series}-{episode}-rife-replacements-plan.json", "human-reviewed RIFE replacement"):
+                return
+        except (WorkflowAppError, PipelineError, OSError, KeyError, TypeError, ValueError,
+                json.JSONDecodeError) as exc:
+            messagebox.showerror("RIFE plan not built", str(exc), parent=self.root)
+            self.status.set(f"PAD decisions remain recorded; RIFE continuation stopped: {exc}")
+            self.auto_start_rife_after_pad_record = False
+            return
+        self.auto_run_after_preview = True
+        self.status.set("The RIFE-only plan is auto-saved. Previewing and running it; padfix, encode, and remux still need separate plans/approval.")
+        self._launch("preview")
+
     def _plan_digest(self) -> str | None:
         if not self.plan_path or not self.plan_path.is_file():
             return None
@@ -1761,9 +2417,22 @@ class WorkflowApp:
             elif line.startswith("__WORKFLOW_DONE__"):
                 code = line.removeprefix("__WORKFLOW_DONE__")
                 review_to_open = self.pending_review_step if code == "3" else None
+                completed_action = self.pending_action
+                auto_advance = (code == "0" and completed_action == "run" and
+                                self.auto_advance_after_run)
+                auto_run = (code == "0" and completed_action == "preview" and
+                            self.auto_run_after_preview)
+                auto_rife = (code == "0" and completed_action == "approve" and
+                             self.auto_start_rife_after_pad_record)
                 if (self.pending_action == "preview" and code == "0" and
                         self.pending_plan_hash is not None and self._plan_digest() == self.pending_plan_hash):
                     self.previewed_plan_hash = self.pending_plan_hash
+                self.auto_advance_after_run = False
+                self.auto_run_after_preview = False
+                if code == "4":
+                    self.auto_start_rife_after_pad_record = False
+                elif code != "3":
+                    self.auto_start_rife_after_pad_record = False
                 self.process = None
                 self._set_running(False)
                 if code == "4":
@@ -1781,6 +2450,13 @@ class WorkflowApp:
                                  if row.get("kind") == "review" and row.get("id") == review_to_open), None)
                     if step:
                         self.root.after_idle(lambda review_step=step: self._open_review_popup(review_step))
+                elif auto_advance:
+                    self.root.after_idle(self._auto_start_stack_reference)
+                elif auto_run:
+                    self.root.after_idle(lambda: self._launch("run", automatic=True))
+                elif auto_rife:
+                    self.auto_start_rife_after_pad_record = False
+                    self.root.after_idle(self._auto_start_rife_replacements)
             else:
                 review_match = re.search(r"REVIEW REQUIRED \[([^\]]+)\]", line)
                 if review_match:
@@ -1797,8 +2473,9 @@ class WorkflowApp:
     def _set_running(self, running: bool) -> None:
         state = "disabled" if running else "normal"
         for button in (self.preview_button, self.run_button, self.resume_button, self.approve_button,
-                       self.pad_review_button, self.stage_console_button,
-                       self.prepare_retime_button, self.review_retime_button):
+                       self.pad_review_button, self.pad_classify_button, self.stage_console_button,
+                       self.prepare_retime_button, self.review_retime_button,
+                       self.verify_efm_button, self.select_efm_button):
             button.configure(state=state)
         self.verbose_logging_check.configure(state=state)
         if hasattr(self, "resolve_button"):
@@ -1820,6 +2497,9 @@ class WorkflowApp:
                     parent=self.root):
                 return
         self._cleanup_pad_previews()
+        if self.pad_classification_window:
+            self.pad_classification_window.close()
+            self.pad_classification_window = None
         self.root.destroy()
 
     def _cleanup_pad_previews(self) -> None:

@@ -1,9 +1,9 @@
 # DS9 LaserDisc OpenCode Operator Pack
 
-**Workflow version: 15** — check `WORKFLOW_VERSION` and follow the core-change/device-log
-rules in `WORKFLOW_VERSIONING.md` before editing or syncing workflow files. The W working tree
-is synchronized separately; its Git metadata remains behind because of pre-existing local
-changes and is not reset or rebased as part of this release.
+**Workflow version: 16 (FromStunToKill app branch)** — check `WORKFLOW_VERSION` and follow the
+core-change/device-log rules in `WORKFLOW_VERSIONING.md` before editing or syncing workflow files.
+This V16 increment is scoped to the app branch; production `main` and the W shared tree remain
+at V15 and are not modified by this release.
 
 **Design goal:** make the workflow clear and reliable enough for capable free or low-cost
 models to run with its bounded steps, explicit ACTION/VERIFY/STOP gates, and deterministic
@@ -601,7 +601,7 @@ permission.
 
 ## Optional FromStunToKill desktop app
 
-Launch the local GUI with `python scripts/workflow_app.py`. It uses the V15 allowlisted
+Launch the local GUI with `python scripts/workflow_app.py`. It uses the V16 allowlisted
 runner and automatically saves concrete, immutable workflow plans under the device's
 `devices/<DEVICE>-<ID>/plans/` folder when **Preview** is clicked; no separate save step is
 needed. Intake fields remain editable after preview and until **Run** is confirmed; edits
@@ -643,8 +643,16 @@ separate plan requiring explicit unique-pair/merged-through selections, a ration
 human review gate, report/input hash checks, a backup, and the V15 atomic manifest writer;
 offsets and steps remain unmeasured. Final encode/remux is not started by candidate tools.
 
+The V16 PAD flow requires human visual classification of every candidate before RIFE. It shows
+the exact cut-misidentification warning, preserves DVD/no-DVD cut safeguards, and writes an
+immutable review report before a separately reviewed manifest update. Only after that explicit
+gate can the app generate a unique-run RIFE-only plan. EFM verification binds each decode log,
+TBC/metadata source, WAV, and EFMSink report to one manifest capture; capture selection is a
+separate human decision with an explicit rationale and Orc input-order PAD count. These tools
+do not authorize a final encode or remux.
+
 **Get OpenCode help** is optional, audit-logged, and disabled by default; the operator can
-explicitly enable it in the app. The V15 core workflow, local-source intake, Archive picker,
+explicitly enable it in the app. The V16 app workflow, local-source intake, Archive picker,
 candidate analysis, and human approval gates work without it. AI output never selects
 measurements or grants approval.
 
@@ -661,6 +669,9 @@ measurements or grants approval.
 | `scripts/run_stage.py` | Allowlisted stage dispatcher; dry-run plan by default, explicit `--execute`, series-aware stage identity, downloader-specific checks for early download, and full gates before other writes |
 | `scripts/run_workflow.py` | Ordered JSON-plan orchestration; series-scoped status/log/locks/resume, input/output fingerprints, and conservative resume |
 | `scripts/workflow_app.py` | Optional Tk desktop intake and review UI; saves plans for the same allowlisted V15 runner |
+| `scripts/pad_classification_review.py` / `record_pad_classifications.py` | Human visual PAD classification and immutable, fail-closed manifest recording before RIFE |
+| `scripts/verify_efm_capture.py` / `record_efm_capture_selection.py` | Bind each EFMSink decode to its manifest TBC/log/WAV/report, then record an explicit human capture choice |
+| `scripts/backup_device_workspace.py` | Checksum-verified per-episode/device evidence archives and dry-run-first no-merge restore |
 | `scripts/retime_break_review.py` | GUI table for explicit V15 candidate classification; creates a separately reviewed record plan |
 | `scripts/measure_ld_black.py`, `scripts/prepare_retime_breaks.py`, `scripts/record_retime_breaks.py` | Threshold-sensitivity report, ambiguous-safe DVD/LD pairing report, and explicit backed-up recording of reviewed intervals; offsets remain unmeasured until edge adjudication |
 | `scripts/retime_break_candidates.py` | Pure pairing/record-validation helpers used by the report and recorder; no manifest write on report path |
@@ -679,6 +690,9 @@ measurements or grants approval.
 | `V14-RELEASE.md` | Section 31 Archive tree, natural resolver, and series-aware VOY workflow release record |
 | `V15-RELEASE.md` | Changelog source boundary, fail-closed break candidate intake, and retime output verification improvements |
 | `FROMSTUNTOKILL-V15-APP.md` | Optional desktop app integration, review boundaries, validation, and platform limits |
+| `V16-RELEASE.md` | FromStunToKill app-branch PAD/EFM provenance and workspace-safety hardening; production `main` remains V15 |
+| `V16-QUEUE.md` | Non-operative record of unresolved reconstructed episode evidence; not live instructions |
+| `FROMSTUNTOKILL-V16-APP.md` | V16 app-branch integration scope, validation, and publication boundary |
 | `V9-QUEUE.md` | Historical V9 device-log review and inherited carry-overs; planning only |
 | `V10-QUEUE.md` | Historical V10 scope and implementation record; planning only |
 | `V11-QUEUE.md` | Historical V11 record and dependency-policy proposal; planning only |

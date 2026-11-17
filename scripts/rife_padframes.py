@@ -21,6 +21,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -39,7 +40,120 @@ REPORT_HEADER = ("episode", "frame", "time", "method", "motion_score",
                  "fullres_rgb_max", "fullres_rgb_mean", "seconds", "png",
                  "source_dvd_timestamp", "source_dvd_frame", "source_png")
 MAX_RGB, MAX_MEAN = 2, 0.0005
+RIFE_MISIDENTIFICATION_WARNING = (
+    "ONLY generate as an interpolated frame if this pad frame was incorrectly identified as preceding a scene cut.")
 DVD_IMAGE_RE = re.compile(r"^DVD-(\d{2})-(\d{2})-(\d{2})\.(\d{3})-f(\d{8})\.png$", re.IGNORECASE)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def validate_human_classification(episode_data: dict, candidate_frames: set[int],
+                                  audit: Path, repair_file: Path, fullres: Path,
+                                  hold_frames: set[int], image_frames: set[int],
+                                  accepted_residual: set[int], *,
+                                  identity: str | None = None,
+                                  instance_root: Path | None = None) -> None:
+    """Enforce the V16 human review record before any non-empty RIFE run."""
+    if not candidate_frames:
+        return
+    pads = episode_data.get("pads") or {}
+    review = pads.get("pad_classification_review") or {}
+    if (review.get("schema") != "ld-pipeline-pad-classification-review-v1" or
+            not re.fullmatch(r"[0-9a-f]{64}", str(review.get("decision_sha256", ""))) or
+            not str(review.get("reviewed_by", "")).strip() or
+            len(str(review.get("review_note", "")).strip()) < 8):
+        raise PipelineError("human PAD classification must be recorded and reviewed before RIFE")
+    if instance_root is not None:
+        def read_plan(key: str, status: str) -> dict:
+            relative = Path(str(review.get(key, "")))
+            if (relative.is_absolute() or relative.parts[:1] != ("plans",) or
+                    any(part in ("..", "") for part in relative.parts)):
+                raise PipelineError(f"PAD {key} must identify a report under the active device plans folder")
+            path = instance_root / relative
+            if path.is_symlink():
+                raise PipelineError(f"PAD {key} may not be a symlink")
+            try:
+                path.resolve(strict=True).relative_to((instance_root / "plans").resolve(strict=True))
+                value = json.loads(path.read_text(encoding="utf-8-sig"))
+            except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise PipelineError(f"cannot read committed PAD {key}: {exc}") from exc
+            if value.get("schema") != "ld-pipeline-pad-classification-review-v1" or value.get("status") != status:
+                raise PipelineError(f"PAD {key} has an unexpected schema/status")
+            if identity and value.get("identity") != identity:
+                raise PipelineError(f"PAD {key} belongs to a different episode")
+            return value
+
+        decision = read_plan("decision_report_path", "HUMAN_REVIEWED")
+        committed = read_plan("committed_report_path", "COMMITTED")
+        decision_path = instance_root / str(review["decision_report_path"])
+        decision_evidence = decision.get("evidence")
+        if not isinstance(decision_evidence, dict):
+            raise PipelineError("PAD human decision report has no hashed evidence inventory")
+        if (_sha256(decision_path) != review.get("decision_sha256") or
+                committed.get("decision_sha256") != review.get("decision_sha256") or
+                decision.get("identity") != committed.get("identity") or
+                decision.get("review_note") != review.get("review_note") or
+                decision.get("reviewed_by") != review.get("reviewed_by") or
+                decision.get("original_cut_frames") != review.get("original_cut_frames") or
+                decision_evidence.get("pad_audit_sha256") != review.get("audit_sha256") or
+                decision_evidence.get("repair_frames_sha256") != review.get("repair_sha256") or
+                decision_evidence.get("fullres_report_sha256") != review.get("fullres_sha256")):
+            raise PipelineError("PAD human decision/commit record does not match the manifest review")
+        decision_rows = decision.get("candidates")
+        if not isinstance(decision_rows, list):
+            raise PipelineError("PAD human decision report has no candidate classifications")
+        decision_cut = sorted(row.get("frame") for row in decision_rows
+                              if isinstance(row, dict) and row.get("classification") == "cut")
+        decision_rife = sorted(row.get("frame") for row in decision_rows
+                               if isinstance(row, dict) and row.get("classification") == "rife")
+        if (decision_cut != review.get("cut_frames") or
+                decision_rife != review.get("rife_frames") or
+                committed.get("cut_frames") != review.get("cut_frames") or
+                committed.get("rife_frames") != review.get("rife_frames")):
+            raise PipelineError("PAD human report and committed classification lists disagree")
+        if review.get("misidentified_cut_reclassifications") and any(
+                decision.get("rife_misidentification_warning") != RIFE_MISIDENTIFICATION_WARNING or
+                row.get("confirmed_misidentified_cut") is not True or
+                row.get("rife_warning_acknowledged") is not True
+                for row in decision.get("candidates", [])
+                if row.get("frame") in set(review["misidentified_cut_reclassifications"])):
+            raise PipelineError("reclassified cut PAD is missing the exact RIFE warning acknowledgement")
+    for path, key in ((audit, "audit_sha256"), (repair_file, "repair_sha256"),
+                      (fullres, "fullres_sha256")):
+        if path.is_symlink() or not path.is_file() or _sha256(path) != review.get(key):
+            raise PipelineError(f"PAD {key} input changed after human visual classification: {path}")
+    try:
+        cut = review.get("cut_frames")
+        rife = review.get("rife_frames")
+        original = review.get("original_cut_frames")
+        hold = review.get("hold_frames")
+        residual = review.get("accepted_residual_frames")
+        images = review.get("cut_images")
+        if any(not isinstance(value, list) or any(type(frame) is not int or frame < 0 for frame in value)
+               or len(value) != len(set(value)) for value in (cut, rife, original, hold, residual)):
+            raise ValueError("frame lists are malformed")
+        if not isinstance(images, dict):
+            raise ValueError("cut_images is not an object")
+        cut_set, rife_set, hold_set = set(cut), set(rife), set(hold)
+        residual_set = set(residual)
+        image_set = {int(frame) for frame in images}
+        current_cuts = pads.get("cut_pad_frames")
+        if (cut_set & rife_set or cut_set | rife_set != candidate_frames or
+                current_cuts != sorted(cut_set) or pads.get("cut_pads") != len(cut_set) or
+                hold_set != hold_frames or image_set != image_frames or
+                residual_set != accepted_residual or hold_set & image_set or
+                (hold_set | image_set) - cut_set or residual_set - candidate_frames or
+                set(review.get("misidentified_cut_reclassifications", [])) !=
+                (rife_set & set(original))):
+            raise PipelineError("current manifest, CLI cut policy, and human PAD classification decisions disagree")
+    except (TypeError, ValueError) as exc:
+        raise PipelineError(f"human PAD classification record is malformed: {exc}") from exc
 
 
 def read_candidates(audit: Path, repair_file: Path, fullres: Path,
@@ -50,16 +164,59 @@ def read_candidates(audit: Path, repair_file: Path, fullres: Path,
         raise PipelineError(f"confirmed PAD repair list missing: {repair_file} - run pad_audit.py first")
     if not fullres.exists():
         raise PipelineError(f"full-raster report missing: {fullres} - run fullres_check.py first")
-    with audit.open(newline="", encoding="utf-8") as f:
-        rows = {int(r["frame"]): r for r in csv.DictReader(f, delimiter="\t")}
-    with fullres.open(newline="", encoding="utf-8") as f:
-        checked = {int(r["frame"]): (int(r["rgb_max"]), float(r["rgb_mean"]))
-                   for r in csv.DictReader(f, delimiter="\t")}
-    wanted = sorted({int(x) for x in repair_file.read_text(encoding="utf-8").split() if x.strip()})
+    def keyed_rows(path: Path, required: tuple[str, ...], label: str) -> dict[int, dict]:
+        result = {}
+        try:
+            with path.open(newline="", encoding="utf-8-sig") as stream:
+                reader = csv.DictReader(stream, delimiter="\t")
+                if not reader.fieldnames or not set(required).issubset(reader.fieldnames):
+                    raise PipelineError(f"{label} has missing columns; expected {required}: {path}")
+                for row in reader:
+                    try:
+                        frame = int(row["frame"])
+                    except (KeyError, TypeError, ValueError) as exc:
+                        raise PipelineError(f"{label} has an invalid frame value: {path}") from exc
+                    if frame < 0 or frame in result:
+                        raise PipelineError(f"{label} contains a negative or duplicate frame {frame}: {path}")
+                    result[frame] = row
+        except (OSError, csv.Error) as exc:
+            raise PipelineError(f"cannot read {label} {path}: {exc}") from exc
+        return result
+
+    try:
+        wanted = [int(x) for x in repair_file.read_text(encoding="utf-8-sig").split() if x.strip()]
+    except (OSError, ValueError) as exc:
+        raise PipelineError(f"cannot parse repair candidate list {repair_file}: {exc}") from exc
+    if len(wanted) != len(set(wanted)) or any(frame < 0 for frame in wanted):
+        raise PipelineError(f"repair candidate list has duplicate or negative frame values: {repair_file}")
+    wanted.sort()
+    rows = keyed_rows(
+        audit,
+        ("frame", "is_predicted_pad", "motion_score", "time") if wanted else ("frame", "is_predicted_pad"),
+        "PAD audit")
+    if not wanted:
+        # An empty confirmed repair list is an identity repair. Still require the
+        # expected full-raster evidence schema, but no per-candidate metrics exist.
+        keyed_rows(fullres, ("frame", "rgb_max", "rgb_mean"), "full-raster report")
+        return []
+    raster_rows = keyed_rows(fullres, ("frame", "rgb_max", "rgb_mean"), "full-raster report")
+    checked = {}
+    for frame, row in raster_rows.items():
+        try:
+            rgb_max, rgb_mean = int(row["rgb_max"]), float(row["rgb_mean"])
+        except (TypeError, ValueError) as exc:
+            raise PipelineError(f"full-raster report has invalid pixel statistics for frame {frame}") from exc
+        if not (0 <= rgb_max <= 255 and math.isfinite(rgb_mean) and 0 <= rgb_mean <= 255):
+            raise PipelineError(f"full-raster report has out-of-range pixel statistics for frame {frame}")
+        checked[frame] = (rgb_max, rgb_mean)
     out = []
     for frame in wanted:
         row = rows.get(frame)
-        if row is None or int(row.get("is_predicted_pad", 0)) != 1:
+        try:
+            is_predicted = int(row.get("is_predicted_pad", 0)) if row else 0
+        except (TypeError, ValueError) as exc:
+            raise PipelineError(f"repair frame {frame} has an invalid PAD-map flag") from exc
+        if row is None or is_predicted != 1:
             raise PipelineError(f"repair frame {frame} is not a PAD-map-matched audit row")
         if frame not in checked:
             raise PipelineError(f"candidate {frame} has no full-raster check - "
@@ -70,8 +227,15 @@ def read_candidates(audit: Path, repair_file: Path, fullres: Path,
                                 f"rgb_max={maxv} rgb_mean={meanv} "
                                 f"(classify per runbook section 6 step 2, then pass "
                                 f"--accept-residual {frame} if it is a PAD)")
-        out.append({"frame": frame, "time": float(row["time"]),
-                    "motion": float(row.get("motion_score", 0) or 0),
+        try:
+            time_s = float(row["time"])
+            motion = float(row["motion_score"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise PipelineError(f"repair frame {frame} has invalid audit metrics") from exc
+        if not math.isfinite(time_s) or not math.isfinite(motion):
+            raise PipelineError(f"repair frame {frame} has non-finite audit metrics")
+        out.append({"frame": frame, "time": time_s,
+                    "motion": motion,
                     "rgb_max": maxv, "rgb_mean": meanv})
     return sorted(out, key=lambda r: r["frame"])
 
@@ -228,13 +392,11 @@ def validate_cut_replacement_policy(episode_data: dict, candidates: set[int],
 
 
 def extract_neighbors(ld: Ld, video: Path, frame: int, inp: Path) -> tuple[Path, Path]:
-    """Take frames ``frame-1`` and ``frame+1``, skipping the black pad itself.
+    """Extract exact-index real flanks around a black PAD frame.
 
-    Windows seeks by time (``-ss``) and keeps ``select`` n=0 and n=2. A y4m
-    pipe cannot be seeked, so on macOS vspipe selects the exact frame range
-    with ``-s``/``-e`` instead - frame indices are exact where a time-based
-    seek is only as accurate as the PTS - and the *same* select expression
-    then picks the two neighbours out of the three delivered.
+    Both backends deliver exactly frame-1..frame+1 before selecting n=0 and n=2.
+    AviSynth uses a trimmed wrapper rather than a timestamp seek, so dim-scene
+    review and RIFE cannot silently use an adjacent frame after seek rounding.
     """
     if frame < 1:
         raise PipelineError(f"cannot take a previous neighbour for frame {frame}")
@@ -243,15 +405,21 @@ def extract_neighbors(ld: Ld, video: Path, frame: int, inp: Path) -> tuple[Path,
     vf = "select='eq(n,0)+eq(n,2)',format=rgb24"
     cmd = [ld.ffmpeg(), "-y", "-hide_banner", "-v", "error"]
     vs_args = None
+    input_video = video
     if video.suffix.lower() == ".avs":
-        cmd += ["-f", "avisynth", "-ss", f"{(frame - 1) / FPS:.9f}",
-                "-i", str(video)]
+        avs_range = inp / f"neighbor_{frame:06d}.avs"
+        avs_range.write_text(
+            f"src = Import({json.dumps(str(video.resolve(strict=True)))})\n"
+            f"src.Trim({frame - 1}, {frame + 1})\n",
+            encoding="utf-8")
+        cmd += ["-f", "avisynth", "-i", str(avs_range)]
+        input_video = avs_range
     else:
         cmd += ["-f", "yuv4mpegpipe", "-i", "-"]
         vs_args = ["-s", str(frame - 1), "-e", str(frame + 1)]
     cmd += ["-vf", vf, "-fps_mode", "passthrough", "-frames:v", "2",
             "-start_number", "1", str(inp / f"extract_{frame}_%02d.png")]
-    p = run_source_ffmpeg(ld, cmd, video, text=False, vs_args=vs_args)
+    p = run_source_ffmpeg(ld, cmd, input_video, text=False, vs_args=vs_args)
     if p.returncode:
         raise PipelineError(f"neighbor extraction failed at frame {frame}: "
                             + p.stderr.decode("utf-8", "replace")[-1500:])
@@ -267,6 +435,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--episode", required=True)
     ap.add_argument("--encode", help="override source-derived video path (defaults to avs_encode)")
+    ap.add_argument("--audit", help="override PAD audit TSV (defaults to <episode>-pad-audit.tsv)")
+    ap.add_argument("--repair-frames", help="override confirmed repair list")
+    ap.add_argument("--fullres", help="override full-raster report")
+    ap.add_argument("--run-id", help="new per-run workspace token to preserve prior partial RIFE outputs")
     ap.add_argument("--hold-cut", type=int, action="append", default=[],
                     help="no-DVD fallback: hold the previous native frame at a confirmed cut PAD; repeatable")
     ap.add_argument("--cut-pad-image", action="append", default=[], metavar="FRAME=PNG",
@@ -287,9 +459,10 @@ def main() -> int:
         raise PipelineError(
             f"replacement neighbors must come from the source-derived script "
             f"(.avs/.vpy), not encoded video: {video}")
-    repair_file = probe / f"{ep.code}-pad-repair-frames.txt"
-    cands = read_candidates(probe / f"{ep.code}-pad-audit.tsv", repair_file,
-                            probe / f"{ep.code}-pad-fullres.tsv",
+    repair_file = Path(args.repair_frames).expanduser() if args.repair_frames else probe / f"{ep.code}-pad-repair-frames.txt"
+    audit_file = Path(args.audit).expanduser() if args.audit else probe / f"{ep.code}-pad-audit.tsv"
+    fullres_file = Path(args.fullres).expanduser() if args.fullres else probe / f"{ep.code}-pad-fullres.tsv"
+    cands = read_candidates(audit_file, repair_file, fullres_file,
                             accept=frozenset(args.accept_residual))
     # shared report/legacy dirs are keyed by pad_report_label so historical rows match
     label = ep.data.get("pad_report_label") or ep.code
@@ -301,6 +474,14 @@ def main() -> int:
         if frame in shared_images:
             raise PipelineError(f"multiple shared DVD stills were assigned to cut PAD frame {frame}")
         shared_images[frame] = (source_png, timestamp, dvd_frame)
+    instance_value = os.environ.get("LDP_INSTANCE_ROOT")
+    if not instance_value:
+        raise PipelineError("RIFE requires the active device workspace containing the committed human PAD review")
+    instance_root = Path(instance_value).expanduser().resolve(strict=True)
+    validate_human_classification(
+        ep.data, {row["frame"] for row in cands}, audit_file, repair_file, fullres_file,
+        hold, set(shared_images), set(args.accept_residual),
+        identity=ep.identity, instance_root=instance_root)
     unknown = hold - {c["frame"] for c in cands}
     if unknown:
         raise PipelineError(f"--hold-cut frames are not confirmed pads: {sorted(unknown)}")
@@ -325,7 +506,15 @@ def main() -> int:
     if unknown_acc:
         raise PipelineError(f"--accept-residual frames are not candidates: {sorted(unknown_acc)}")
 
-    work = probe / "rife-padframes-local" / label
+    work_root = probe / "rife-padframes-local" / label
+    if args.run_id:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", args.run_id):
+            raise PipelineError("--run-id must be a safe 1..64 character path component")
+        work = work_root / args.run_id
+        if work.exists() or work.is_symlink():
+            raise PipelineError(f"refusing to reuse a prior PAD replacement run directory: {work}")
+    else:
+        work = work_root
     inp, outd = work / "neighbors", work / "interpolated"
     for d in (inp, outd):
         d.mkdir(parents=True, exist_ok=True)
