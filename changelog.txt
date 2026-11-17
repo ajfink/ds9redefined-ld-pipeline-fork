@@ -287,3 +287,17 @@ FROM Version 16 -> Version 17 (app branch only; production `main` and W remain V
 - Validation: **371 passed, 7 skipped** (378 tests); compileall, warnings-as-errors imports,
   generated-runbook check, all 7 PowerShell parsers, and diff check passed. No real-media threshold
   calibration, RIFE run, final encode/remux, or new Mac runtime claim; see `V17-RELEASE.md`.
+
+FromStunToKill app branch V18 (2026-11-16)
+FROM Version 17 -> Version 18 (app branch only; production `main` and W remain V15)
+- Added a read-only episode gate dashboard that shows PASS/WARN-LIMIT/FAIL distinctly and runs
+  existing validators on demand.
+- Added guided report-only audio diagnostics, a motion-trace/cadence-map workbench, and a
+  mode-aware delivery plan for QC-only, remux+QC, or final encode/remux/QC with separate approval
+  gates and explicit Run confirmation.
+- Added elapsed/PID/no-console-output monitoring and unique diagnostic snapshots. Stalls remain
+  advisory; the app never auto-kills or retries potentially locked processes.
+- Made QC reports run-unique by default/explicitly selectable and refuse overwrites.
+- Validation: **389 passed, 7 skipped** (396 tests); compileall, warnings-as-errors imports,
+  generated-runbook check, all 7 PowerShell parsers, and diff check passed. No real media, final
+  encode/remux, fresh-Mac GUI test, or workspace restore; see `V18-RELEASE.md`.

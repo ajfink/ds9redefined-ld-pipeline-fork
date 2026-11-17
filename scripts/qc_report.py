@@ -18,7 +18,8 @@ Gates, each with an explicit threshold (runbook section 10):
   10. generated DVD retime gaps agree with output silence (sub-resolution gaps stay LIMIT)
   11. measured values agree with what the manifest recorded (warnings, not failures)
 
-Writes <code>-qc-report.md. Exit 0 only if every hard gate passes.
+Writes a unique <code>-qc-report-<run-id>.md by default; ``--report-out`` selects a
+specific new path. Reports are never overwritten. Exit 0 only if every hard gate passes.
 """
 from __future__ import annotations
 
@@ -37,6 +38,14 @@ from ldcommon import (BUNDLE, Ld, PipelineError, assert_writable_path,
                       device_workspace_enabled, load_episode)  # noqa: E402
 
 SCRIPTS = Path(__file__).resolve().parent
+
+
+def qc_report_destination(probe: Path, episode: str, requested: str | None,
+                         run_id: str) -> Path:
+    path = Path(requested).expanduser() if requested else probe / f"{episode}-qc-report-{run_id}.md"
+    if path.is_symlink() or path.exists():
+        raise PipelineError(f"refusing to overwrite existing or symlink QC report: {path}")
+    return path
 
 STANDING_WARNINGS = [
     "validate artifacts, not exit codes: Orc refresh, blackdetect and curl have all "
@@ -234,6 +243,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--episode", required=True)
     ap.add_argument("--skip-heavy", action="store_true", help="skip heavy gates for triage only; report is unverified and exits nonzero")
+    ap.add_argument("--report-out", help="override QC markdown report path; must not already exist")
     args = ap.parse_args()
 
     ld = Ld()
@@ -509,8 +519,9 @@ def main() -> int:
     for x in STANDING_WARNINGS:
         print(f"    - {x}")
 
-    report = probe / f"{ep.code}-qc-report.md"
+    report = qc_report_destination(probe, ep.code, args.report_out, qc_run_id)
     assert_writable_path(report, ld)
+    report.parent.mkdir(parents=True, exist_ok=True)
     lines = [f"# {ep.code} {ep.title} - delivery QC", "",
              f"- deliverable: `{deliverable}`",
              f"- profile: `{ld.profile_path}` (machine {ld.profile.get('machine')})",
@@ -520,7 +531,11 @@ def main() -> int:
         lines.append(f"| {name} | {status} | {detail.replace('|', '/')} |")
     lines += ["", f"**{n_pass} pass, {n_warn} warn, {n_skip} skip, {n_fail} fail/unverified**", "", "## Standing warnings", ""]
     lines += [f"- {x}" for x in STANDING_WARNINGS]
-    report.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    try:
+        with report.open("x", encoding="utf-8", newline="\n") as stream:
+            stream.write("\n".join(lines) + "\n")
+    except FileExistsError as exc:
+        raise PipelineError(f"refusing to overwrite existing QC report: {report}") from exc
     print(f"\n  report: {report}")
     return 1 if n_fail else 0
 

@@ -16,7 +16,9 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -40,6 +42,10 @@ from workflow_app_model import (WorkflowAppError, build_intake_plan,
                                 write_new_plan)  # noqa: E402
 from pad_review import PadReviewWindow, PreviewCache  # noqa: E402
 from pad_classification_review import PadClassificationReviewWindow  # noqa: E402
+from episode_dashboard import EpisodeGateDashboard  # noqa: E402
+from job_monitor import STALL_WARNING_SECONDS, process_status_text  # noqa: E402
+from workflow_workbenches import (AudioDiagnosticWindow, CadenceWorkbenchWindow,
+                                  DeliveryPlanWindow)  # noqa: E402
 from review_popup import HumanReviewPopup  # noqa: E402
 from retime_break_review import (RetimeBreakReviewError,
                                  RetimeBreakReviewWindow)  # noqa: E402
@@ -234,6 +240,13 @@ class WorkflowApp:
         self.field_widgets: dict[str, ttk.Widget] = {}
         self.browse_buttons: dict[str, ttk.Button] = {}
         self.process: subprocess.Popen[str] | None = None
+        self.active_command: list[str] | None = None
+        self.active_process_action = ""
+        self.active_process_pid: int | None = None
+        self.process_started_monotonic: float | None = None
+        self.process_last_output_monotonic: float | None = None
+        self.process_last_status_second = -1
+        self.process_output_tail: deque[str] = deque(maxlen=80)
         self.previewed_plan_hash: str | None = None
         self.pending_action: str | None = None
         self.pending_plan_hash: str | None = None
@@ -251,6 +264,8 @@ class WorkflowApp:
         self.pad_review_windows: list[PadReviewWindow] = []
         self.pad_review_caches: set[PreviewCache] = set()
         self.pad_classification_window: PadClassificationReviewWindow | None = None
+        self.episode_dashboard: EpisodeGateDashboard | None = None
+        self.active_workbench: AudioDiagnosticWindow | CadenceWorkbenchWindow | DeliveryPlanWindow | None = None
         self.values["archive_url"].trace_add("write", self._archive_url_changed)
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -392,6 +407,11 @@ class WorkflowApp:
         self.run_button.pack(side="left", padx=5)
         self.resume_button = ttk.Button(actions, text="Resume", command=lambda: self._launch("resume"))
         self.resume_button.pack(side="left", padx=5)
+        self.episode_status_button = ttk.Button(
+            actions, text="Episode status…", command=self._open_episode_dashboard)
+        self.episode_status_button.pack(side="left", padx=5)
+        ToolTip(self.episode_status_button,
+                "Run the existing read-only validator for individual gates. WARN/LIMIT stays visible and is never reported as PASS.")
         ttk.Label(actions, text="Review gate:").pack(side="left", padx=(14, 4))
         self.review_choice = tk.StringVar()
         self.review_box = ttk.Combobox(actions, textvariable=self.review_choice, state="readonly", width=27)
@@ -406,6 +426,9 @@ class WorkflowApp:
 
         self.status = tk.StringVar(value="Load an intake plan, or open an existing workflow plan.")
         ttk.Label(outer, textvariable=self.status, wraplength=940).pack(anchor="w", pady=(0, 6))
+        self.process_status_var = tk.StringVar(value="No active workflow subprocess.")
+        ttk.Label(outer, textvariable=self.process_status_var, wraplength=940,
+                  foreground="#5c4600").pack(anchor="w", pady=(0, 6))
         self.console_section = ttk.LabelFrame(outer, text="Console and guided stages", padding=6)
         self.console_section.pack(fill="both", expand=True)
         console_header = ttk.Frame(self.console_section)
@@ -413,6 +436,10 @@ class WorkflowApp:
         self.console_expanded = True
         self.console_toggle_button = ttk.Button(console_header, text="Hide console", command=self._toggle_console)
         self.console_toggle_button.pack(side="left")
+        self.process_snapshot_button = ttk.Button(
+            console_header, text="Save process diagnostics…", command=self._save_process_diagnostics,
+            state="disabled")
+        self.process_snapshot_button.pack(side="left", padx=(6, 0))
         self.verbose_logging_check = ttk.Checkbutton(
             console_header, text="Verbose logging (show all stage output)",
             variable=self.verbose_logging_var)
@@ -446,6 +473,15 @@ class WorkflowApp:
         self.select_efm_button.pack(side="right", padx=(0, 6))
         ToolTip(self.select_efm_button,
                 "Only verified per-capture EFM provenance reports are eligible. The selected WAV's capture and Orc input paths are checked before the manifest is updated.")
+        self.workbench_button = ttk.Menubutton(console_header, text="Guided workbenches")
+        workbench_menu = tk.Menu(self.workbench_button, tearoff=False)
+        workbench_menu.add_command(label="Audio diagnostics…", command=self._open_audio_workbench)
+        workbench_menu.add_command(label="Cadence workbench…", command=self._open_cadence_workbench)
+        workbench_menu.add_command(label="Delivery plan…", command=self._open_delivery_workbench)
+        self.workbench_button.configure(menu=workbench_menu)
+        self.workbench_button.pack(side="right", padx=(0, 6))
+        ToolTip(self.workbench_button,
+                "Build report-only audio diagnostics, motion/cadence evidence plans, or an explicit QC-only/remux/full-delivery plan.")
         self.verify_efm_button = ttk.Button(
             console_header, text="Verify EFM decode…", command=self._verify_efm_capture)
         self.verify_efm_button.pack(side="right", padx=(0, 6))
@@ -1254,9 +1290,13 @@ class WorkflowApp:
             stages = [step.get("stage") for step in (self.plan or {}).get("steps", [])
                       if step.get("kind", "stage") == "stage"]
             final_delivery = any(stage in ("encode-final", "remux") for stage in stages)
-            if final_delivery and not automatic:
+            runs_qc = "qc" in stages
+            if (final_delivery or runs_qc) and not automatic:
                 text = "Run this plan's allowlisted stages?\n\n" + " → ".join(stages)
-                text += "\n\nThis plan includes final encoding or remuxing. Confirm only if that work is approved."
+                if final_delivery:
+                    text += "\n\nThis plan includes final encoding and/or remuxing. Confirm only if that work is approved."
+                if runs_qc:
+                    text += "\n\nQC fully decodes and inspects the deliverable; it may take a long time but does not encode or remux."
                 if not messagebox.askyesno("Confirm workflow execution", text, parent=self.root):
                     return
             self._set_form_editable(False)
@@ -1578,6 +1618,41 @@ class WorkflowApp:
             stage_plan, f"{series}-{episode}-{context['phase']}-plan.json",
             f"{context['phase']} stack");
 
+    def _open_episode_dashboard(self) -> None:
+        if self.process and self.process.poll() is None:
+            messagebox.showwarning("Workflow is running",
+                                   "Wait for the current workflow command before running validation gates.",
+                                   parent=self.root)
+            return
+        if self.episode_dashboard and self.episode_dashboard.window:
+            self.episode_dashboard.window.lift()
+            return
+        episode, series, profile, manifest, instance = self._current_episode_context()
+        if not episode or not profile or not manifest:
+            messagebox.showinfo("Episode status unavailable",
+                                "Resolve an episode or open a plan with a profile and manifest first.",
+                                parent=self.root)
+            return
+        try:
+            if instance:
+                log_root = Path(instance).expanduser() / "logs"
+            else:
+                profile_data = json.loads(Path(profile).expanduser().read_text(encoding="utf-8-sig"))
+                raw_logs = (profile_data.get("roots") or {}).get("logs")
+                if not raw_logs:
+                    raise WorkflowAppError("profile has no roots.logs location for gate evidence")
+                log_root = Path(os.path.expandvars(os.path.expanduser(str(raw_logs))))
+                if series != "DS9":
+                    log_root = log_root / series
+            dashboard = EpisodeGateDashboard(
+                self.root, episode, series, Path(profile), Path(manifest),
+                Path(instance) if instance else None, log_root)
+            self.episode_dashboard = dashboard
+            dashboard.show()
+        except (OSError, ValueError, RuntimeError) as exc:
+            self.episode_dashboard = None
+            messagebox.showerror("Episode status unavailable", str(exc), parent=self.root)
+
     def _current_episode_context(self) -> tuple[str, str, str, str, str]:
         """Resolve the GUI's current series, episode, profile, manifest, and workspace values."""
         plan = self.plan or {}
@@ -1806,7 +1881,7 @@ class WorkflowApp:
         episode, series, profile_value, manifest_value, instance_value = self._current_episode_context()
         if not all((episode, profile_value, manifest_value, instance_value)):
             raise WorkflowAppError("resolve/open an episode plan with a device workspace before EFM review")
-        from ldcommon import Ld, load_episode
+        from ldcommon import Ld, PipelineError, load_episode
         from shared_workspace import validate_device_config_profile, validate_instance
         profile_path = Path(profile_value).expanduser().resolve(strict=True)
         manifest_path = Path(manifest_value).expanduser().resolve(strict=True)
@@ -1830,11 +1905,26 @@ class WorkflowApp:
             captures = ep.data.get("captures") or []
             if not captures:
                 raise WorkflowAppError("episode manifest has no capture inventory")
+            file_paths = {}
+            wanted_paths = {"ld_native", "ld_corrected", "ld_synced", "dvd", "align_npy",
+                            "stack_project", "stack_master", "tfm_log", "motion",
+                            "master_descriptors", "dvd_descriptors", "avs_encode", "avs_padfix",
+                            "padfixed_video", "padfixed", "pre_upscale", "retimed_51", "retimed_srt",
+                            "dvd51_source", "srt_source"}
+            wanted_paths.update(str(key) for key in (ep.data.get("files") or {}) if key)
+            wanted_paths.update(key for key in (ep.data.get("deliverable"),
+                                                 ep.data.get("ld_audio_source")) if key)
+            for key in wanted_paths:
+                try:
+                    file_paths[key] = str(ep.path(key))
+                except PipelineError:
+                    continue
             return {"episode": episode, "series": series, "identity": f"{series}:{episode}",
                     "profile": profile_path, "manifest": manifest_path, "instance": instance,
                     "probe": ld.probe().resolve(strict=True), "audio_root": ld.root("audio").resolve(strict=True),
                     "downloads": ep.downloads().resolve(strict=True), "captures": captures,
-                    "manifest_data": ep.data, "ld": ld}
+                    "manifest_data": ep.data, "file_paths": file_paths,
+                    "platform": str(ld.profile.get("os") or "").casefold(), "ld": ld}
         except WorkflowAppError:
             raise
         except (OSError, UnicodeDecodeError, json.JSONDecodeError, PipelineError,
@@ -1948,6 +2038,58 @@ class WorkflowApp:
         buttons.grid(row=5, column=0, columnspan=4, sticky="e", pady=(10, 0))
         ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side="right", padx=5)
         ttk.Button(buttons, text="Build verification plan", command=make_plan).pack(side="right")
+
+    def _save_guided_workbench_plan(self, plan: dict[str, Any], filename: str, scope: str) -> bool:
+        if not self._save_app_stage_plan(plan, filename, scope):
+            return False
+        self.status.set(f"{scope.title()} plan saved. Previewing only; no media operation starts until Run is explicitly selected.")
+        self._launch("preview")
+        return True
+
+    def _open_audio_workbench(self) -> None:
+        if self.process and self.process.poll() is None:
+            messagebox.showwarning("Workflow is running", "Wait for the current command before planning diagnostics.",
+                                   parent=self.root)
+            return
+        try:
+            context = self._efm_episode_context()
+        except WorkflowAppError as exc:
+            messagebox.showinfo("Audio diagnostics unavailable", str(exc), parent=self.root)
+            return
+        self.active_workbench = AudioDiagnosticWindow(
+            self.root, context, self._save_guided_workbench_plan,
+            fingerprint_policy=self.values["fingerprint_policy"].get().strip() or "balanced")
+        self.active_workbench.show()
+
+    def _open_cadence_workbench(self) -> None:
+        if self.process and self.process.poll() is None:
+            messagebox.showwarning("Workflow is running", "Wait for the current command before planning cadence work.",
+                                   parent=self.root)
+            return
+        try:
+            context = self._efm_episode_context()
+        except WorkflowAppError as exc:
+            messagebox.showinfo("Cadence workbench unavailable", str(exc), parent=self.root)
+            return
+        self.active_workbench = CadenceWorkbenchWindow(
+            self.root, context, self._save_guided_workbench_plan,
+            fingerprint_policy=self.values["fingerprint_policy"].get().strip() or "balanced")
+        self.active_workbench.show()
+
+    def _open_delivery_workbench(self) -> None:
+        if self.process and self.process.poll() is None:
+            messagebox.showwarning("Workflow is running", "Wait for the current command before planning delivery.",
+                                   parent=self.root)
+            return
+        try:
+            context = self._efm_episode_context()
+        except WorkflowAppError as exc:
+            messagebox.showinfo("Delivery planning unavailable", str(exc), parent=self.root)
+            return
+        self.active_workbench = DeliveryPlanWindow(
+            self.root, context, self._save_guided_workbench_plan,
+            fingerprint_policy=self.values["fingerprint_policy"].get().strip() or "balanced")
+        self.active_workbench.show()
 
     def _select_efm_capture(self) -> None:
         if self.process and self.process.poll() is None:
@@ -2353,6 +2495,13 @@ class WorkflowApp:
             messagebox.showwarning("Workflow is running", "Wait for the current workflow command to finish.", parent=self.root)
             return
         self.pending_action = action
+        self.active_command = list(command)
+        self.active_process_action = action
+        self.active_process_pid = None
+        self.process_started_monotonic = time.monotonic()
+        self.process_last_output_monotonic = self.process_started_monotonic
+        self.process_last_status_second = -1
+        self.process_output_tail.clear()
         self.pending_plan_hash = self._plan_digest() if action == "preview" else None
         self.pending_review_step = None
         self.waiting_review_step = None
@@ -2370,8 +2519,10 @@ class WorkflowApp:
                                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                             text=True, encoding="utf-8", errors="replace",
                                             bufsize=1, creationflags=creationflags)
+            self.output_queue.put("__PROCESS_STARTED__" + str(self.process.pid))
             assert self.process.stdout is not None
             for line in self.process.stdout:
+                self.process_last_output_monotonic = time.monotonic()
                 self.output_queue.put(line)
             code = self.process.wait()
             self.output_queue.put(f"\nGUI command exited with code {code}.\n")
@@ -2407,6 +2558,13 @@ class WorkflowApp:
                     self.status.set(payload["error"])
                     messagebox.showerror("Series/episode not resolved", payload["error"], parent=self.root)
                 self._update_mode_controls()
+            elif line.startswith("__PROCESS_STARTED__"):
+                try:
+                    self.active_process_pid = int(line.removeprefix("__PROCESS_STARTED__"))
+                except ValueError:
+                    self.active_process_pid = None
+                self.process_status_var.set(self._process_status_text())
+                self.process_snapshot_button.configure(state="normal")
             elif line.startswith("__WORKFLOW_DONE__"):
                 code = line.removeprefix("__WORKFLOW_DONE__")
                 review_to_open = self.pending_review_step if code == "3" else None
@@ -2427,6 +2585,10 @@ class WorkflowApp:
                 elif code == "0" and not (auto_run or auto_rife):
                     self.auto_start_rife_after_pad_record = False
                 self.process = None
+                if getattr(self, "process_status_var", None):
+                    self.process_status_var.set("Workflow subprocess finished; inspect its state/log before continuing.")
+                if hasattr(self, "process_snapshot_button"):
+                    self.process_snapshot_button.configure(state="normal")
                 self._set_running(False)
                 if code == "4":
                     self.status.set("Review denied. This workflow job is terminal; reconcile the evidence and create a new plan.")
@@ -2451,11 +2613,120 @@ class WorkflowApp:
                     self.auto_start_rife_after_pad_record = False
                     self.root.after_idle(self._auto_start_rife_replacements)
             else:
+                self.process_last_output_monotonic = time.monotonic()
+                self.process_output_tail.append(line.rstrip())
                 review_match = re.search(r"REVIEW REQUIRED \[([^\]]+)\]", line)
                 if review_match:
                     self.pending_review_step = review_match.group(1)
                 self._append_output(line)
+        self._update_process_monitor()
         self.root.after(100, self._drain_output)
+
+    def _process_status_text(self) -> str:
+        if self.process_started_monotonic is None:
+            return "No active workflow subprocess."
+        now = time.monotonic()
+        elapsed = max(0.0, now - self.process_started_monotonic)
+        last = self.process_last_output_monotonic or self.process_started_monotonic
+        return process_status_text(
+            self.active_process_action or "workflow", self.active_process_pid,
+            elapsed, max(0.0, now - last),
+            bool(self.process and self.process.poll() is None))[0]
+
+    def _update_process_monitor(self) -> None:
+        if not getattr(self, "process_status_var", None):
+            return
+        if not self.process or self.process.poll() is not None:
+            return
+        now = time.monotonic()
+        second = int(now)
+        if second == self.process_last_status_second:
+            return
+        self.process_last_status_second = second
+        elapsed = max(0.0, now - (self.process_started_monotonic or now))
+        last = self.process_last_output_monotonic or now
+        text, stalled = process_status_text(
+            self.active_process_action or "workflow", self.process.pid,
+            elapsed, max(0.0, now - last), self.process.poll() is None)
+        self.process_status_var.set(text)
+        if stalled:
+            self.status.set("No output for 20+ minutes. Preserve evidence and inspect manually; this app will not kill or retry the process.")
+        if hasattr(self, "process_snapshot_button"):
+            self.process_snapshot_button.configure(state="normal")
+
+    def _save_process_diagnostics(self) -> None:
+        plan = self.plan or {}
+        instance = plan.get("instance_root")
+        if instance:
+            instance_root = Path(str(instance)).expanduser()
+            if instance_root.is_symlink():
+                messagebox.showerror("Diagnostics unavailable", "The active episode workspace may not be a symlink.", parent=self.root)
+                return
+            log_root = instance_root / "logs"
+        else:
+            profile_value = str(plan.get("profile") or self.values["profile"].get()).strip()
+            if not profile_value:
+                messagebox.showerror("Diagnostics unavailable", "The active plan has no profile/log root.", parent=self.root)
+                return
+            try:
+                profile = json.loads(Path(profile_value).expanduser().read_text(encoding="utf-8-sig"))
+                raw_logs = (profile.get("roots") or {}).get("logs")
+                if not raw_logs:
+                    raise ValueError("machine profile has no roots.logs")
+                log_root = Path(os.path.expandvars(os.path.expanduser(str(raw_logs))))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+                messagebox.showerror("Diagnostics unavailable", str(exc), parent=self.root)
+                return
+        try:
+            if log_root.is_symlink():
+                raise ValueError("active logs folder may not be a symlink")
+            log_root.mkdir(parents=True, exist_ok=True)
+            state_path, workflow_log = self._workflow_audit_paths()
+            now = time.monotonic()
+            started = self.process_started_monotonic
+            last = self.process_last_output_monotonic
+            elapsed = max(0.0, now - started) if started is not None else None
+            idle = max(0.0, now - last) if last is not None else None
+            snapshot = {
+                "schema": "fromstuntokill-process-diagnostics-v1",
+                "created_utc": datetime.now(timezone.utc).isoformat(),
+                "episode": plan.get("episode"), "series": plan.get("series", "DS9"),
+                "identity": plan.get("identity"), "job_id": plan.get("job_id"),
+                "action": self.active_process_action, "pid": self.active_process_pid,
+                "process_alive": bool(self.process and self.process.poll() is None),
+                "elapsed_seconds": elapsed, "seconds_since_console_output": idle,
+                "stall_warning_threshold_seconds": STALL_WARNING_SECONDS,
+                "automatic_termination_or_retry": False,
+                "command": self.active_command or [],
+                "workflow_state": str(state_path) if state_path else None,
+                "workflow_log": str(workflow_log) if workflow_log else None,
+                "recent_console_output": list(self.process_output_tail),
+            }
+            profile_value = str(plan.get("profile") or self.values["profile"].get()).strip()
+            if profile_value:
+                try:
+                    profile_data = json.loads(Path(profile_value).expanduser().read_text(encoding="utf-8-sig"))
+                    if (profile_data.get("shared") or {}).get("enabled") is True:
+                        from dependency_lock import redact_shared_text, shared_redactions
+                        snapshot_text = redact_shared_text(
+                            json.dumps(snapshot, ensure_ascii=False),
+                            shared_redactions(profile_value, profile_data))
+                    else:
+                        snapshot_text = json.dumps(snapshot, ensure_ascii=False)
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError, RuntimeError, ValueError) as exc:
+                    raise ValueError(f"cannot safely prepare diagnostic snapshot redactions: {exc}") from exc
+            else:
+                snapshot_text = json.dumps(snapshot, ensure_ascii=False)
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            safe_identity = re.sub(r"[^A-Za-z0-9._-]+", "-", str(snapshot["identity"] or "active"))
+            path = log_root / f"workflow-diagnostics-{safe_identity}-{stamp}-{uuid.uuid4().hex[:6]}.json"
+            with path.open("x", encoding="utf-8", newline="\n") as stream:
+                stream.write(json.dumps(json.loads(snapshot_text), ensure_ascii=False, indent=2) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            messagebox.showinfo("Process diagnostics saved", str(path), parent=self.root)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Diagnostics not saved", str(exc), parent=self.root)
 
     def _append_output(self, text: str) -> None:
         self.log.configure(state="normal")
@@ -2466,11 +2737,14 @@ class WorkflowApp:
     def _set_running(self, running: bool) -> None:
         state = "disabled" if running else "normal"
         for button in (self.preview_button, self.run_button, self.resume_button, self.approve_button,
-                       self.pad_review_button, self.pad_classify_button, self.stage_console_button,
+                       self.pad_review_button, self.pad_classify_button, self.episode_status_button,
+                       self.stage_console_button,
                        self.prepare_retime_button, self.review_retime_button,
-                       self.verify_efm_button, self.select_efm_button):
+                       self.verify_efm_button, self.select_efm_button, self.workbench_button):
             button.configure(state=state)
         self.verbose_logging_check.configure(state=state)
+        if hasattr(self, "process_snapshot_button") and running:
+            self.process_snapshot_button.configure(state="normal")
         if hasattr(self, "resolve_button"):
             can_resolve = (not running and self.form_editable and
                            bool(self.values["archive_url"].get().strip()) and not self.resolving_episode)
@@ -2490,6 +2764,12 @@ class WorkflowApp:
                     parent=self.root):
                 return
         self._cleanup_pad_previews()
+        if self.episode_dashboard:
+            self.episode_dashboard.close()
+            self.episode_dashboard = None
+        if self.active_workbench and self.active_workbench.window:
+            self.active_workbench.window.destroy()
+            self.active_workbench = None
         if self.pad_classification_window:
             self.pad_classification_window.close()
             self.pad_classification_window = None
