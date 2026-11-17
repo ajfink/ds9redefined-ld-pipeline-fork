@@ -46,6 +46,8 @@ from episode_dashboard import EpisodeGateDashboard  # noqa: E402
 from job_monitor import STALL_WARNING_SECONDS, process_status_text  # noqa: E402
 from workflow_workbenches import (AudioDiagnosticWindow, CadenceWorkbenchWindow,
                                   DeliveryPlanWindow)  # noqa: E402
+from post_run_cleanup import (CleanupError, PostRunCleanupWindow,
+                              cleanup_review_available)  # noqa: E402
 from review_popup import HumanReviewPopup  # noqa: E402
 from retime_break_review import (RetimeBreakReviewError,
                                  RetimeBreakReviewWindow)  # noqa: E402
@@ -266,6 +268,8 @@ class WorkflowApp:
         self.pad_classification_window: PadClassificationReviewWindow | None = None
         self.episode_dashboard: EpisodeGateDashboard | None = None
         self.active_workbench: AudioDiagnosticWindow | CadenceWorkbenchWindow | DeliveryPlanWindow | None = None
+        self.post_run_cleanup_ready = False
+        self.post_run_cleanup_window: PostRunCleanupWindow | None = None
         self.values["archive_url"].trace_add("write", self._archive_url_changed)
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -407,6 +411,11 @@ class WorkflowApp:
         self.run_button.pack(side="left", padx=5)
         self.resume_button = ttk.Button(actions, text="Resume", command=lambda: self._launch("resume"))
         self.resume_button.pack(side="left", padx=5)
+        self.post_run_cleanup_button = ttk.Button(
+            actions, text="Storage cleanup…", command=self._open_post_run_cleanup, state="disabled")
+        self.post_run_cleanup_button.pack(side="left", padx=5)
+        ToolTip(self.post_run_cleanup_button,
+                "After a passing full QC run, review this episode's exact source-download and large-audio cleanup candidates. Nothing is automatic.")
         self.episode_status_button = ttk.Button(
             actions, text="Episode status…", command=self._open_episode_dashboard)
         self.episode_status_button.pack(side="left", padx=5)
@@ -681,6 +690,7 @@ class WorkflowApp:
         self._suppress_archive_trace = False
         self._archive_url_changed()
         self.source_label.configure(text=f"Intake template: {self.template_path}")
+        self._reset_post_run_cleanup()
         self.plan_path = None
         self.plan = None
         self.plan_from_intake = False
@@ -985,6 +995,7 @@ class WorkflowApp:
         except (OSError, UnicodeDecodeError, json.JSONDecodeError, WorkflowAppError) as exc:
             messagebox.showerror("Cannot open workflow plan", str(exc), parent=self.root)
             return
+        self._reset_post_run_cleanup()
         self.plan_path = Path(path).resolve()
         self.plan = data
         self.plan_from_intake = False
@@ -1187,6 +1198,7 @@ class WorkflowApp:
                 detail += "\n\nWorkflow plans are immutable. The existing plan was left unchanged; try Preview again to create a new plan file."
             messagebox.showerror("Plan not saved", detail, parent=self.root)
             return False
+        self._reset_post_run_cleanup()
         self.plan_path = saved_path
         self.plan = plan
         self.plan_from_intake = True
@@ -1653,6 +1665,55 @@ class WorkflowApp:
             self.episode_dashboard = None
             messagebox.showerror("Episode status unavailable", str(exc), parent=self.root)
 
+    def _open_post_run_cleanup(self) -> None:
+        if self.process and self.process.poll() is None:
+            messagebox.showwarning("Workflow is running",
+                                   "Cleanup is unavailable while a workflow command is active.",
+                                   parent=self.root)
+            return
+        if not self.post_run_cleanup_ready:
+            messagebox.showinfo("Cleanup is not available",
+                                "Run and pass full delivery QC before reviewing source cleanup.",
+                                parent=self.root)
+            return
+        if (self.post_run_cleanup_window and self.post_run_cleanup_window.window and
+                self.post_run_cleanup_window.window.winfo_exists()):
+            self.post_run_cleanup_window.window.lift()
+            return
+        state_path, _workflow_log = self._workflow_audit_paths()
+        if not state_path or not self.plan_path or not self.plan:
+            messagebox.showerror("Cleanup evidence unavailable",
+                                 "The completed workflow plan/state could not be resolved.",
+                                 parent=self.root)
+            return
+        try:
+            context = self._efm_episode_context()
+            cleanup_window = PostRunCleanupWindow(
+                self.root, context, self.plan, self.plan_path, state_path,
+                on_complete=self._post_run_cleanup_completed)
+            self.post_run_cleanup_window = cleanup_window
+            cleanup_window.show()
+        except (CleanupError, WorkflowAppError, OSError, ValueError) as exc:
+            messagebox.showerror("Cleanup review unavailable", str(exc), parent=self.root)
+
+    def _reset_post_run_cleanup(self) -> None:
+        self.post_run_cleanup_ready = False
+        if hasattr(self, "post_run_cleanup_button"):
+            self.post_run_cleanup_button.configure(state="disabled")
+        cleanup_window = getattr(self, "post_run_cleanup_window", None)
+        if cleanup_window:
+            cleanup_window.close()
+            self.post_run_cleanup_window = None
+
+    def _post_run_cleanup_completed(self, complete: bool) -> None:
+        self.post_run_cleanup_ready = False
+        if hasattr(self, "post_run_cleanup_button"):
+            self.post_run_cleanup_button.configure(state="disabled")
+        if complete:
+            self.status.set("Selected cleanup items were moved to Trash; logs, metadata, and QC evidence were preserved.")
+        else:
+            self.status.set("Cleanup stopped after a partial Recycle Bin/Trash result. Inspect the cleanup log and remaining paths manually.")
+
     def _current_episode_context(self) -> tuple[str, str, str, str, str]:
         """Resolve the GUI's current series, episode, profile, manifest, and workspace values."""
         plan = self.plan or {}
@@ -1690,6 +1751,7 @@ class WorkflowApp:
         except (WorkflowAppError, OSError) as exc:
             messagebox.showerror("Plan not saved", str(exc), parent=self.root)
             return False
+        self._reset_post_run_cleanup()
         self.plan_path = saved
         self.plan = plan
         self.plan_from_intake = False
@@ -1919,11 +1981,21 @@ class WorkflowApp:
                     file_paths[key] = str(ep.path(key))
                 except PipelineError:
                     continue
+            audio_root_raw = ld.root("audio")
+            downloads_raw = ep.downloads()
+            protected_roots = {}
+            for root_name in ("dvd_root", "prores", "out"):
+                try:
+                    protected_roots[root_name] = str(ld.root(root_name).resolve(strict=False))
+                except PipelineError:
+                    continue
             return {"episode": episode, "series": series, "identity": f"{series}:{episode}",
                     "profile": profile_path, "manifest": manifest_path, "instance": instance,
-                    "probe": ld.probe().resolve(strict=True), "audio_root": ld.root("audio").resolve(strict=True),
-                    "downloads": ep.downloads().resolve(strict=True), "captures": captures,
+                    "probe": ld.probe().resolve(strict=True), "audio_root": audio_root_raw.resolve(strict=True),
+                    "audio_root_raw": audio_root_raw, "downloads": downloads_raw.resolve(strict=True),
+                    "downloads_raw": downloads_raw, "captures": captures,
                     "manifest_data": ep.data, "file_paths": file_paths,
+                    "protected_roots": protected_roots,
                     "platform": str(ld.profile.get("os") or "").casefold(), "ld": ld}
         except WorkflowAppError:
             raise
@@ -2494,6 +2566,7 @@ class WorkflowApp:
         if self.process and self.process.poll() is None:
             messagebox.showwarning("Workflow is running", "Wait for the current workflow command to finish.", parent=self.root)
             return
+        self._reset_post_run_cleanup()
         self.pending_action = action
         self.active_command = list(command)
         self.active_process_action = action
@@ -2584,6 +2657,9 @@ class WorkflowApp:
                     self.auto_start_rife_after_pad_record = False
                 elif code == "0" and not (auto_run or auto_rife):
                     self.auto_start_rife_after_pad_record = False
+                completion_plan = getattr(self, "plan", None) or {}
+                self.post_run_cleanup_ready = cleanup_review_available(
+                    code, completed_action, completion_plan)
                 self.process = None
                 if getattr(self, "process_status_var", None):
                     self.process_status_var.set("Workflow subprocess finished; inspect its state/log before continuing.")
@@ -2742,6 +2818,9 @@ class WorkflowApp:
                        self.prepare_retime_button, self.review_retime_button,
                        self.verify_efm_button, self.select_efm_button, self.workbench_button):
             button.configure(state=state)
+        if hasattr(self, "post_run_cleanup_button"):
+            self.post_run_cleanup_button.configure(
+                state="normal" if (not running and self.post_run_cleanup_ready) else "disabled")
         self.verbose_logging_check.configure(state=state)
         if hasattr(self, "process_snapshot_button") and running:
             self.process_snapshot_button.configure(state="normal")
@@ -2770,6 +2849,9 @@ class WorkflowApp:
         if self.active_workbench and self.active_workbench.window:
             self.active_workbench.window.destroy()
             self.active_workbench = None
+        if self.post_run_cleanup_window:
+            self.post_run_cleanup_window.close()
+            self.post_run_cleanup_window = None
         if self.pad_classification_window:
             self.pad_classification_window.close()
             self.pad_classification_window = None

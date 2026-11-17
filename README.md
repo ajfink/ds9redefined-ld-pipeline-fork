@@ -1,8 +1,8 @@
 # DS9 LaserDisc OpenCode Operator Pack
 
-**Workflow version: 19 (FromStunToKill app branch)** — check `WORKFLOW_VERSION` and follow the
+**Workflow version: 20 (FromStunToKill app branch)** — check `WORKFLOW_VERSION` and follow the
 core-change/device-log rules in `WORKFLOW_VERSIONING.md` before editing or syncing workflow files.
-This V19 increment is scoped to the app branch; production `main` and the W shared tree remain
+This V20 increment is scoped to the app branch; production `main` and the W shared tree remain
 at V15 and are not modified by this release.
 
 **Design goal:** make the workflow clear and reliable enough for capable free or low-cost
@@ -363,6 +363,14 @@ or parity-clip run before cadence. The historical test result is informational i
   cleanup as `done`, `not found`, or `blocked`. A missing download folder is not a reason
   to search for/delete its DVD or another sibling asset. Do not reopen a user decision
   that has already been answered.
+- The V20 app's post-run cleanup review is opt-in and appears only after a successful workflow
+  containing QC. It additionally requires the current final deliverable to match the QC-stage
+  fingerprint and a clean QC report (zero WARN/LIMIT/FAIL). It offers only **Keep everything for
+  now** or **Free up space**: the latter reviews the exact episode download folder and
+  manifest-associated audio files at least 100 MiB. Small download manifest/TBC-sidecar/text
+  metadata is hash-verified into the episode `references/` folder first; logs, plans, manifests,
+  QC reports, provenance and deliverables remain untouched. Selected paths go to the OS
+  Recycle Bin/Trash after a second exact-path confirmation; permanent-delete fallback is forbidden.
 
 ### Important current limitation
 
@@ -601,7 +609,7 @@ permission.
 
 ## Optional FromStunToKill desktop app
 
-Launch the local GUI with `python scripts/workflow_app.py`. It uses the V19 allowlisted
+Launch the local GUI with `python scripts/workflow_app.py`. It uses the V20 allowlisted
 runner and automatically saves concrete, immutable workflow plans under the device's
 `devices/<DEVICE>-<ID>/plans/` folder when **Preview** is clicked; no separate save step is
 needed. Intake fields remain editable after preview and until **Run** is confirmed; edits
@@ -677,7 +685,8 @@ measurements or grants approval.
 | `scripts/bootstrap_deps.py` / `dependencies/` | Direct Python version locks for Windows x64, Mac arm64, and candidate Linux x86_64; check-only by default, `--install` is explicit |
 | `scripts/run_stage.py` | Allowlisted stage dispatcher; dry-run plan by default, explicit `--execute`, series-aware stage identity, downloader-specific checks for early download, and full gates before other writes |
 | `scripts/run_workflow.py` | Ordered JSON-plan orchestration; series-scoped status/log/locks/resume, input/output fingerprints, conservative resume, and per-step progress bar |
-| `scripts/workflow_app.py` | Optional Tk desktop intake, episode status, PAD cut review, EFM provenance/selection, process monitoring, and guided workbenches |
+| `scripts/workflow_app.py` | Optional Tk desktop intake, episode status, PAD cut review, EFM provenance/selection, process monitoring, guided workbenches, and post-run cleanup review |
+| `scripts/post_run_cleanup.py` | Clean-QC-gated inventory and opt-in Recycle Bin/Trash operation that preserves small download metadata and workflow evidence |
 | `scripts/pad_classification_review.py` / `record_pad_classifications.py` | P95 motion-baseline PAD defaults, human cut/outlier review, and immutable manifest recording before RIFE |
 | `scripts/verify_efm_capture.py` / `record_efm_capture_selection.py` | Bind each EFMSink decode to its manifest TBC/log/WAV/report, then record an explicit human capture choice |
 | `scripts/backup_device_workspace.py` | Checksum-verified per-episode/device evidence archives and dry-run-first no-merge restore |
@@ -708,8 +717,10 @@ measurements or grants approval.
 | `FROMSTUNTOKILL-V17-APP.md` | Historical V17 desktop integration and validation boundary |
 | `V18-RELEASE.md` | Historical V18 dashboard, guided workbenches, monitoring, and delivery-plan changes |
 | `FROMSTUNTOKILL-V18-APP.md` | Historical V18 desktop integration and validation boundary |
-| `V19-RELEASE.md` | CLI workflow progress display and validation |
-| `FROMSTUNTOKILL-V19-APP.md` | Current V19 app-branch integration and validation boundary |
+| `V19-RELEASE.md` | Historical CLI workflow progress display and validation |
+| `FROMSTUNTOKILL-V19-APP.md` | Historical V19 app-branch integration and validation boundary |
+| `V20-RELEASE.md` | Post-run download/audio cleanup review and safety gates |
+| `FROMSTUNTOKILL-V20-APP.md` | Current V20 cleanup integration and validation boundary |
 | `V9-QUEUE.md` | Historical V9 device-log review and inherited carry-overs; planning only |
 | `V10-QUEUE.md` | Historical V10 scope and implementation record; planning only |
 | `V11-QUEUE.md` | Historical V11 record and dependency-policy proposal; planning only |

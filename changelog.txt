@@ -310,3 +310,15 @@ FROM Version 18 -> Version 19 (app branch only; production `main` and W remain V
 - Validation: **393 passed, 7 skipped** (400 tests); compile/import, generated-runbook, all 7
   PowerShell AST parses, and diff checks passed. No media processing or GUI smoke test; see
   `V19-RELEASE.md`.
+
+FromStunToKill app branch V20 (2026-11-17)
+FROM Version 19 -> Version 20 (app branch only; production `main` and W remain V15)
+- Added the primary post-run choices **Keep everything for now** and **Free up space**.
+- Free-space review is gated on successful full QC with unchanged report/deliverable fingerprints.
+  It lists the exact episode download folder and manifest-associated audio files >=100 MiB,
+  preserves/hash-verifies small download metadata in episode references, and offers only
+  Recycle Bin/Trash movement after an exact-path confirmation.
+- Logs, plans, manifests, QC/provenance records, and deliveries are preserved; no permanent
+  deletion fallback or actual cleanup action is performed automatically.
+- Validation: **402 passed, 7 skipped** (409 tests); compile/import, generated-runbook, all 7
+  PowerShell AST parses, and diff checks passed. No real files were cleaned; see `V20-RELEASE.md`.
