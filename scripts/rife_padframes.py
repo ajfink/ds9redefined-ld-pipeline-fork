@@ -42,6 +42,7 @@ REPORT_HEADER = ("episode", "frame", "time", "method", "motion_score",
 MAX_RGB, MAX_MEAN = 2, 0.0005
 RIFE_MISIDENTIFICATION_WARNING = (
     "ONLY generate as an interpolated frame if this pad frame was incorrectly identified as preceding a scene cut.")
+MOTION_CUT_REVIEW_PERCENTILE = 95.0
 DVD_IMAGE_RE = re.compile(r"^DVD-(\d{2})-(\d{2})-(\d{2})\.(\d{3})-f(\d{8})\.png$", re.IGNORECASE)
 
 
@@ -64,11 +65,13 @@ def validate_human_classification(episode_data: dict, candidate_frames: set[int]
         return
     pads = episode_data.get("pads") or {}
     review = pads.get("pad_classification_review") or {}
+    decision_status = review.get("decision_status")
     if (review.get("schema") != "ld-pipeline-pad-classification-review-v1" or
             not re.fullmatch(r"[0-9a-f]{64}", str(review.get("decision_sha256", ""))) or
             not str(review.get("reviewed_by", "")).strip() or
+            decision_status not in ("HUMAN_REVIEWED", "AUTO_CLASSIFIED") or
             len(str(review.get("review_note", "")).strip()) < 8):
-        raise PipelineError("human PAD classification must be recorded and reviewed before RIFE")
+        raise PipelineError("PAD decision report must be recorded before RIFE")
     if instance_root is not None:
         def read_plan(key: str, status: str) -> dict:
             relative = Path(str(review.get(key, "")))
@@ -89,7 +92,7 @@ def validate_human_classification(episode_data: dict, candidate_frames: set[int]
                 raise PipelineError(f"PAD {key} belongs to a different episode")
             return value
 
-        decision = read_plan("decision_report_path", "HUMAN_REVIEWED")
+        decision = read_plan("decision_report_path", str(decision_status))
         committed = read_plan("committed_report_path", "COMMITTED")
         decision_path = instance_root / str(review["decision_report_path"])
         decision_evidence = decision.get("evidence")
@@ -98,13 +101,14 @@ def validate_human_classification(episode_data: dict, candidate_frames: set[int]
         if (_sha256(decision_path) != review.get("decision_sha256") or
                 committed.get("decision_sha256") != review.get("decision_sha256") or
                 decision.get("identity") != committed.get("identity") or
+                decision.get("status") != decision_status or
                 decision.get("review_note") != review.get("review_note") or
                 decision.get("reviewed_by") != review.get("reviewed_by") or
                 decision.get("original_cut_frames") != review.get("original_cut_frames") or
                 decision_evidence.get("pad_audit_sha256") != review.get("audit_sha256") or
                 decision_evidence.get("repair_frames_sha256") != review.get("repair_sha256") or
                 decision_evidence.get("fullres_report_sha256") != review.get("fullres_sha256")):
-            raise PipelineError("PAD human decision/commit record does not match the manifest review")
+            raise PipelineError("PAD decision/commit record does not match the manifest review")
         decision_rows = decision.get("candidates")
         if not isinstance(decision_rows, list):
             raise PipelineError("PAD human decision report has no candidate classifications")
@@ -116,7 +120,44 @@ def validate_human_classification(episode_data: dict, candidate_frames: set[int]
                 decision_rife != review.get("rife_frames") or
                 committed.get("cut_frames") != review.get("cut_frames") or
                 committed.get("rife_frames") != review.get("rife_frames")):
-            raise PipelineError("PAD human report and committed classification lists disagree")
+            raise PipelineError("PAD decision report and committed classification lists disagree")
+        auto_frames = set(review.get("auto_classified_rife_frames", []))
+        human_frames = set(review.get("human_review_frames", []))
+        decision_by_frame = {row.get("frame"): row for row in decision_rows if isinstance(row, dict)}
+        if (auto_frames & human_frames or auto_frames | human_frames != candidate_frames or
+                (decision_status == "AUTO_CLASSIFIED") != (not human_frames) or
+                decision.get("human_review_frames") != sorted(human_frames) or
+                decision.get("auto_classified_rife_frames") != sorted(auto_frames)):
+            raise PipelineError("PAD human/automatic decision inventories disagree")
+        policy = review.get("motion_review_policy") or {}
+        if (policy.get("name") != "source-baseline-percentile-v1" or
+                policy.get("auto_rife_below_percentile") != MOTION_CUT_REVIEW_PERCENTILE):
+            raise PipelineError("PAD motion-baseline decision policy is unsupported")
+        original_cut_set = set(review.get("original_cut_frames", []))
+        residual_set = set(review.get("accepted_residual_frames", []))
+        with audit.open(newline="", encoding="utf-8-sig") as stream:
+            audit_rows = {int(row["frame"]): row for row in csv.DictReader(stream, delimiter="\t")}
+        for frame in auto_frames:
+            row = decision_by_frame.get(frame) or {}
+            audit_row = audit_rows.get(frame) or {}
+            try:
+                percentile = float(row.get("baseline_percentile"))
+                source_percentile = float(audit_row.get("baseline_percentile"))
+                source_motion = float(audit_row.get("motion_score"))
+                reported_motion = float(row.get("motion_score"))
+            except (TypeError, ValueError):
+                percentile = float("nan")
+                source_percentile = source_motion = reported_motion = float("nan")
+            if (row.get("classification") != "rife" or
+                    row.get("decision_source") != "motion-baseline-p95" or
+                    not 0 <= percentile < MOTION_CUT_REVIEW_PERCENTILE or
+                    percentile != source_percentile or reported_motion != source_motion or
+                    not math.isfinite(source_motion) or
+                    frame in original_cut_set or frame in residual_set):
+                raise PipelineError(f"frame {frame} is not eligible for automatic motion-baseline RIFE classification")
+        if any((decision_by_frame.get(frame) or {}).get("decision_source") != "human"
+               for frame in human_frames):
+            raise PipelineError("human-review candidate lacks an explicit human decision source")
         if review.get("misidentified_cut_reclassifications") and any(
                 decision.get("rife_misidentification_warning") != RIFE_MISIDENTIFICATION_WARNING or
                 row.get("confirmed_misidentified_cut") is not True or
@@ -134,21 +175,32 @@ def validate_human_classification(episode_data: dict, candidate_frames: set[int]
         original = review.get("original_cut_frames")
         hold = review.get("hold_frames")
         residual = review.get("accepted_residual_frames")
+        human_review = review.get("human_review_frames")
+        auto_rife = review.get("auto_classified_rife_frames")
         images = review.get("cut_images")
+        lists = (cut, rife, original, hold, residual, human_review, auto_rife)
         if any(not isinstance(value, list) or any(type(frame) is not int or frame < 0 for frame in value)
-               or len(value) != len(set(value)) for value in (cut, rife, original, hold, residual)):
+               or len(value) != len(set(value)) for value in lists):
             raise ValueError("frame lists are malformed")
         if not isinstance(images, dict):
             raise ValueError("cut_images is not an object")
         cut_set, rife_set, hold_set = set(cut), set(rife), set(hold)
         residual_set = set(residual)
+        human_set, auto_set = set(human_review), set(auto_rife)
         image_set = {int(frame) for frame in images}
         current_cuts = pads.get("cut_pad_frames")
+        policy = review.get("motion_review_policy") or {}
         if (cut_set & rife_set or cut_set | rife_set != candidate_frames or
                 current_cuts != sorted(cut_set) or pads.get("cut_pads") != len(cut_set) or
                 hold_set != hold_frames or image_set != image_frames or
                 residual_set != accepted_residual or hold_set & image_set or
                 (hold_set | image_set) - cut_set or residual_set - candidate_frames or
+                human_set & auto_set or human_set | auto_set != candidate_frames or
+                auto_set - rife_set or
+                (review.get("decision_status") == "AUTO_CLASSIFIED") != (not human_set) or
+                review.get("decision_status") not in ("HUMAN_REVIEWED", "AUTO_CLASSIFIED") or
+                policy.get("name") != "source-baseline-percentile-v1" or
+                policy.get("auto_rife_below_percentile") != MOTION_CUT_REVIEW_PERCENTILE or
                 set(review.get("misidentified_cut_reclassifications", [])) !=
                 (rife_set & set(original))):
             raise PipelineError("current manifest, CLI cut policy, and human PAD classification decisions disagree")

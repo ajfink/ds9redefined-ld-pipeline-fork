@@ -53,7 +53,7 @@ STAGES = {
     "measure-dvd-alignment": {"kind": "python", "script": "measure_dvd_alignment.py", "gate": "stack", "write": True},
     "prepare-retime-breaks": {"kind": "python", "script": "prepare_retime_breaks.py", "gate": "stack", "review_gate": True, "write": True},
     "record-retime-breaks": {"kind": "python", "script": "record_retime_breaks.py", "gate": "inputs", "write": True},
-    "record-pad-classifications": {"kind": "python", "script": "record_pad_classifications.py", "gate": "inputs", "review_gate": True, "write": True},
+    "record-pad-classifications": {"kind": "python", "script": "record_pad_classifications.py", "gate": "inputs", "write": True},
     "measure-break-edges": {"kind": "python", "script": "measure_break_edges.py", "gate": "stack", "write": True},
     "measure-audio-rate": {"kind": "python", "script": "measure_audio_rate.py", "write": True},
     "measure-pad-audio": {"kind": "python", "script": "measure_pad_audio.py", "gate": "stack", "write": True},

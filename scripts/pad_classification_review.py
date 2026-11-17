@@ -6,6 +6,7 @@ import csv
 import getpass
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -29,7 +30,7 @@ from pad_review import PadReviewError, PreviewCache  # noqa: E402
 from record_pad_classifications import (  # noqa: E402
     MAX_MEAN, MAX_RGB, RIFE_MISIDENTIFICATION_WARNING, SCHEMA,
 )
-from rife_padframes import extract_neighbors  # noqa: E402
+from rife_padframes import (MOTION_CUT_REVIEW_PERCENTILE, extract_neighbors)  # noqa: E402
 from shared_workspace import validate_device_config_profile, validate_instance  # noqa: E402
 
 
@@ -69,7 +70,7 @@ def _read_tsv(path: Path, required: tuple[str, ...], label: str) -> dict[int, di
 
 def load_classification_evidence(episode: str, series: str, manifest_path: Path,
                                  probe: Path) -> tuple[dict, list[dict], dict]:
-    """Load and hash the exact audit inputs; do not classify any candidate automatically."""
+    """Load exact audit inputs and auto-classify only baseline-supported motion candidates."""
     try:
         manifest_bytes = manifest_path.read_bytes()
         manifest = json.loads(manifest_bytes.decode("utf-8-sig"))
@@ -111,13 +112,16 @@ def load_classification_evidence(episode: str, series: str, manifest_path: Path,
             rgb_mean = float(raster["rgb_mean"])
             time_s = float(audit["time"])
             motion_score = float(audit.get("motion_score") or "nan")
+            percentile_text = str(audit.get("baseline_percentile") or "").strip()
+            motion_percentile = float(percentile_text) if percentile_text else float("nan")
         except (KeyError, TypeError, ValueError) as exc:
             raise PadClassificationReviewError(f"candidate {frame} has malformed evidence") from exc
         if not (0 <= rgb_max <= 255 and 0 <= rgb_mean <= 255):
             raise PadClassificationReviewError(f"candidate {frame} has out-of-range RGB evidence")
-        if not (time_s >= 0):
+        if not (time_s >= 0) or (not math.isfinite(motion_score) and not math.isnan(motion_score)):
             raise PadClassificationReviewError(f"candidate {frame} has invalid time")
         candidates.append({"frame": frame, "time": time_s, "motion_score": motion_score,
+                           "baseline_percentile": motion_percentile,
                            "rgb_max": rgb_max, "rgb_mean": rgb_mean,
                            "residual_requires_acceptance": rgb_max > MAX_RGB or rgb_mean > MAX_MEAN})
 
@@ -128,6 +132,19 @@ def load_classification_evidence(episode: str, series: str, manifest_path: Path,
         raise PadClassificationReviewError("manifest pads.cut_pad_frames must be a unique integer list")
     if not set(cut_frames).issubset(set(candidate_list)):
         raise PadClassificationReviewError("manifest cut-PAD frames are not present in the confirmed repair list")
+    old_cut_set = set(cut_frames)
+    auto_frames = []
+    human_frames = []
+    for candidate in candidates:
+        frame = candidate["frame"]
+        percentile = candidate["baseline_percentile"]
+        auto_motion = (math.isfinite(percentile) and
+                       0 <= percentile < MOTION_CUT_REVIEW_PERCENTILE and
+                       frame not in old_cut_set and
+                       not candidate["residual_requires_acceptance"])
+        candidate["auto_classified_rife"] = auto_motion
+        candidate["requires_human_review"] = not auto_motion
+        (auto_frames if auto_motion else human_frames).append(frame)
     files = manifest.get("files") or {}
     dvd_available = manifest.get("dvd_reference_available")
     if dvd_available is None:
@@ -143,6 +160,15 @@ def load_classification_evidence(episode: str, series: str, manifest_path: Path,
         "dvd_reference_available": bool(dvd_available),
         "cut_pad_images_choice": manifest.get("cut_pad_images_choice"),
         "original_cut_frames": sorted(cut_frames),
+        "human_review_frames": sorted(human_frames),
+        "auto_classified_rife_frames": sorted(auto_frames),
+        "motion_review_policy": {
+            "name": "source-baseline-percentile-v1",
+            "auto_rife_below_percentile": MOTION_CUT_REVIEW_PERCENTILE,
+            "rule": ("auto non-cut/RIFE only when the PAD's across-flank motion score has a valid "
+                     "baseline percentile below the cutoff; review outliers, missing metrics, prior cuts, "
+                     "and above-threshold full-raster residuals"),
+        },
         "reviewed_by": getpass.getuser(),
         "reviewed_at_utc": datetime.now(timezone.utc).isoformat(),
         "rife_misidentification_warning": RIFE_MISIDENTIFICATION_WARNING,
@@ -174,6 +200,7 @@ class PadClassificationReviewWindow:
         self.cache: PreviewCache | None = None
         self.photos: list[ImageTk.PhotoImage] = []
         self.items: list[dict] = []
+        self.all_items: list[dict] = []
         self.decisions: dict[int, dict] = {}
         self.index = 0
         self.manifest: dict = {}
@@ -194,6 +221,7 @@ class PadClassificationReviewWindow:
         self.misclassified_check: ttk.Checkbutton | None = None
         self.residual_check: ttk.Checkbutton | None = None
         self.hold_check: ttk.Checkbutton | None = None
+        self.note_entry: ttk.Entry | None = None
 
     def show(self) -> None:
         try:
@@ -211,6 +239,21 @@ class PadClassificationReviewWindow:
                 self.probe = self.ld.probe().resolve(strict=True)
                 self.manifest, self.items, self.report_base = load_classification_evidence(
                     self.episode, self.series, self.manifest_path.resolve(strict=True), self.probe)
+                self.all_items = self.items
+                self.items = [row for row in self.all_items if row["requires_human_review"]]
+                self.decisions = {
+                    row["frame"]: {
+                        "frame": row["frame"], "classification": "rife",
+                        "decision_source": "motion-baseline-p95",
+                        "motion_score": row["motion_score"],
+                        "baseline_percentile": row["baseline_percentile"],
+                        "cut_replacement": "", "cut_image_path": "",
+                        "confirmed_misidentified_cut": False,
+                        "rife_warning_acknowledged": False,
+                        "confirmed_hold": False, "accept_residual": False,
+                    }
+                    for row in self.all_items if row["auto_classified_rife"]
+                }
                 from ldcommon import Episode
                 ep = load_episode(f"{self.series}:{self.episode}", self.ld, series=self.series)
                 self.video = ep.path("avs_encode").resolve(strict=True)
@@ -224,15 +267,21 @@ class PadClassificationReviewWindow:
             return
 
         self.window = tk.Toplevel(self.parent)
-        self.window.title(f"PAD cut/RIFE classification — {self.series}:{self.episode}")
+        self.window.title(f"PAD cut approval review — {self.series}:{self.episode}")
         self.window.geometry("1240x830")
         self.window.minsize(900, 680)
         self.window.transient(self.parent)
         self.window.protocol("WM_DELETE_WINDOW", self.close)
         body = ttk.Frame(self.window, padding=10)
         body.pack(fill="both", expand=True)
-        ttk.Label(body, text=f"Human visual classification — {self.series}:{self.episode}",
+        ttk.Label(body, text=f"Approve scene-cut PADs — {self.series}:{self.episode}",
                   font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        ttk.Label(
+            body,
+            text=(f"Motion baseline policy: auto non-cut/RIFE below the {MOTION_CUT_REVIEW_PERCENTILE:.0f}th percentile "
+                  f"({len(self.report_base['auto_classified_rife_frames'])} candidate(s)); "
+                  f"{len(self.items)} cut-like, prior-cut, residual, or unmeasured candidate(s) need review."),
+            wraplength=1180).pack(anchor="w", pady=(3, 5))
         ttk.Label(body, text=RIFE_MISIDENTIFICATION_WARNING, wraplength=1180,
                   foreground="#8b1a1a").pack(anchor="w", pady=(4, 8))
         self.caption_var = tk.StringVar()
@@ -243,7 +292,7 @@ class PadClassificationReviewWindow:
         controls = ttk.LabelFrame(body, text="Classification and evidence", padding=8)
         controls.pack(fill="x", pady=(8, 0))
         self.classification_var = tk.StringVar(value="")
-        ttk.Label(controls, text="Human decision:").grid(row=0, column=0, sticky="w")
+        ttk.Label(controls, text="Cut review:").grid(row=0, column=0, sticky="w")
         ttk.Radiobutton(controls, text="Non-cut PAD → RIFE", variable=self.classification_var,
                         value="rife", command=self._save_current).grid(row=0, column=1, sticky="w")
         ttk.Radiobutton(controls, text="Cut PAD → still/hold", variable=self.classification_var,
@@ -282,7 +331,8 @@ class PadClassificationReviewWindow:
         self.residual_check.grid(row=4, column=0, columnspan=3, sticky="w")
         ttk.Label(controls, text="Review note:").grid(row=5, column=0, sticky="w", pady=(5, 0))
         self.note_var = tk.StringVar()
-        ttk.Entry(controls, textvariable=self.note_var).grid(
+        self.note_entry = ttk.Entry(controls, textvariable=self.note_var)
+        self.note_entry.grid(
             row=5, column=1, columnspan=3, sticky="ew", pady=(5, 0))
         controls.columnconfigure(2, weight=1)
 
@@ -292,13 +342,31 @@ class PadClassificationReviewWindow:
         self.position_var = tk.StringVar()
         ttk.Label(nav, textvariable=self.position_var).pack(side="left", expand=True)
         ttk.Button(nav, text="Next →", command=self.next).pack(side="right")
-        ttk.Button(nav, text="Save reviewed decisions", command=self.save_report).pack(side="right", padx=8)
+        ttk.Button(nav, text="Save PAD decisions", command=self.save_report).pack(side="right", padx=8)
 
-        if not self.items:
+        if not self.all_items:
             messagebox.showinfo("No PAD candidates", "The confirmed repair list is empty; no classification is needed.", parent=self.window)
             self.close()
             return
-        self._load_current()
+        if not self.items:
+            self.note_var.set(self._automatic_review_note())
+            assert self.note_entry is not None
+            self.note_entry.configure(state="disabled")
+            self.position_var.set(
+                f"{len(self.all_items)} candidate(s) auto-classified as non-cut from the source motion baseline; "
+                "none require cut approval.")
+            self.caption_var.set(
+                f"Auto-classified RIFE frames: {self.report_base['auto_classified_rife_frames']}. "
+                f"Cut-review outlier threshold: baseline percentile >= {MOTION_CUT_REVIEW_PERCENTILE:.0f}; "
+                "missing metrics, prior cut-PADs, and above-threshold residuals are not auto-classified.")
+            ttk.Label(self.preview_frame, text=self.caption_var.get(), wraplength=900).pack(expand=True)
+        else:
+            self._load_current()
+
+    @staticmethod
+    def _automatic_review_note() -> str:
+        return (f"Automatic non-cut classification: source-baseline motion percentile below "
+                f"{MOTION_CUT_REVIEW_PERCENTILE:.0f}; cut-like/uncertain candidates require human review.")
 
     def _set_episode_environment(self) -> None:
         os.environ["LDP_PROFILE"] = str(self.profile_path.resolve(strict=True))
@@ -335,6 +403,10 @@ class PadClassificationReviewWindow:
         decision.update({
             "frame": frame,
             "classification": self.classification_var.get().strip(),
+            "decision_source": "human",
+            "motion_score": row["motion_score"] if math.isfinite(row["motion_score"]) else None,
+            "baseline_percentile": (row["baseline_percentile"]
+                                    if math.isfinite(row["baseline_percentile"]) else None),
             "confirmed_misidentified_cut": bool(self.misclassified_var.get()),
             "rife_warning_acknowledged": bool(self.misclassified_var.get()),
             "cut_replacement": self.replacement_var.get().strip(),
@@ -379,10 +451,14 @@ class PadClassificationReviewWindow:
         self.position_var.set(f"Candidate {self.index + 1} / {len(self.items)} — frame {frame}")
         score = row["motion_score"]
         score_text = f"{score:.6f}" if score == score else "unavailable"
+        percentile = row["baseline_percentile"]
+        percentile_text = f"{percentile:.2f}" if math.isfinite(percentile) else "unavailable"
         self.caption_var.set(
             f"Frame {frame} at {row['time']:.3f}s; across-flank score={score_text}; "
+            f"source-baseline percentile={percentile_text}; "
             f"full-raster rgb_max={row['rgb_max']}, rgb_mean={row['rgb_mean']:.9f}. "
-            "Use the two real flanks, not a black-frame metric, to decide whether a cut lies between them.")
+            "This candidate exceeded the automatic-motion cutoff or needs explicit residual/prior-cut review. "
+            "Approve a cut only when the flanks show a scene boundary.")
         for child in self.preview_frame.winfo_children():
             child.destroy()
         self.photos.clear()
@@ -439,7 +515,7 @@ class PadClassificationReviewWindow:
     def save_report(self) -> None:
         self._save_current()
         note = self.note_var.get().strip()
-        if len(note) < 8:
+        if self.items and len(note) < 8:
             messagebox.showerror("Review note required", "Enter a specific review note of at least 8 characters.", parent=self.window)
             return
         missing = [item["frame"] for item in self.items
@@ -474,17 +550,25 @@ class PadClassificationReviewWindow:
             messagebox.showerror("PAD decisions incomplete", "\n".join(invalid[:20]), parent=self.window)
             return
         report = dict(self.report_base)
-        report["review_note"] = note
-        report["candidates"] = [self.decisions[item["frame"]] for item in self.items]
+        report["status"] = "HUMAN_REVIEWED" if self.items else "AUTO_CLASSIFIED"
+        report["reviewed_by"] = getpass.getuser() if self.items else "automatic-motion-baseline-p95"
+        report["review_note"] = note or self._automatic_review_note()
+        report["human_review_frames"] = sorted(item["frame"] for item in self.items)
+        report["candidates"] = [self.decisions[item["frame"]] for item in self.all_items]
         if any(row.get("classification") == "rife" and row["frame"] in set(report["original_cut_frames"])
                for row in report["candidates"]):
             if report["rife_misidentification_warning"] != RIFE_MISIDENTIFICATION_WARNING:
                 messagebox.showerror("Warning mismatch", "Required RIFE warning is missing or changed.", parent=self.window)
                 return
+        approved_cuts = sum(row.get("classification") == "cut" for row in report["candidates"])
+        auto_count = len(report["auto_classified_rife_frames"])
         if not messagebox.askyesno(
-                "Save and record human PAD decisions",
-                "This creates an immutable decision report and a workflow plan that updates the manifest only after you run it.\n\n"
-                "The RIFE stage remains protected by its manifest cut-PAD gate.", parent=self.window):
+                "Save PAD cut approvals",
+                (f"This records {approved_cuts} human-approved cut PAD(s), "
+                 f"{len(self.items) - approved_cuts} human-reviewed non-cut candidate(s), and "
+                 f"{auto_count} motion-baseline non-cut candidate(s). "
+                 "The immutable report and manifest-update plan are saved; the manifest changes only when run."),
+                parent=self.window):
             return
         try:
             plans = self.instance_root / "plans"

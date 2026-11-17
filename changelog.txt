@@ -275,3 +275,15 @@ FROM Version 15 -> Version 16 (app branch only; production `main` and W remain V
   generated-runbook check, all 7 PowerShell parsers, and diff check passed. Fixtures only; no real
   media, final encode/remux, or fresh-Mac runtime. Reconstructed Mac evidence gaps stay open in
   `V16-QUEUE.md`.
+
+FromStunToKill app branch V17 (2026-11-16)
+FROM Version 16 -> Version 17 (app branch only; production `main` and W remain V15)
+- Reused the existing source-baseline motion percentile to auto-classify valid below-P95 PADs as
+  non-cut/RIFE. Humans now review P95+ outliers, missing metrics, prior cut-PADs, and full-raster
+  residual exceptions rather than individually classifying every candidate.
+- Kept cut still/hold safeguards, exact prior-cut correction warning, immutable evidence, and
+  direct RIFE policy/input validation. Removed the redundant post-record PAD review gate; after
+  the reviewed/automatic manifest update succeeds, the app previews/runs a fresh RIFE-only plan.
+- Validation: **371 passed, 7 skipped** (378 tests); compileall, warnings-as-errors imports,
+  generated-runbook check, all 7 PowerShell parsers, and diff check passed. No real-media threshold
+  calibration, RIFE run, final encode/remux, or new Mac runtime claim; see `V17-RELEASE.md`.

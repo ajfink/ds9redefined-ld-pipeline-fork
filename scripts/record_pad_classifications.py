@@ -6,6 +6,7 @@ import argparse
 import getpass
 import hashlib
 import json
+import math
 import os
 import secrets
 import sys
@@ -21,6 +22,7 @@ from ldcommon import (Ld, PipelineError, assert_writable_path, episode_manifest_
                       load_episode)
 from dependency_lock import LockError
 from rife_padframes import (MAX_MEAN, MAX_RGB, RIFE_MISIDENTIFICATION_WARNING,
+                            MOTION_CUT_REVIEW_PERCENTILE,
                             parse_shared_cut_image,
                             require_color_match_note)
 
@@ -91,8 +93,8 @@ def _manifest_lock(path: Path):
 
 def _report_inputs(report: dict, report_path: Path, probe: Path,
                    expected_identity: str) -> tuple[Path, Path, Path, str]:
-    if (report.get("schema") != SCHEMA or report.get("status") != "HUMAN_REVIEWED" or
-            report.get("identity") != expected_identity):
+    if (report.get("schema") != SCHEMA or report.get("status") not in
+            ("HUMAN_REVIEWED", "AUTO_CLASSIFIED") or report.get("identity") != expected_identity):
         raise PipelineError(f"PAD classification report is not a reviewed report for {expected_identity}")
     declared = report.get("evidence") or {}
     if not isinstance(declared, dict):
@@ -129,11 +131,25 @@ def record_reviewed_classifications(decision_path: Path, ep, ld: Ld,
     actual_sha = _sha256(decision_path)
     if actual_sha != expected_sha256:
         raise PipelineError("PAD classification report changed after review")
-    if (report.get("schema") != SCHEMA or report.get("status") != "HUMAN_REVIEWED" or
+    status = report.get("status")
+    if (report.get("schema") != SCHEMA or status not in ("HUMAN_REVIEWED", "AUTO_CLASSIFIED") or
             report.get("identity") != expected_identity or
-            len(review_note.strip()) < 8 or review_note.strip() != report.get("review_note") or
-            report.get("reviewed_by") != getpass.getuser()):
-        raise PipelineError("PAD review report identity, reviewer, or required note is invalid")
+            review_note.strip() != report.get("review_note")):
+        raise PipelineError("PAD decision report identity, status, or note is invalid")
+    if status == "HUMAN_REVIEWED":
+        if (len(review_note.strip()) < 8 or report.get("reviewed_by") != getpass.getuser() or
+                not report.get("human_review_frames")):
+            raise PipelineError("human cut review requires the current reviewer and a specific note")
+    elif (report.get("reviewed_by") != "automatic-motion-baseline-p95" or
+          report.get("human_review_frames") or
+          report.get("review_note") != (
+              f"Automatic non-cut classification: source-baseline motion percentile below "
+              f"{MOTION_CUT_REVIEW_PERCENTILE:.0f}; cut-like/uncertain candidates require human review.")):
+        raise PipelineError("automatic PAD classification does not match the approved motion-baseline policy")
+    policy = report.get("motion_review_policy") or {}
+    if (policy.get("name") != "source-baseline-percentile-v1" or
+            policy.get("auto_rife_below_percentile") != MOTION_CUT_REVIEW_PERCENTILE):
+        raise PipelineError("PAD decision report uses an unsupported motion-baseline policy")
     probe = ld.probe().resolve(strict=True)
     audit_path, repair_path, fullres_path, report_digest = _report_inputs(
         report, decision_path, probe, expected_identity)
@@ -175,7 +191,16 @@ def record_reviewed_classifications(decision_path: Path, ep, ld: Ld,
     frames = [row.get("frame") for row in decisions]
     if (any(type(frame) is not int or frame < 0 for frame in frames) or
             len(frames) != len(set(frames)) or sorted(frames) != candidate_frames):
-        raise PipelineError("human PAD classifications must cover every unique repair candidate exactly once")
+        raise PipelineError("PAD decisions must cover every unique repair candidate exactly once")
+    raw_human_frames = report.get("human_review_frames")
+    raw_auto_frames = report.get("auto_classified_rife_frames")
+    if any(not isinstance(value, list) or any(type(frame) is not int or frame < 0 for frame in value)
+           or len(value) != len(set(value)) for value in (raw_human_frames, raw_auto_frames)):
+        raise PipelineError("PAD human/automatic frame inventories must be unique non-negative integer lists")
+    human_frames, auto_frames = set(raw_human_frames), set(raw_auto_frames)
+    if (human_frames & auto_frames or human_frames | auto_frames != set(candidate_frames) or
+            ((report.get("status") == "AUTO_CLASSIFIED") != (not human_frames))):
+        raise PipelineError("PAD human and automatic classification inventories do not cover the candidate set")
 
     original_manifest = _read_json(manifest_path, "episode manifest")
     pads = original_manifest.get("pads") or {}
@@ -218,6 +243,29 @@ def record_reviewed_classifications(decision_path: Path, ep, ld: Ld,
         except (KeyError, TypeError, ValueError) as exc:
             raise PipelineError(f"frame {frame} has invalid full-raster evidence") from exc
         residual = rgb_max > MAX_RGB or rgb_mean > MAX_MEAN
+        try:
+            percentile_text = str(audit.get("baseline_percentile") or "").strip()
+            baseline_percentile = float(percentile_text) if percentile_text else float("nan")
+            audit_motion = float(audit.get("motion_score") or "nan")
+        except (TypeError, ValueError) as exc:
+            raise PipelineError(f"frame {frame} has invalid motion-baseline evidence") from exc
+        auto_motion = (not residual and frame not in old_cut_set and
+                       math.isfinite(baseline_percentile) and
+                       0 <= baseline_percentile < MOTION_CUT_REVIEW_PERCENTILE)
+        expected_percentile = baseline_percentile if math.isfinite(baseline_percentile) else None
+        expected_motion = audit_motion if math.isfinite(audit_motion) else None
+        if (row.get("baseline_percentile") != expected_percentile or
+                row.get("motion_score") != expected_motion):
+            raise PipelineError(f"frame {frame} motion evidence in decision report does not match PAD audit")
+        if auto_motion != (frame in auto_frames):
+            raise PipelineError(f"frame {frame} automatic/human review status disagrees with the {MOTION_CUT_REVIEW_PERCENTILE:.0f}th-percentile policy")
+        if auto_motion:
+            if (row.get("classification") != "rife" or
+                    row.get("decision_source") != "motion-baseline-p95" or
+                    row.get("baseline_percentile") != baseline_percentile):
+                raise PipelineError(f"frame {frame} automatic RIFE decision does not match current motion evidence")
+        elif (frame not in human_frames or row.get("decision_source") != "human"):
+            raise PipelineError(f"frame {frame} needs explicit human cut/non-cut review")
         if residual and row.get("accept_residual") is not True:
             raise PipelineError(f"frame {frame} is above the full-raster near-black threshold; explicitly accept its residual after review")
         if residual:
@@ -288,9 +336,13 @@ def record_reviewed_classifications(decision_path: Path, ep, ld: Ld,
             "audit_sha256": report["evidence"]["pad_audit_sha256"],
             "repair_sha256": report["evidence"]["repair_frames_sha256"],
             "fullres_sha256": report["evidence"]["fullres_report_sha256"],
-            "reviewed_by": getpass.getuser(),
+            "reviewed_by": report["reviewed_by"],
+            "decision_status": report["status"],
             "reviewed_at_utc": datetime.now(timezone.utc).isoformat(),
             "review_note": review_note.strip(),
+            "motion_review_policy": report["motion_review_policy"],
+            "human_review_frames": sorted(human_frames),
+            "auto_classified_rife_frames": sorted(auto_frames),
             "original_cut_frames": sorted(old_cut_set),
             "cut_frames": sorted(cut_frames),
             "rife_frames": sorted(rife_frames),

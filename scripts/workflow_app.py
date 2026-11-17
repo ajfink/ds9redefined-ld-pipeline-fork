@@ -2189,6 +2189,8 @@ class WorkflowApp:
                 "decisions": [
                     {"id": "pad-classification-report-sha256", "value": report_sha256},
                     {"id": "pad-classification-counts", "value": counts},
+                    {"id": "pad-auto-motion-count", "value": len(report.get("auto_classified_rife_frames", []))},
+                    {"id": "pad-human-review-count", "value": len(report.get("human_review_frames", []))},
                     {"id": "pad-review-note", "value": note},
                     {"id": "final-encode-remux", "value": "not included; no encode/remux approval"},
                 ],
@@ -2201,20 +2203,11 @@ class WorkflowApp:
                               "--review-note", note, "--apply"],
                      "inputs": [str(path.resolve(strict=True)) for path in inputs],
                      "outputs": [str(manifest_path), str(committed)]},
-                    {"id": "review-recorded-pad-classifications", "kind": "review",
-                     "for_stage": "record-pad-classifications",
-                     "prompt": ("Review the committed PAD classification record and updated manifest. "
-                                f"The human visual review selected {counts['cut']} cut PAD(s) and "
-                                f"{counts['rife']} non-cut/RIFE PAD(s). Confirm the frame list, "
-                                "backups, provenance, and any cut still/hold policy before continuing to RIFE. "
-                                "This approval does not authorize padfix, encode, or remux."),
-                     "inputs": [str(manifest_path), str(committed), str(report_path)],
-                     "outputs": []},
                 ],
             }
             if not self._save_app_stage_plan(
                     plan, f"{series}-{episode}-pad-classification-plan.json",
-                    "human-reviewed PAD classification"):
+                    "PAD cut approval and motion-baseline classification"):
                 return False
         except (WorkflowAppError, OSError, KeyError, TypeError, ValueError,
                 json.JSONDecodeError) as exc:
@@ -2222,7 +2215,7 @@ class WorkflowApp:
             return False
         self.auto_start_rife_after_pad_record = True
         self.auto_run_after_preview = True
-        self.status.set("The immutable PAD-record plan is saved. Previewing the manifest update; the explicit review gate remains before RIFE.")
+        self.status.set("The immutable PAD-record plan is saved. Previewing the manifest update; after it succeeds, RIFE will run from a fresh plan using approved cuts and motion-baseline non-cuts.")
         self._launch("preview")
         return True
 
@@ -2422,16 +2415,16 @@ class WorkflowApp:
                                 self.auto_advance_after_run)
                 auto_run = (code == "0" and completed_action == "preview" and
                             self.auto_run_after_preview)
-                auto_rife = (code == "0" and completed_action == "approve" and
-                             self.auto_start_rife_after_pad_record)
+                auto_rife = (code == "0" and completed_action in ("run", "approve") and
+                             getattr(self, "auto_start_rife_after_pad_record", False))
                 if (self.pending_action == "preview" and code == "0" and
                         self.pending_plan_hash is not None and self._plan_digest() == self.pending_plan_hash):
                     self.previewed_plan_hash = self.pending_plan_hash
                 self.auto_advance_after_run = False
                 self.auto_run_after_preview = False
-                if code == "4":
+                if code == "4" or code not in ("0", "3"):
                     self.auto_start_rife_after_pad_record = False
-                elif code != "3":
+                elif code == "0" and not (auto_run or auto_rife):
                     self.auto_start_rife_after_pad_record = False
                 self.process = None
                 self._set_running(False)

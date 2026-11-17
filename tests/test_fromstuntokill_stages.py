@@ -21,7 +21,7 @@ class FromStunToKillV15StageTests(unittest.TestCase):
         self.assertIn("record-efm-capture", STAGES)
         self.assertTrue(STAGES["render-stack"].get("review_gate"))
         self.assertTrue(STAGES["prepare-retime-breaks"].get("review_gate"))
-        self.assertTrue(STAGES["record-pad-classifications"].get("review_gate"))
+        self.assertFalse(STAGES["record-pad-classifications"].get("review_gate"))
         self.assertTrue(STAGES["record-efm-capture"].get("review_gate"))
 
     def test_local_initializer_and_stack_renderer_use_bounded_python_helpers(self):

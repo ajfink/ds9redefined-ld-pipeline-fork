@@ -1,8 +1,8 @@
 # DS9 LaserDisc OpenCode Operator Pack
 
-**Workflow version: 16 (FromStunToKill app branch)** — check `WORKFLOW_VERSION` and follow the
+**Workflow version: 17 (FromStunToKill app branch)** — check `WORKFLOW_VERSION` and follow the
 core-change/device-log rules in `WORKFLOW_VERSIONING.md` before editing or syncing workflow files.
-This V16 increment is scoped to the app branch; production `main` and the W shared tree remain
+This V17 increment is scoped to the app branch; production `main` and the W shared tree remain
 at V15 and are not modified by this release.
 
 **Design goal:** make the workflow clear and reliable enough for capable free or low-cost
@@ -601,7 +601,7 @@ permission.
 
 ## Optional FromStunToKill desktop app
 
-Launch the local GUI with `python scripts/workflow_app.py`. It uses the V16 allowlisted
+Launch the local GUI with `python scripts/workflow_app.py`. It uses the V17 allowlisted
 runner and automatically saves concrete, immutable workflow plans under the device's
 `devices/<DEVICE>-<ID>/plans/` folder when **Preview** is clicked; no separate save step is
 needed. Intake fields remain editable after preview and until **Run** is confirmed; edits
@@ -643,16 +643,18 @@ separate plan requiring explicit unique-pair/merged-through selections, a ration
 human review gate, report/input hash checks, a backup, and the V15 atomic manifest writer;
 offsets and steps remain unmeasured. Final encode/remux is not started by candidate tools.
 
-The V16 PAD flow requires human visual classification of every candidate before RIFE. It shows
-the exact cut-misidentification warning, preserves DVD/no-DVD cut safeguards, and writes an
-immutable review report before a separately reviewed manifest update. Only after that explicit
-gate can the app generate a unique-run RIFE-only plan. EFM verification binds each decode log,
+The V17 PAD flow uses the existing episode motion-baseline percentile: candidates below P95 are
+recorded as automatic non-cut/RIFE decisions when their metrics are valid. P95+ outliers, missing
+metrics, prior cut-PADs, and above-threshold residuals remain in the human review queue. Reviewers
+approve actual cuts or reject cut-like outliers as non-cut; the exact prior-cut warning and
+DVD/no-DVD safeguards remain. Decisions are saved immutably, and RIFE runs only after the manifest
+update succeeds. EFM verification binds each decode log,
 TBC/metadata source, WAV, and EFMSink report to one manifest capture; capture selection is a
 separate human decision with an explicit rationale and Orc input-order PAD count. These tools
 do not authorize a final encode or remux.
 
 **Get OpenCode help** is optional, audit-logged, and disabled by default; the operator can
-explicitly enable it in the app. The V16 app workflow, local-source intake, Archive picker,
+explicitly enable it in the app. The V17 app workflow, local-source intake, Archive picker,
 candidate analysis, and human approval gates work without it. AI output never selects
 measurements or grants approval.
 
@@ -668,8 +670,8 @@ measurements or grants approval.
 | `scripts/bootstrap_deps.py` / `dependencies/` | Direct Python version locks for Windows x64, Mac arm64, and candidate Linux x86_64; check-only by default, `--install` is explicit |
 | `scripts/run_stage.py` | Allowlisted stage dispatcher; dry-run plan by default, explicit `--execute`, series-aware stage identity, downloader-specific checks for early download, and full gates before other writes |
 | `scripts/run_workflow.py` | Ordered JSON-plan orchestration; series-scoped status/log/locks/resume, input/output fingerprints, and conservative resume |
-| `scripts/workflow_app.py` | Optional Tk desktop intake and review UI; saves plans for the same allowlisted V15 runner |
-| `scripts/pad_classification_review.py` / `record_pad_classifications.py` | Human visual PAD classification and immutable, fail-closed manifest recording before RIFE |
+| `scripts/workflow_app.py` | Optional Tk desktop intake, PAD cut review, EFM provenance/selection, and review UI; saves plans for the V17 allowlisted runner |
+| `scripts/pad_classification_review.py` / `record_pad_classifications.py` | P95 motion-baseline PAD defaults, human cut/outlier review, and immutable manifest recording before RIFE |
 | `scripts/verify_efm_capture.py` / `record_efm_capture_selection.py` | Bind each EFMSink decode to its manifest TBC/log/WAV/report, then record an explicit human capture choice |
 | `scripts/backup_device_workspace.py` | Checksum-verified per-episode/device evidence archives and dry-run-first no-merge restore |
 | `scripts/retime_break_review.py` | GUI table for explicit V15 candidate classification; creates a separately reviewed record plan |
@@ -693,6 +695,8 @@ measurements or grants approval.
 | `V16-RELEASE.md` | FromStunToKill app-branch PAD/EFM provenance and workspace-safety hardening; production `main` remains V15 |
 | `V16-QUEUE.md` | Non-operative record of unresolved reconstructed episode evidence; not live instructions |
 | `FROMSTUNTOKILL-V16-APP.md` | V16 app-branch integration scope, validation, and publication boundary |
+| `V17-RELEASE.md` | P95 motion-baseline automatic PAD classification and human review of cut-like candidates |
+| `FROMSTUNTOKILL-V17-APP.md` | Current V17 desktop integration and validation boundary |
 | `V9-QUEUE.md` | Historical V9 device-log review and inherited carry-overs; planning only |
 | `V10-QUEUE.md` | Historical V10 scope and implementation record; planning only |
 | `V11-QUEUE.md` | Historical V11 record and dependency-policy proposal; planning only |

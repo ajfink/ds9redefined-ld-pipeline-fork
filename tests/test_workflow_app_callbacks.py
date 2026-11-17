@@ -289,6 +289,58 @@ class WorkflowAppCallbackTests(unittest.TestCase):
         self.assertFalse(app.auto_start_rife_after_pad_record)
         self.assertEqual(app.root.idle_callbacks, [])
 
+    def test_successful_pad_record_run_dispatches_fresh_rife_plan(self):
+        app = workflow_app.WorkflowApp.__new__(workflow_app.WorkflowApp)
+        app.output_queue = queue.Queue()
+        app.output_queue.put("__WORKFLOW_DONE__0")
+        app.pending_action = "run"
+        app.pending_plan_hash = None
+        app.pending_review_step = None
+        app.waiting_review_step = None
+        app.auto_advance_after_run = False
+        app.auto_run_after_preview = False
+        app.auto_start_rife_after_pad_record = True
+        app.process = object()
+        app.root = FakeRoot()
+        app.status = FakeVariable()
+        app._set_running = lambda _running: None
+        app._cleanup_pad_previews = lambda: None
+        continued = []
+        app._auto_start_rife_replacements = lambda: continued.append("rife")
+
+        app._drain_output()
+
+        self.assertEqual(len(app.root.idle_callbacks), 1)
+        app.root.idle_callbacks[0]()
+        self.assertEqual(continued, ["rife"])
+        self.assertFalse(app.auto_start_rife_after_pad_record)
+
+    def test_pad_preview_auto_run_keeps_rife_continuation_armed(self):
+        app = workflow_app.WorkflowApp.__new__(workflow_app.WorkflowApp)
+        app.output_queue = queue.Queue()
+        app.output_queue.put("__WORKFLOW_DONE__0")
+        app.pending_action = "preview"
+        app.pending_plan_hash = None
+        app.pending_review_step = None
+        app.waiting_review_step = None
+        app.auto_advance_after_run = False
+        app.auto_run_after_preview = True
+        app.auto_start_rife_after_pad_record = True
+        app.process = object()
+        app.root = FakeRoot()
+        app.status = FakeVariable()
+        app._set_running = lambda _running: None
+        app._cleanup_pad_previews = lambda: None
+        launches = []
+        app._launch = lambda action, **_kwargs: launches.append(action)
+
+        app._drain_output()
+
+        self.assertTrue(app.auto_start_rife_after_pad_record)
+        self.assertEqual(len(app.root.idle_callbacks), 1)
+        app.root.idle_callbacks[0]()
+        self.assertEqual(launches, ["run"])
+
     def test_stage_plan_auto_saves_under_episode_workspace_without_file_dialog(self):
         with tempfile.TemporaryDirectory() as temporary, tempfile.TemporaryDirectory() as identity_dir:
             bundle = Path(temporary) / "app"
@@ -389,8 +441,7 @@ class WorkflowAppCallbackTests(unittest.TestCase):
             self.assertEqual(plan["fingerprint_policy"], "full")
             self.assertEqual(plan["steps"][0]["stage"], "record-pad-classifications")
             self.assertIn("--apply", plan["steps"][0]["args"])
-            self.assertEqual(plan["steps"][1]["kind"], "review")
-            self.assertEqual(plan["steps"][1]["for_stage"], "record-pad-classifications")
+            self.assertEqual(len(plan["steps"]), 1)
             self.assertTrue(app.auto_start_rife_after_pad_record)
             self.assertTrue(app.auto_run_after_preview)
             self.assertEqual(launched, ["preview"])
