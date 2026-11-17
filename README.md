@@ -1,8 +1,8 @@
 # DS9 LaserDisc OpenCode Operator Pack
 
-**Workflow version: 20 (FromStunToKill app branch)** — check `WORKFLOW_VERSION` and follow the
+**Workflow version: 21 (FromStunToKill app branch)** — check `WORKFLOW_VERSION` and follow the
 core-change/device-log rules in `WORKFLOW_VERSIONING.md` before editing or syncing workflow files.
-This V20 increment is scoped to the app branch; production `main` and the W shared tree remain
+This V21 increment is scoped to the app branch; production `main` and the W shared tree remain
 at V15 and are not modified by this release.
 
 **Design goal:** make the workflow clear and reliable enough for capable free or low-cost
@@ -531,16 +531,28 @@ missing, verify and regenerate it before continuing.
      pairs (= 5 choose 2); that is an example, not a fixed expectation. Record stack metrics
      and run `python scripts/validate_episode.py --episode <code> --stage stack`.
    5. **Measure cadence, trims, and capture quality.** Generate the full-side TFM log and
-      motion trace; on Windows use `build_map.ps1`, on macOS use the included
-      `build_motion_trace.py` + `build_map_vpy.py`. Inspect hybrid/interlaced inserts and
-      apply only measured trims. Decode all available raw EFMs with Orc and compare the
-      reports before selecting a WAV. Preserve each native WAV/report and set
-      `audio.pad_frames` from the selected capture's final Orc input-order alignment.
-   6. **Choose the audio/reference path.** If a DVD is available, keep the DVD-reference
-      workflow: decode it sequentially (never `-ss` a non-monotonic DVD), extract the DVD
-      and master descriptor grids, adjudicate the picture map/edges and robust-rate/fade
-      evidence, then build `ld_corrected` and sample-accurate `ld_synced`. Do not use the
-      DVD-rate fit as an assumed value. If the user explicitly chose no-DVD mode, run
+       motion trace; on Windows use `build_map.ps1`, on macOS use the included
+       `build_motion_trace.py` + `build_map_vpy.py`. Inspect hybrid/interlaced inserts and
+       apply only measured trims. With a matching DVD, use its visual and audio fade
+       boundaries as the common start/end reference: map the DVD picture points to LD output
+       frames and independently locate the corresponding native-LD audio sample points.
+       Preserve any measured DVD picture/audio offset; never reuse raw DVD frame numbers or
+       equate audio samples with video trim frames. Recompute `head_trim`, `tail_trim`,
+       `delta_s`, `AudioSkip`, audio origin/endpoint, frame count, and duration after changing
+       a boundary. Decode all available raw EFMs with Orc and compare the reports before
+       selecting a WAV. Preserve each native WAV/report and set `audio.pad_frames` from the
+       selected capture's final Orc input-order alignment.
+    6. **Choose the audio/reference path.** If a DVD is available, keep the DVD-reference
+       workflow: decode it sequentially (never `-ss` a non-monotonic DVD), extract the DVD
+       and master descriptor grids, adjudicate the picture map/edges and robust-rate/fade
+       evidence, then build `ld_corrected` and sample-accurate `ld_synced`. At midpoint
+       commercial-break fades, map both edges of the same visual break and its audio fade
+       points to the DVD reference, preserving the DVD-measured picture/audio offset. Only
+       consider trimming excess LD duration if that matched DVD interval is measurably
+       shorter; retain DVD-length breaks when equal/longer. The current
+       pipeline does not execute internal LD picture/audio cuts, so record such a candidate
+       and stop rather than changing `retime.breaks` or cutting by eye. Do not use the
+       DVD-rate fit as an assumed value. If the user explicitly chose no-DVD mode, run
        `python scripts/audio_timing_diagnostic.py --episode <code> --promote-dvd-free --report-out <new-unique.json>` only
        after measured video frames/DELTA and PAD counts/endpoints are available. It applies
        the E07-validated duration/PAD rate and capture-pad geometry, runs a measured
@@ -562,8 +574,11 @@ missing, verify and regenerate it before continuing.
        Record the exact measured `pads.cut_pad_frames` list so the image-to-pad
        mapping is auditable. Require source-raster and replacement-identity checks; do not
        repair genuine dark content or derive repairs from an encode.
-   8. **Retime DVD tracks only when available and requested.** With a DVD, adjudicate every
-      silence edge, then dry-run and review `retime_dvd_assets.py` before writing 5.1/SRT.
+    8. **Retime DVD tracks only when available and requested.** With a DVD, adjudicate every
+       silence edge, then dry-run and review `retime_dvd_assets.py` before writing 5.1/SRT.
+       This retimer maps DVD tracks onto the current LD timeline; it does not perform internal
+       LD edits. If a shorter-DVD midpoint cut is proposed, stop until a reviewed common edit
+       map can trim LD picture and audio together and rebuild the DVD retime/SRT schedule.
        After both retimed assets pass their gates, set `mux_tracks` and `deliverable_tracks`
        together to `['ld','51','srt']`; keep `ld_audio_source='ld_synced'`. V6 remux maps
        `retimed_51` and `retimed_srt` directly, so no preassembled `pre_upscale` input is
@@ -609,7 +624,7 @@ permission.
 
 ## Optional FromStunToKill desktop app
 
-Launch the local GUI with `python scripts/workflow_app.py`. It uses the V20 allowlisted
+Launch the local GUI with `python scripts/workflow_app.py`. It uses the V21 allowlisted
 runner and automatically saves concrete, immutable workflow plans under the device's
 `devices/<DEVICE>-<ID>/plans/` folder when **Preview** is clicked; no separate save step is
 needed. Intake fields remain editable after preview and until **Run** is confirmed; edits
@@ -719,8 +734,10 @@ measurements or grants approval.
 | `FROMSTUNTOKILL-V18-APP.md` | Historical V18 desktop integration and validation boundary |
 | `V19-RELEASE.md` | Historical CLI workflow progress display and validation |
 | `FROMSTUNTOKILL-V19-APP.md` | Historical V19 app-branch integration and validation boundary |
-| `V20-RELEASE.md` | Post-run download/audio cleanup review and safety gates |
-| `FROMSTUNTOKILL-V20-APP.md` | Current V20 cleanup integration and validation boundary |
+| `V20-RELEASE.md` | Historical post-run download/audio cleanup review and safety gates |
+| `FROMSTUNTOKILL-V20-APP.md` | Historical V20 cleanup integration and validation boundary |
+| `V21-RELEASE.md` | DVD-referenced visual/audio boundary-alignment policy |
+| `FROMSTUNTOKILL-V21-APP.md` | Current V21 boundary-review integration and validation boundary |
 | `V9-QUEUE.md` | Historical V9 device-log review and inherited carry-overs; planning only |
 | `V10-QUEUE.md` | Historical V10 scope and implementation record; planning only |
 | `V11-QUEUE.md` | Historical V11 record and dependency-policy proposal; planning only |

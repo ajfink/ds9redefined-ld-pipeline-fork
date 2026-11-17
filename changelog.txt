@@ -322,3 +322,15 @@ FROM Version 19 -> Version 20 (app branch only; production `main` and W remain V
   deletion fallback or actual cleanup action is performed automatically.
 - Validation: **402 passed, 7 skipped** (409 tests); compile/import, generated-runbook, all 7
   PowerShell AST parses, and diff checks passed. No real files were cleaned; see `V20-RELEASE.md`.
+
+FromStunToKill app branch V21 (2026-11-17)
+FROM Version 20 -> Version 21 (app branch only; production `main` and W remain V15)
+- Clarified that a matching DVD is the reference for the episode's start/end visual fade and
+  audio fade points. Measure each source in its own domain, map both onto common program time,
+  preserve the DVD's measured A/V offset, and recompute LD trims/audio origin after changes.
+- Added the conditional midpoint-break policy: consider trimming LD excess only when the
+  corresponding DVD commercial-break fade interval is measured shorter. The current tools do
+  not apply internal LD picture/audio cuts; those candidates must stop for a future supported
+  edit map rather than be entered as DVD track retime fields.
+- Added the DVD boundary policy and evidence expectations to the cadence workbench review.
+- Validation: **403 passed, 7 skipped** (410 tests); compile/import, generated-runbook, all 7 PowerShell AST parses, and diff checks passed. No real-media measurements or GUI smoke test; see `V21-RELEASE.md`.

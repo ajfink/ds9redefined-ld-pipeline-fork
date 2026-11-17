@@ -1,6 +1,6 @@
 # Workflow versioning
 
-**This checkout's workflow version: 20 (FromStunToKill app branch).** `WORKFLOW_VERSION` is the
+**This checkout's workflow version: 21 (FromStunToKill app branch).** `WORKFLOW_VERSION` is the
 machine-readable counter for this branch. Production Z `main` and the W shared tree remain at
 Version 15; app-branch increments are not production releases or W syncs. Preserve W's
 dirty/stale Git metadata and unrelated local changes; do not reset/rebase that checkout.
@@ -73,19 +73,21 @@ live instruction sources.
 | 18 | `LENOVO-LEGION-5`, 2026-11-16; app-branch increment from Version 17 | Added the read-only per-episode gate dashboard with explicit WARN/LIMIT semantics; report-only audio workbenches; motion-trace/cadence-map plan builders; mode-aware QC-only/remux/full-delivery planning with separate approvals; and process PID/elapsed/no-output monitoring with non-terminating diagnostic snapshots. Extracted new status/monitor/workbench code into focused modules. | **389 passed, 7 skipped** (396 tests); compileall, warnings-as-errors imports, generated-runbook check, all 7 PowerShell parsers, and diff check passed. No real-media, final encode/remux, fresh-Mac GUI, or auto-termination test/claim. Backup was canceled at the user's request because a backup already existed. Production `main`/W remain V15; episode evidence gaps remain in `V16-QUEUE.md`. |
 | 19 | `LENOVO-LEGION-5`, 2026-11-17; app-branch increment from Version 18 | Added an ASCII progress bar for every ordered plan step, including human review waits. It shows plan-step completion, active stage, elapsed time, and child-output idle time; periodic updates continue during quiet/long stages and full file fingerprinting, independent of verbose/standard filtering. The bar does not estimate in-stage percent or alter cancellation/retry behavior. | **393 passed, 7 skipped** (400 tests); compile/import, generated-runbook, all 7 PowerShell AST parses, and diff checks passed. No media processing or GUI smoke test. Production `main`/W remain V15. |
 | 20 | `LENOVO-LEGION-5`, 2026-11-17; app-branch increment from Version 19 | Added a post-run cleanup choice with the two primary actions **Keep everything for now** and **Free up space**. The latter requires a current full-QC PASS with matching workflow fingerprints, lists only the exact episode download folder and manifest-associated audio assets >=100 MiB, hash-preserves small download metadata in episode references, and moves only selected targets to OS Recycle Bin/Trash after confirmation. Logs/plans/manifests/QC/provenance/deliverables remain protected; no permanent-delete fallback. | **402 passed, 7 skipped** (409 tests); compile/import, generated-runbook, all 7 PowerShell AST parses, and diff checks passed. No actual cleanup action or GUI smoke test. Production `main`/W remain V15. |
+| 21 | `LENOVO-LEGION-5`, 2026-11-17; app-branch increment from Version 20 | Made the DVD authoritative for the matching start/end visual and audio fade points, requiring separate measured mappings to LD output frames and native-audio samples while preserving DVD-relative A/V offset. Added the conditional midpoint rule: trim excess LD commercial-break duration only when the mapped DVD interval is measurably shorter. Explicitly documented that current tools do not implement internal LD picture/audio cuts, so those candidates remain blocked rather than being misapplied through DVD retime fields. Updated the cadence-workbench human review prompt/evidence. | **403 passed, 7 skipped** (410 tests); compile/import, generated-runbook, all 7 PowerShell AST parses, and diff checks passed. No media processing or GUI smoke test. Production `main`/W remain V15. |
 
-The GitHub `fromstuntokill-app` branch is an optional desktop-app integration. Its V20 marker
+The GitHub `fromstuntokill-app` branch is an optional desktop-app integration. Its V21 marker
 does not change the production V15 release record or authorize syncing to W. See
 `FROMSTUNTOKILL-V15-APP.md` for historical V15 integration and
 `FROMSTUNTOKILL-V16-APP.md` for historical V16 integration and
 `FROMSTUNTOKILL-V17-APP.md` for historical V17 integration and
 `FROMSTUNTOKILL-V18-APP.md` for historical V18 integration and
 `FROMSTUNTOKILL-V19-APP.md` for historical V19 integration and
-`FROMSTUNTOKILL-V20-APP.md` for the current app-branch scope and validation.
+`FROMSTUNTOKILL-V20-APP.md` for historical V20 integration and
+`FROMSTUNTOKILL-V21-APP.md` for the current app-branch scope and validation.
 
 Version records are in `W:\ld-pipeline-execution-log.md`: Version 1 section 16, Version 2 section 17,
 Version 3 sections 18-19, Version 4 section 21, Version 5 sections 22-23, Version 6 section 27, Version 7 sections 28-31,
-Version 8 section 34, Version 9 section 37, Version 10 section 39, Version 11 section 44, Version 12 section 46, the app-branch V16 record is section 56, V17 is section 57, V18 is section 58, V19 is section 59, and V20 is section 60 of the authoring execution log. The V13 authoring-device log is under `devices/LENOVO-LEGION-5-D02C1DA9/WORKFLOW-V13-CHANGE.md`; V14/V15 authoring-device records are `devices/LENOVO-LEGION-5-D02C1DA9/WORKFLOW-V14-CHANGE.md` and `devices/LENOVO-LEGION-5-D02C1DA9/WORKFLOW-V15-CHANGE.md`. E07 findings are in `Z:\S01E07-flow-log.md` and
+Version 8 section 34, Version 9 section 37, Version 10 section 39, Version 11 section 44, Version 12 section 46, the app-branch V16 record is section 56, V17 is section 57, V18 is section 58, V19 is section 59, V20 is section 60, and V21 is section 61 of the authoring execution log. The V13 authoring-device log is under `devices/LENOVO-LEGION-5-D02C1DA9/WORKFLOW-V13-CHANGE.md`; V14/V15 authoring-device records are `devices/LENOVO-LEGION-5-D02C1DA9/WORKFLOW-V14-CHANGE.md` and `devices/LENOVO-LEGION-5-D02C1DA9/WORKFLOW-V15-CHANGE.md`. E07 findings are in `Z:\S01E07-flow-log.md` and
 `Z:\work\logs\S01E07-v5-rerun.md`.
 The M5 source/adoption evidence is in `W:\M5 Mac LaserDisc Project Updates Log.md`; its
 machine-local checkout is separate from the W shared-release tree. This V13 sync updates the

@@ -45,6 +45,7 @@ class WorkflowWorkbenchPlanTests(unittest.TestCase):
                 "episode": "S01E12", "series": "DS9", "identity": "DS9:S01E12",
                 "audio": {"pad_frames": 7},
                 "video": {"head_trim": 2, "tail_trim": 0},
+                "dvd_reference_available": True,
                 "deliverable": "pre_upscale", "ld_audio_source": "ld_native",
                 "mux_tracks": ["ld"],
                 "files": {key: {"name": path.name, "root": "out"}
@@ -93,6 +94,11 @@ class WorkflowWorkbenchPlanTests(unittest.TestCase):
             self.assertIn("-Log", cadence["steps"][0]["args"])
             self.assertIn("-Motion", cadence["steps"][0]["args"])
             self.assertEqual(cadence["steps"][1]["kind"], "review")
+            boundary_policy = next(row["value"] for row in cadence["decisions"]
+                                   if row["id"] == "dvd-boundary-policy")
+            self.assertIn("visual and native-audio start/end", boundary_policy)
+            self.assertIn("DVD interval is measured shorter", boundary_policy)
+            self.assertIn("do not execute", cadence["steps"][1]["prompt"])
 
     def test_cadence_plan_refuses_missing_measured_trim_or_motion_trace(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -104,6 +110,17 @@ class WorkflowWorkbenchPlanTests(unittest.TestCase):
             context["manifest_data"]["video"]["tail_trim"] = 0
             with self.assertRaisesRegex(WorkflowAppError, "measured motion trace"):
                 build_cadence_map_plan(context, context["file_paths"]["tfm_log"], None)
+
+    def test_cadence_review_only_applies_dvd_boundary_policy_when_dvd_is_available(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            context = self._context(Path(temporary))
+            context["manifest_data"]["dvd_reference_available"] = False
+            plan = build_cadence_map_plan(
+                context, context["file_paths"]["tfm_log"], context["file_paths"]["motion"])
+            policy = next(row["value"] for row in plan["decisions"]
+                          if row["id"] == "dvd-boundary-policy")
+            self.assertIn("No DVD reference", policy)
+            self.assertNotIn("independently map visual", policy)
 
     def test_delivery_builder_gates_encode_remux_and_qc_separately(self):
         with tempfile.TemporaryDirectory() as temporary:

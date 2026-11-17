@@ -240,6 +240,10 @@ def build_cadence_map_plan(context: dict[str, Any], tfm_log: str | Path,
     manifest_data = context.get("manifest_data") or {}
     video = manifest_data.get("video") or {}
     audio = manifest_data.get("audio") or {}
+    dvd_available = manifest_data.get("dvd_reference_available") is True
+    if manifest_data.get("dvd_reference_available") is None:
+        dvd_path = (context.get("file_paths") or {}).get("dvd")
+        dvd_available = bool(dvd_path and Path(dvd_path).is_file())
     measured = [video.get("head_trim"), video.get("tail_trim"), audio.get("pad_frames")]
     if any(type(value) is not int or value < 0 for value in measured):
         raise WorkflowAppError("cadence map requires measured head_trim, tail_trim, and audio.pad_frames")
@@ -298,21 +302,37 @@ def build_cadence_map_plan(context: dict[str, Any], tfm_log: str | Path,
     token = _token()
     plan = _base_plan(context, fingerprint_policy,
                       f"cadence-map-{series.lower()}-{episode.lower()}-{token[-8:]}")
+    trim_policy = (
+        "DVD reference: independently map visual and native-audio start/end points onto the LD timeline; "
+        "preserve measured DVD A/V offset. For a matched midpoint commercial break, consider trimming "
+        "only excess LD duration when the DVD interval is measured shorter; current tools do not "
+        "execute internal LD picture/audio cuts, so record and stop."
+        if dvd_available else
+        "No DVD reference: use only measured LD-side head/tail trims; do not infer DVD correspondence.")
     plan["decisions"] = [
         {"id": "cadence-map-mode", "value": plan_mode},
         {"id": "measured-audio-pad-frames", "value": audio["pad_frames"]},
         {"id": "measured-video-head-trim", "value": video["head_trim"]},
         {"id": "measured-video-tail-trim", "value": video["tail_trim"]},
+        {"id": "dvd-boundary-policy", "value": trim_policy},
         {"id": "cadence-map-output", "value": str(output)},
     ]
+    review_inputs = [*outputs, *inputs]
+    if dvd_available:
+        review_inputs.extend(_existing_unique_paths([
+            (context.get("file_paths") or {}).get(key)
+            for key in ("dvd", "align_npy", "master_descriptors", "dvd_descriptors",
+                        "ld_native", "ld_corrected", "ld_synced", "audio_rate_report",
+                        "audio_timing_report")]))
+        review_inputs = list(dict.fromkeys(review_inputs))
     plan["steps"] = [
         {"id": "build-cadence-map-and-source-script", "stage": "build-map", "args": args,
          "inputs": inputs, "outputs": outputs},
         {"id": "review-cadence-evidence", "kind": "review", "for_stage": "build-map",
-         "prompt": (f"Review {episode}'s cadence summary, deinterlace map, and source-derived script. "
-                    "Resolve any CHECK/hard-spot/hybrid intervals from evidence; this plan does not "
-                    "write cadence measurements or choose trims in the manifest."),
-         "inputs": [*outputs, *inputs], "outputs": []},
+          "prompt": (f"Review {episode}'s cadence summary, deinterlace map, and source-derived script. "
+                     "Resolve any CHECK/hard-spot/hybrid intervals from evidence; this plan does not "
+                    "write cadence measurements or choose trims in the manifest. " + trim_policy),
+          "inputs": review_inputs, "outputs": []},
     ]
     return plan
 
