@@ -1,8 +1,10 @@
 # DS9 LaserDisc OpenCode Operator Pack
 
-**Workflow version: 16** — released on GitHub `main` as `4aeea60`. The W working files were
-updated to V16 without changing its stale Git history or overwriting unrelated local changes.
-Follow the core-change/device-log rules in `WORKFLOW_VERSIONING.md`.
+**Workflow version: 17** — V17 fixes the V16 `doctor.py --instance-root` defect reported by
+`MAC-OPENCODE-4DD0B985` (S01E16 device log section 30). V16 was released on GitHub `main` as
+`4aeea60` (publication record `83c9646`); W's working files were updated from the V16 patch
+without changing its stale Git history or overwriting unrelated local changes. Follow the
+core-change/device-log rules in `WORKFLOW_VERSIONING.md`.
 
 **Design goal:** make the workflow clear and reliable enough for capable free or low-cost
 models to run with its bounded steps, explicit ACTION/VERIFY/STOP gates, and deterministic
@@ -270,7 +272,10 @@ fallback route is unavailable, ask the user rather than silently changing models
     recommended setup; `run_stage.py` also creates/reuses the workspace or warns and uses
     local roots if the README-folder `devices/` path is unavailable. A standalone doctor
     without an active instance reports machine diagnostics, not an episode-ready result;
-    this is not a workspace-creation gate for the stage runner.
+    this is not a workspace-creation gate for the stage runner. In device-workspace mode
+    `--instance-root <path>` is honored directly by the doctor's own resolver (V17 fix);
+    exporting `LDP_INSTANCE_ROOT` is optional, and an exported value that conflicts with
+    the flag fails closed with an error rather than resolving a different instance.
 5. For a job-specific output location, update `roots.out` or pass it as the manifest's
    file root. Do not modify scripts to insert drive letters.
 
@@ -626,6 +631,7 @@ permission.
 | `V14-RELEASE.md` | Section 31 Archive tree, natural resolver, and series-aware VOY workflow release record |
 | `V15-RELEASE.md` | Changelog source boundary, fail-closed break candidate intake, and retime output verification improvements |
 | `V16-RELEASE.md` | Advisory ACL policy, local workspace resync, provenance/schema checks, alignment coverage, and stage-supervision improvements |
+| `V17-RELEASE.md` | Fix for the V16 `doctor.py --instance-root` defect reported in the M5 Mac S01E16 device log |
 | `V9-QUEUE.md` | Historical V9 device-log review and inherited carry-overs; planning only |
 | `V10-QUEUE.md` | Historical V10 scope and implementation record; planning only |
 | `V11-QUEUE.md` | Historical V11 record and dependency-policy proposal; planning only |
@@ -672,7 +678,7 @@ permission.
 | `scripts/qc_report.py` | Final delivery report; skipped/unverified required checks fail closed |
 | `scripts/regen_plain_text.py` | Rebuild the ASCII companion from the main Markdown runbook |
 
-### V16 entry points (authoring candidate)
+### V17 entry points
 
 ```text
 python scripts/bootstrap_deps.py --print --json

@@ -178,6 +178,30 @@ def linux_preflight(profile: dict, profile_file: Path, interpreter: str,
             "episode": episode, "profile": str(profile_file)}
 
 
+def publish_instance_root(value: str, env: dict) -> str:
+    """Publish ``--instance-root`` to this process as well as the child environment.
+
+    V16 defect (MAC-OPENCODE-4DD0B985, S01E16 device log section 30): the flag was
+    copied only into the child environment, while ``shared_instance_root()`` resolves
+    the active workspace from the *calling* process environment. A shared-mode run
+    that used ``--instance-root`` without also exporting ``LDP_INSTANCE_ROOT`` there
+    aborted with "shared mode has no active workspace" before producing a report.
+    Stage-gated doctor runs were unaffected because ``run_stage`` passes the whole
+    workspace environment to the child process.
+    """
+    resolved = str(Path(value).expanduser().resolve())
+    exported = os.environ.get("LDP_INSTANCE_ROOT")
+    if exported:
+        current = str(Path(os.path.expandvars(os.path.expanduser(exported))).resolve())
+        if os.path.normcase(current) != os.path.normcase(resolved):
+            raise LockError(
+                "--instance-root conflicts with the exported LDP_INSTANCE_ROOT: " +
+                f"{current} != {resolved}")
+    os.environ["LDP_INSTANCE_ROOT"] = resolved
+    env["LDP_INSTANCE_ROOT"] = resolved
+    return resolved
+
+
 def shared_workspace_ready(shared_report: dict) -> bool:
     """ACL writability is advisory; only an isolated writable destination gates readiness.
 
@@ -209,7 +233,7 @@ def main() -> int:
         env = os.environ.copy()
         env["LDP_PROFILE"] = str(profile_file)
         if args.instance_root:
-            env["LDP_INSTANCE_ROOT"] = str(Path(args.instance_root).expanduser().resolve())
+            publish_instance_root(str(args.instance_root), env)
         shared_report = {"enabled": False}
         shared_config = profile.get("shared") or {}
         if shared_config.get("enabled") is True:

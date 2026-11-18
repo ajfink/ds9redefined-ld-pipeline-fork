@@ -228,3 +228,17 @@ FROM Version 15 -> Version 16
   documents, PowerShell parsing, and diff checks passed. No media processed. Published to
   GitHub `main` at `4aeea60`; W working files updated while preserving its Git history and
   unrelated dirty files. See `V16-RELEASE.md`.
+
+Version 17 (2026-11-17)
+FROM Version 16 -> Version 17
+- Fixed `doctor.py --instance-root`: the flag is now published to the doctor's own process
+  environment as well as the child environment, so `shared_instance_root()` no longer aborts
+  with "shared mode has no active workspace" when `LDP_INSTANCE_ROOT` is not exported. An
+  exported value that conflicts with the flag now fails closed instead of silently resolving a
+  different instance.
+- Source: `MAC-OPENCODE-4DD0B985` S01E16 device log section 30, logged read-only with a shell
+  workaround and proposed for a future version.
+- Validation: **265 passed, 7 skipped** (272 tests); the new end-to-end regression test fails
+  with the original `PipelineError` when the fix is reverted. Compilation/import, generated
+  documents, PowerShell parsing, and diff checks passed. No media processed.
+  See `V17-RELEASE.md`.

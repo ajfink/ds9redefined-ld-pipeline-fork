@@ -1,7 +1,10 @@
 # Workflow versioning
 
-**Published workflow version: 16.** V16 is on GitHub `main` at `4aeea60`. The W working files
-were updated from the V16 release patch; its stale V7-based Git metadata and unrelated local
+**Published workflow version: 16** on GitHub `main` (`4aeea60`, publication record `83c9646`);
+the Z authoring worktree now carries **Version 17**, the accepted fix for the V16
+`doctor.py --instance-root` defect reported by `MAC-OPENCODE-4DD0B985` (S01E16 device log
+section 30). Publish/sync status is recorded in `V17-RELEASE.md`. The W working files were
+updated from the V16 release patch; its stale V7-based Git metadata and unrelated local
 changes were preserved. Do not reset/rebase or overwrite W's other local work.
 
 ## What requires a version change
@@ -39,6 +42,7 @@ not a live instruction source. `V14-RELEASE.md` records the released V14 scope a
 historical and non-operative. `V15-RELEASE.md` records the implemented V15 contract and evidence.
 `V16-QUEUE.md` records the scope and acceptance checks; it is historical and non-operative.
 `V16-RELEASE.md` records the V16 release, validation, and W working-file sync boundary.
+`V17-RELEASE.md` records the accepted M5 Mac S01E16 defect fix, its validation, and status.
 `V12-RELEASE.md` records the optional LD/DVD comparator. `V11-RELEASE.md`,
 `V10-RELEASE.md`, `V9-RELEASE.md`, `V8-RELEASE.md`, and `V7-RELEASE.md` preserve earlier release records. The historical V6 queue was retired and removed in the shared-release follow-up;
 its former proposals are not workflow instructions or permission to bypass an accepted gate.
@@ -70,10 +74,11 @@ live instruction sources.
 | 14 | `LENOVO-LEGION-5`, 2026-11-16; from Version 13 | Added a metadata-only tree of Section 31 Archive uploads and natural-language resolver, plus canonical `SERIES:SxxExx` identity throughout VOY manifests, workspaces, artifact roots, Python/PowerShell stages, workflow state, locks, logs, and resume. Bare legacy identities remain DS9; DS9 paths/plans are unchanged. TNG combined-item-only remains blocked. | **188 passed, 7 skipped** (195 tests); compilation/imports, generated docs, diff checks, PowerShell parser checks, and mock same-code/resume tests passed. Catalog metadata only; no media downloaded. W source files synchronized, while its existing Git metadata/local changes were preserved. See `V14-QUEUE.md` and `V14-RELEASE.md`. |
 | 15 | `LENOVO-LEGION-5`, 2026-11-16; from Version 14 | Made changelogs retrospective-only for live jobs; pinned each retime segment after `atempo`; made the generated-output silence threshold explicit; preserved valid before/after edge evidence independently; added report-only DVD/LD break pairing and an explicit review/hash-confirmed, backed-up/atomic recorder that leaves offsets null. Added prepare/record stages and regressions. | **224 passed, 7 skipped** (231 tests); compileall, warnings-as-errors V15 imports, generated docs/plain-text, all 7 PowerShell parsers, and diff checks passed. Real-media validation on S01E12's existing media: retime output-gap verification **17/17 PASS** (3 FAIL before the fix) and `validate --stage retime` 35/0; no download/encode/remux ran for release validation. See `V15-QUEUE.md` and `V15-RELEASE.md`. |
 | 16 | `LENOVO-LEGION-5`, 2026-11-17; from Version 15 | Made process-level release-root ACL status advisory while retaining device-subtree application guards; added no-overwrite local-fallback/local-copy resync; bound EFM comparison reports to the active episode/capture; enforced retime object/gap/step and alignment-anchor validation; made PAD scans follow the manifest deliverable; added session-log TFM verification, device QC closeout snapshots, local subprocess cwd, Unicode-safe output, and a supervised space-gated Orc render stage. | **261 passed, 7 skipped** (268 tests) on Z and W; compile/import with warnings as errors, generated runbooks/plain-text, all 8 PowerShell parsers, and diff checks passed. No episode media processed. Published to GitHub `main` at `4aeea60`; V16 patch applied to W working files without changing its Git history. See `V16-QUEUE.md` and `V16-RELEASE.md`. |
+| 17 | `LENOVO-LEGION-5`, 2026-11-17; from Version 16; source device `MAC-OPENCODE-4DD0B985` (S01E16 device log section 30) | Fixed `doctor.py --instance-root`: the flag is now published to the doctor's own process environment as well as the child environment before `shared_instance_root()` resolves the workspace, so shared-mode doctor runs no longer abort with `shared mode has no active workspace` when `LDP_INSTANCE_ROOT` is not exported. An exported value that conflicts with the flag now fails closed with a doctor error instead of silently resolving a different instance. Stage-gated doctor runs, readiness policy, and all gates are unchanged. | **265 passed, 7 skipped** (272 tests); the new end-to-end test fails with the original `PipelineError` when the fix is reverted. compile/import with warnings as errors, generated runbooks/plain-text, all 8 PowerShell parsers, and diff checks passed. Synthetic/fixture validation only; no episode media processed. See `V17-RELEASE.md`. |
 
 Version records are in `W:\ld-pipeline-execution-log.md`: Version 1 section 16, Version 2 section 17,
 Version 3 sections 18-19, Version 4 section 21, Version 5 sections 22-23, Version 6 section 27, Version 7 sections 28-31,
-Version 8 section 34, Version 9 section 37, Version 10 section 39, Version 11 section 44, and Version 12 section 46. The V13 authoring-device log is under `devices/LENOVO-LEGION-5-D02C1DA9/WORKFLOW-V13-CHANGE.md`; V14–V16 authoring-device records are `devices/LENOVO-LEGION-5-D02C1DA9/WORKFLOW-V14-CHANGE.md`, `WORKFLOW-V15-CHANGE.md`, and `WORKFLOW-V16-CHANGE.md`. E07 findings are in `Z:\S01E07-flow-log.md` and
+Version 8 section 34, Version 9 section 37, Version 10 section 39, Version 11 section 44, and Version 12 section 46. The V13 authoring-device log is under `devices/LENOVO-LEGION-5-D02C1DA9/WORKFLOW-V13-CHANGE.md`; V14–V17 authoring-device records are `devices/LENOVO-LEGION-5-D02C1DA9/WORKFLOW-V14-CHANGE.md`, `WORKFLOW-V15-CHANGE.md`, `WORKFLOW-V16-CHANGE.md`, and `WORKFLOW-V17-CHANGE.md`. E07 findings are in `Z:\S01E07-flow-log.md` and
 `Z:\work\logs\S01E07-v5-rerun.md`.
 The M5 source/adoption evidence is in `W:\M5 Mac LaserDisc Project Updates Log.md`; its
 machine-local checkout is separate from the W shared-release tree. This V13 sync updates the
