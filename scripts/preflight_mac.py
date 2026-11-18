@@ -302,7 +302,7 @@ def main() -> int:
                     f"invalid WORKFLOW_VERSION value: {workflow_version!r}")
     except OSError as exc:
         results.add("workflow:version", "FAIL", f"cannot read {version_path}: {exc}")
-    versioning_doc = version_path.with_name("WORKFLOW_VERSIONING.md")
+    versioning_doc = version_path.parent / "Versioning" / "WORKFLOW_VERSIONING.md"
     change_template = version_path.parent / "templates" / "device-workflow-change.template.md"
     for check_name, path in (("workflow:versioning-doc", versioning_doc),
                              ("workflow:device-log-template", change_template)):
@@ -455,7 +455,10 @@ def main() -> int:
     required_scripts = (
         "build_map_vpy.py", "build_map.ps1", "build_stack_project.py",
         "select_stack_reference.py", "extract_video_descriptors.py",
-        "workflow_app.py", "workflow_app_model.py", "local_source.py", "init_local_episode.py",
+        "workflow_app.py", "workflow_app_model.py", "workflow_app_process.py", "workflow_process_control.py", "workflow_recovery.py", "dependency_updates.py",
+        "dependency_update_window.py", "read_log.py", "fileutil.py", "manifest_io.py",
+        "numeric.py", "streamutil.py", "local_source.py", "init_local_episode.py",
+        "record_orc_reference_measurements.py",
         "review_popup.py", "opencode_help.py", "pad_review.py", "render_stack.py",
         "retime_break_review.py",
         "measure_dvd_alignment.py", "prepare_retime_breaks.py", "record_retime_breaks.py",

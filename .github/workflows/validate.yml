@@ -1,0 +1,65 @@
+name: validate
+
+on:
+  pull_request:
+  push:
+    branches: [fromstuntokill-app]
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Install test-time Python packages
+        run: python -m pip install numpy opencv-python-headless Pillow
+      - name: Compile
+        run: python -m compileall -q scripts ldcommon.py
+      - name: Unit suite
+        run: python scripts/run_tests.py
+      - name: Generated docs
+        run: |
+          python scripts/generate_runbooks.py --check
+          python scripts/regen_plain_text.py --check
+      - name: Diff whitespace
+        shell: bash
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            git diff --check "origin/$GITHUB_BASE_REF...HEAD"
+          elif git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+            git diff --check HEAD^ HEAD
+          else
+            git diff --check
+          fi
+
+  powershell:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse active PowerShell scripts
+        shell: pwsh
+        run: |
+          $errorsFound = $false
+          $paths = @(Get-ChildItem scripts -Filter *.ps1 -File) + @(Get-Item preflight.ps1)
+          foreach ($path in $paths) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $path.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              Write-Error "$($path.Name): $($errors[0].Message)"
+              $errorsFound = $true
+            }
+          }
+          if ($errorsFound) { exit 1 }

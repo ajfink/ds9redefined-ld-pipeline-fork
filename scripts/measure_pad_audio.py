@@ -11,7 +11,6 @@ interpret the result as evidence about this episode only.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -26,6 +25,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT))
 
 from ldcommon import Ld, PipelineError, assert_writable_path, load_episode, redact_shared_text  # noqa: E402
+from fileutil import hash_file  # noqa: E402
 from pad_audit import reference_map_ranges, source_id_for_capture  # noqa: E402
 
 FPS = 30000.0 / 1001.0
@@ -35,11 +35,7 @@ DEFAULT_CONTROL_OFFSETS_SECONDS = (-0.5, 0.5)
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(4 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return hash_file(path, chunk_size=4 * 1024 * 1024)
 
 
 def window_rms_dbfs(samples, center_sample: int, window_samples: int) -> tuple[float | None, tuple[int, int]]:

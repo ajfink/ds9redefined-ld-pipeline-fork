@@ -8,7 +8,6 @@ import hashlib
 import json
 import math
 import os
-import secrets
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +20,8 @@ sys.path.insert(0, str(ROOT))
 from ldcommon import (Ld, PipelineError, assert_writable_path, episode_manifest_path,
                       load_episode)
 from dependency_lock import LockError
+from fileutil import sha256_file as _shared_sha256_file
+from manifest_io import atomic_replace, exclusive_backup, manifest_lock as _manifest_lock
 from rife_padframes import (MAX_MEAN, MAX_RGB, RIFE_MISIDENTIFICATION_WARNING,
                             MOTION_CUT_REVIEW_PERCENTILE,
                             parse_shared_cut_image,
@@ -28,11 +29,7 @@ from rife_padframes import (MAX_MEAN, MAX_RGB, RIFE_MISIDENTIFICATION_WARNING,
 
 SCHEMA = "ld-pipeline-pad-classification-review-v1"
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return _shared_sha256_file(path)
 
 
 def _read_json(path: Path, label: str) -> dict:
@@ -48,47 +45,15 @@ def _read_json(path: Path, label: str) -> dict:
 
 
 def _exclusive_backup(path: Path, payload: bytes) -> Path:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    backup = path.with_name(f"{path.name}.bak-pad-classifications-{stamp}")
-    with backup.open("xb") as stream:
-        stream.write(payload)
-        stream.flush()
-        os.fsync(stream.fileno())
-    if backup.read_bytes() != payload:
-        raise PipelineError(f"manifest backup verification failed: {backup}")
-    return backup
+    return exclusive_backup(path, payload, label="pad-classifications",
+                            error_type=PipelineError)
 
 
 def _atomic_replace(path: Path, payload: bytes, expected_original: bytes) -> None:
-    if path.is_symlink() or path.read_bytes() != expected_original:
-        raise PipelineError("manifest changed during PAD classification; refusing replacement")
-    temp = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(6)}.tmp")
-    try:
-        with temp.open("xb") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        if path.read_bytes() != expected_original:
-            raise PipelineError("manifest changed before atomic PAD classification replace")
-        os.replace(temp, path)
-    finally:
-        temp.unlink(missing_ok=True)
-
-
-def _manifest_lock(path: Path):
-    class Lock:
-        def __enter__(self):
-            self.stream = path.open("x", encoding="utf-8", newline="\n")
-            self.stream.write(f"pid={os.getpid()} started_utc={datetime.now(timezone.utc).isoformat()}\n")
-            self.stream.flush()
-            os.fsync(self.stream.fileno())
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            self.stream.close()
-            path.unlink(missing_ok=True)
-            return False
-    return Lock()
+    atomic_replace(
+        path, payload, expected_original, error_type=PipelineError,
+        changed_message="manifest changed during PAD classification; refusing replacement",
+        pre_replace_message="manifest changed before atomic PAD classification replace")
 
 
 def _report_inputs(report: dict, report_path: Path, probe: Path,

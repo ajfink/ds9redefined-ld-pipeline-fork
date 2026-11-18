@@ -18,27 +18,48 @@ TRANS = {
 }
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--source", default=str(BUNDLE / "DS9 LaserDisc OpenCode Runbook.md"))
-    ap.add_argument("--output", default=str(BUNDLE / "DS9 LaserDisc Plain Text Instructions.txt"))
-    args = ap.parse_args()
-    # Authoring checkouts may have device workspaces; published release copies
-    # without Git metadata stay application/source read-only.
-    if (BUNDLE / "devices").is_dir() and not (BUNDLE / ".git").exists():
-        print("shared release root is read-only; regenerate in the authoring checkout and republish the release",
-              file=sys.stderr)
-        return 2
-    text = Path(args.source).read_text(encoding="utf-8")
-    text = re.sub(r"(?m)^#{1,6}\s*", "", text)
+def generate_text(source_text: str) -> str:
+    """Convert the canonical Markdown into normalized ASCII-only plain text."""
+    text = re.sub(r"(?m)^#{1,6}\s*", "", source_text)
     text = re.sub(r"(?m)^```[^\n]*\n?", "", text)
     text = text.replace("**", "").replace("`", "")
     text = re.sub(r"<(https?://[^>]+)>", r"\1", text)
     text = unicodedata.normalize("NFKD", text.translate(TRANS)).encode("ascii", "ignore").decode("ascii")
-    text = "\n".join(line.rstrip() for line in text.splitlines()).rstrip() + "\n"
-    Path(args.output).write_text(text, encoding="ascii", newline="\r\n")
-    if not Path(args.output).read_bytes().isascii():
-        raise SystemExit("ASCII companion contains non-ASCII bytes")
+    return "\n".join(line.rstrip() for line in text.splitlines()).rstrip() + "\n"
+
+
+def output_bytes(text: str) -> bytes:
+    """Return the exact CRLF-terminated ASCII bytes written by the generator."""
+    return text.replace("\n", "\r\n").encode("ascii")
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--source", default=str(BUNDLE / "DS9 LaserDisc OpenCode Runbook.md"))
+    ap.add_argument("--output", default=str(BUNDLE / "DS9 LaserDisc Plain Text Instructions.txt"))
+    ap.add_argument("--check", action="store_true",
+                    help="verify the ASCII companion is current without writing")
+    args = ap.parse_args(argv)
+    # Authoring checkouts may have device workspaces; published release copies
+    # without Git metadata stay application/source read-only.
+    if not args.check and (BUNDLE / "devices").is_dir() and not (BUNDLE / ".git").exists():
+        print("shared release root is read-only; regenerate in the authoring checkout and republish the release",
+              file=sys.stderr)
+        return 2
+    text = generate_text(Path(args.source).read_text(encoding="utf-8"))
+    output = Path(args.output)
+    expected = output_bytes(text)
+    if args.check:
+        try:
+            current = output.read_bytes()
+        except OSError:
+            current = None
+        if current != expected:
+            print(f"ASCII companion is stale or missing: {output}", file=sys.stderr)
+            return 1
+        print(f"ASCII companion is current: {output}")
+        return 0
+    output.write_bytes(expected)
     print(f"wrote {args.output} ({len(text)} chars, ASCII-only)")
     return 0
 

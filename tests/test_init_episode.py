@@ -113,14 +113,15 @@ class InitEpisodeFileKeyTests(unittest.TestCase):
             self.assertEqual(manifest["archive_item"], "VOY-S01E01-LaserDisc-Copies")
             self.assertTrue((root / "probe" / "VOY").is_dir())
 
-    def test_shared_initializer_records_explicit_dvd_outside_device_profile_root(self):
+    def test_shared_initializer_remembers_user_selected_download_folder_and_external_dvd(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             bundle = root / "bundle"
             (bundle / "episodes").mkdir(parents=True)
             (bundle / "episodes" / "_template.json").write_bytes(
                 (ROOT / "episodes" / "_template.json").read_bytes())
-            downloads_root = root / "downloads"
+            configured_downloads_root = root / "configured-downloads"
+            downloads_root = root / "user-selected-downloads"
             downloads = downloads_root / "DS9 S01E07 LaserDisc"
             downloads.mkdir(parents=True)
             files = {
@@ -146,7 +147,7 @@ class InitEpisodeFileKeyTests(unittest.TestCase):
             profile = {"os": "windows", "machine": "TEST", "shared": {
                 "enabled": True, "release_root": str(bundle), "device_name": "TEST",
                 "device_instance_id": "1234ABCD"},
-                "roots": {"downloads_root": str(downloads_root),
+                "roots": {"downloads_root": str(configured_downloads_root),
                           "downloads_template": "DS9 {episode} LaserDisc",
                           "dvd_root": str(configured_dvd_root)}}
             fake_ld = SimpleNamespace(profile=profile, profile_path=root / "machine.json",
@@ -174,7 +175,9 @@ class InitEpisodeFileKeyTests(unittest.TestCase):
 
             manifest = json.loads(target.read_text(encoding="utf-8"))
             self.assertEqual(manifest["files"]["dvd"]["path"], str(dvd.resolve()))
-            self.assertNotIn("roots", manifest)
+            self.assertEqual(manifest["roots"]["downloads"], str(downloads.resolve()))
+            self.assertEqual(manifest["episode"], "S01E07")
+            self.assertEqual(manifest["files"]["stack_master"]["root"], "prores")
 
 
 if __name__ == "__main__":

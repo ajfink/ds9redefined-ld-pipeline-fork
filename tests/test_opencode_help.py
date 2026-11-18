@@ -18,19 +18,21 @@ class OpenCodeHelpAuditTests(unittest.TestCase):
     def test_incident_bundle_logs_prompt_snapshot_source_fix_and_protected_changes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "repo"
-            for folder in (root / "scripts", root / "tests", root / "episodes"):
+            for folder in (root / "scripts", root / "tests", root / "episodes", root / "Versioning"):
                 folder.mkdir(parents=True, exist_ok=True)
             source = root / "scripts" / "repair.py"
             source.write_text("VALUE = 1\n", encoding="utf-8")
             (root / "tests" / "test_repair.py").write_text("assert True\n", encoding="utf-8")
-            for name in ("changelog.txt", "WORKFLOW_VERSIONING.md", "V15-QUEUE.md", "V15-RELEASE.md"):
+            retrospective = ("Versioning/WORKFLOW_VERSIONING.md",
+                             "Versioning/V15-RELEASE.md", "Versioning/V32-APP.md")
+            for name in retrospective:
                 (root / name).write_text("retrospective placeholder\n", encoding="utf-8")
             (root / "episodes" / "S01E01.json").write_text("{}\n", encoding="utf-8")
             plan_path = root / "plan.json"
             plan_path.write_text(json.dumps({"episode": "S01E01"}), encoding="utf-8")
             subprocess.run(["git", "init"], cwd=root, capture_output=True, check=True)
             subprocess.run(["git", "add", "scripts", "tests", "episodes", "plan.json",
-                            "changelog.txt", "WORKFLOW_VERSIONING.md", "V15-QUEUE.md", "V15-RELEASE.md"],
+                            *retrospective],
                            cwd=root, capture_output=True, check=True)
             subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
                             "commit", "-m", "baseline"], cwd=root, capture_output=True, check=True)
@@ -51,14 +53,14 @@ class OpenCodeHelpAuditTests(unittest.TestCase):
             audit_dir = Path(audit["directory"])
             self.assertIn("fresh OpenCode session", audit["prompt"].read_text(encoding="utf-8"))
             prompt = audit["prompt"].read_text(encoding="utf-8")
-            self.assertIn("retrospective/planning records only", prompt)
+            self.assertIn("retrospective release and app-integration records only", prompt)
             self.assertNotIn("--model", _windows_launcher())
             self.assertNotIn("--model", _posix_launcher(Path("audit"), Path("prompt.md"),
                                                           "opencode", "python", Path("helper.py")))
             self.assertTrue((audit_dir / "workflow.log").is_file())
             before_index = json.loads((audit_dir / "source-before-index.json").read_text(encoding="utf-8"))
             self.assertNotIn("episodes/S01E01.json", before_index)
-            for name in ("changelog.txt", "WORKFLOW_VERSIONING.md", "V15-QUEUE.md", "V15-RELEASE.md"):
+            for name in retrospective:
                 self.assertNotIn(name, before_index)
 
             source.write_text("VALUE = 2\n", encoding="utf-8")

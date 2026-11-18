@@ -37,17 +37,21 @@ if ($Episode) {
     if (-not $Motion) { $Motion = Resolve-LdFile $prof $ep 'motion' -Optional }
     if (-not $SumOut) { $SumOut = Resolve-LdFile $prof $ep 'cadence_summary' -Optional }
     if (-not $DiOut) { $DiOut = Resolve-LdFile $prof $ep 'di_map' -Optional }
+    $missingMeasurements = New-Object System.Collections.Generic.List[string]
     if ($SourcePad -lt 0) {
-        if ($null -eq $ep.audio.pad_frames) { throw "$Episode audio.pad_frames is not measured." }
-        $SourcePad = [int]$ep.audio.pad_frames
+        if ($null -eq $ep.audio.pad_frames) { $missingMeasurements.Add('audio.pad_frames') }
+        else { $SourcePad = [int]$ep.audio.pad_frames }
     }
     if ($TrimStart -lt 0) {
-        if ($null -eq $ep.video.head_trim) { throw "$Episode video.head_trim is not measured." }
-        $TrimStart = [int]$ep.video.head_trim
+        if ($null -eq $ep.video.head_trim) { $missingMeasurements.Add('video.head_trim') }
+        else { $TrimStart = [int]$ep.video.head_trim }
     }
     if ($TrimEnd -lt 0) {
-        if ($null -eq $ep.video.tail_trim) { throw "$Episode video.tail_trim is not measured; record 0 only if no tail trim was measured." }
-        $TrimEnd = [int]$ep.video.tail_trim
+        if ($null -eq $ep.video.tail_trim) { $missingMeasurements.Add('video.tail_trim') }
+        else { $TrimEnd = [int]$ep.video.tail_trim }
+    }
+    if ($missingMeasurements.Count -gt 0) {
+        throw "$Episode is missing measured cadence prerequisites: $($missingMeasurements -join ', '). Complete the indicated measurements first; record tail_trim=0 only when measurement confirms no tail trim."
     }
 }
 if (-not $Log) { throw 'Supply -Log with the current episode TFM log.' }

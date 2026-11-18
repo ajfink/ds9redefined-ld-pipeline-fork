@@ -22,9 +22,9 @@ import uuid
 TEXT_SUFFIXES = {".avs", ".bat", ".cfg", ".cmd", ".css", ".csv", ".ini", ".json",
                  ".jsonc", ".md", ".ps1", ".psm1", ".py", ".sh", ".toml", ".tsv",
                  ".txt", ".vpy", ".xml", ".yaml", ".yml"}
-EXCLUDED_PARTS = {".git", ".venv", "venv", "__pycache__", "devices", "downloads", "logs",
+EXCLUDED_PARTS = {".git", ".venv", "venv", "__pycache__", "devices", "downloads", "logs", "versioning",
                   "media", "outputs", "probe", "work", "node_modules", "episodes"}
-RETROSPECTIVE_NAMES = {"changelog.txt", "workflow_versioning.md", "mainline-v12-adaptation.md"}
+RETROSPECTIVE_NAMES = {"workflow_versioning.md", "mainline-v12-adaptation.md"}
 MAX_SOURCE_BYTES = 4 * 1024 * 1024
 MAX_HASH_BYTES = 8 * 1024 * 1024
 
@@ -61,7 +61,7 @@ def _source_paths(root: Path) -> list[Path]:
             continue
         name = relative.name.casefold()
         if (name in RETROSPECTIVE_NAMES or
-                re.fullmatch(r"v\d+-(?:queue|release)\.md", name)):
+                re.fullmatch(r"v\d+-release\.md", name)):
             continue
         if any(part.casefold() in EXCLUDED_PARTS for part in relative.parts):
             continue
@@ -233,7 +233,7 @@ def create_help_audit(project_root: Path, audit_root: Path, *, plan_path: Path,
 Read README.md, the applicable current runbook, released scripts, and this incident packet first:
 {context_path}
 
-`changelog.txt`, version/release histories, and V*-QUEUE.md files are retrospective/planning records only. Do not read or use them to derive live episode instructions, measurements, approvals, stage arguments, or gates. If current README/runbook instructions or executable evidence are insufficient, stop and ask for clarification.
+The `Versioning/` folder contains retrospective release and app-integration records only. Do not read or use those records to derive live episode instructions, measurements, approvals, stage arguments, or gates during a live job. If current README/runbook instructions or executable evidence are insufficient, stop and ask for clarification.
 
 Diagnose why the review is blocked or which evidence is insufficient. Make a minimal source-code fix and regression test only if the incident demonstrates a code defect. If it requires a missing measurement, an operator decision, or media-specific judgment, do not guess or edit data; explain exactly what the operator must measure or decide.
 

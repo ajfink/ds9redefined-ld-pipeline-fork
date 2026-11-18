@@ -336,11 +336,12 @@ return out
 Add-Result 'avs:qtgmc' 'WARN' 'conditional: verify QTGMC and dependencies only if cadence analysis finds interlaced/hybrid inserts'
 
 foreach ($leaf in 'download_archive.ps1', 'init_episode.py', 'init_local_episode.py', 'local_source.py',
-    'workflow_app.py', 'workflow_app_model.py', 'review_popup.py', 'opencode_help.py',
+    'workflow_app.py', 'workflow_app_model.py', 'workflow_app_process.py', 'workflow_process_control.py', 'workflow_recovery.py', 'review_popup.py', 'opencode_help.py',
     'pad_review.py', 'render_stack.py', 'retime_break_review.py', 'validate_episode.py',
     'extract_video_descriptors.py', 'measure_dvd_alignment.py', 'measure_break_edges.py',
     'prepare_retime_breaks.py', 'record_retime_breaks.py', 'retime_break_candidates.py',
-    'measure_audio_rate.py',
+    'measure_audio_rate.py', 'dependency_updates.py', 'dependency_update_window.py', 'read_log.py',
+    'fileutil.py', 'manifest_io.py', 'numeric.py', 'streamutil.py',
     'build_map.ps1', 'encode_episode.ps1', 'build_stack_project.py', 'retime_dvd_assets.py',
     'check_space_budget.py', 'stage_clock.py', 'run_workflow.py',
     'measure_pad_audio.py', 'measure_ld_black.py', 'efm_paths.py') {
@@ -364,7 +365,7 @@ if (Test-Path -LiteralPath $workflowVersionPath) {
 } else {
     Add-Result 'workflow:version' 'FAIL' 'WORKFLOW_VERSION is missing'
 }
-foreach ($relativePath in 'WORKFLOW_VERSIONING.md', 'templates\device-workflow-change.template.md') {
+foreach ($relativePath in 'Versioning\WORKFLOW_VERSIONING.md', 'templates\device-workflow-change.template.md') {
     $changePath = Join-Path $here $relativePath
     if (Test-Path -LiteralPath $changePath) {
         Add-Result "workflow-versioning:$relativePath" 'PASS' $changePath

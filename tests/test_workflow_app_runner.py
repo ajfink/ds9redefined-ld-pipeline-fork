@@ -27,6 +27,8 @@ import pathlib, sys
 args = sys.argv[1:]
 emit = next((item.removeprefix("--script-arg=--emit=") for item in args if item.startswith("--script-arg=--emit=")), None)
 counter = next((item.removeprefix("--script-arg=--counter=") for item in args if item.startswith("--script-arg=--counter=")), None)
+mutate = next((item.removeprefix("--script-arg=--mutate=") for item in args if item.startswith("--script-arg=--mutate=")), None)
+fail_once = next((item.removeprefix("--script-arg=--fail-once=") for item in args if item.startswith("--script-arg=--fail-once=")), None)
 if counter:
     p = pathlib.Path(counter)
     count = int(p.read_text() if p.exists() else "0") + 1
@@ -34,10 +36,18 @@ if counter:
     if count == 1 and "--stage" in args and args[args.index("--stage") + 1] == "download":
         print("simulated interrupted download", flush=True)
         raise SystemExit(1)
+if fail_once:
+    marker = pathlib.Path(fail_once)
+    if not marker.exists():
+        marker.write_text("first attempt failed\n")
+        print("simulated failed stage with no declared output changes", flush=True)
+        raise SystemExit(1)
 if emit:
     out = pathlib.Path(emit)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("verified output\n")
+if mutate:
+    pathlib.Path(mutate).write_text("updated by a later completed step\n")
 print("stage report: fake-report.json", flush=True)
 '''
 
@@ -433,7 +443,183 @@ class WorkflowPlanTests(unittest.TestCase):
         self.assertEqual(review["status"], "PASS")
         self.assertTrue(review["approval"]["approved_by"])
 
-    def test_plan_may_add_an_explicit_review_after_a_stage_without_a_mandatory_gate(self):
+    def test_report_only_reference_review_is_audited_as_auto_skipped(self):
+        path = self.write_plan(job_id="auto-skip-reference", stage="stack-reference")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["steps"].append({
+            "id": "review-reference-selection", "kind": "review",
+            "for_stage": "stack-reference", "prompt": "Review the detailed report.",
+            "inputs": [str(self.output)], "outputs": [],
+        })
+        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        with patch.object(run_workflow, "RUN_STAGE", self.fake):
+            self.assertEqual(run_plan(path, execute=True, resume=False), 0)
+        saved = json.loads((self.root / "logs" / "workflow-auto-skip-reference.json").read_text(
+            encoding="utf-8"))
+        review = saved["steps"][1]
+        self.assertEqual(review["status"], "PASS")
+        self.assertNotIn("approval", review)
+        self.assertIn("alignment_map and stack.frames", review["auto_review_skip"]["reason"])
+        self.assertFalse(review["auto_review_skip"]["reviewed_by_human"])
+
+    def test_explicit_efm_and_retime_record_plans_skip_redundant_post_write_review(self):
+        for job_id, stage, review_id in (
+                ("auto-skip-efm-record", "record-efm-capture", "review-recorded-efm-capture"),
+                ("auto-skip-retime-record", "record-retime-breaks", "approve-retime-break-recording")):
+            with self.subTest(stage=stage):
+                path = self.write_plan(job_id=job_id, stage=stage,
+                                       inputs=[str(self.input)], outputs=[str(self.output)])
+                data = json.loads(path.read_text(encoding="utf-8"))
+                data["steps"].append({"id": review_id, "kind": "review", "for_stage": stage,
+                                      "prompt": "The operator's selected values were already recorded.",
+                                      "inputs": [str(self.output)], "outputs": []})
+                path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+                with patch.object(run_workflow, "RUN_STAGE", self.fake):
+                    self.assertEqual(run_plan(path, execute=True, resume=False), 0)
+                saved = json.loads((self.root / "logs" / f"workflow-{job_id}.json").read_text(
+                    encoding="utf-8"))
+                self.assertEqual(saved["steps"][1]["status"], "PASS")
+                self.assertFalse(saved["steps"][1]["auto_review_skip"]["reviewed_by_human"])
+                self.assertTrue(saved["steps"][1]["auto_review_skip"]["reason"])
+
+    def test_retime_candidate_report_gate_is_auto_skipped_before_dedicated_review_ui(self):
+        path = self.write_plan(job_id="auto-skip-retime", stage="prepare-retime-breaks")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["steps"].append({
+            "id": "review-retime-break-candidates", "kind": "review",
+            "for_stage": "prepare-retime-breaks", "prompt": "Review the detailed report.",
+            "inputs": [str(self.output)], "outputs": [],
+        })
+        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        with patch.object(run_workflow, "RUN_STAGE", self.fake):
+            self.assertEqual(run_plan(path, execute=True, resume=False), 0)
+        saved = json.loads((self.root / "logs" / "workflow-auto-skip-retime.json").read_text(
+            encoding="utf-8"))
+        self.assertEqual(saved["steps"][1]["status"], "PASS")
+        self.assertFalse(saved["steps"][1]["auto_review_skip"]["reviewed_by_human"])
+
+    def test_exact_approved_review_is_reused_for_a_new_job_but_not_changed_prompt(self):
+        def make_review_plan(job_id: str, prompt: str) -> Path:
+            path = self.root / f"{job_id}.json"
+            plan = {
+                "schema": PLAN_SCHEMA, "job_id": job_id, "episode": "S01E99",
+                "episode_title": "Q-Less", "profile": str(self.profile), "decisions": [],
+                "steps": [
+                    {"id": "validate-evidence", "stage": "validate-inputs",
+                     "inputs": [str(self.input)], "outputs": []},
+                    {"id": "review-identical-evidence", "kind": "review",
+                     "for_stage": "validate-inputs", "prompt": prompt,
+                     "inputs": [str(self.input)], "outputs": []},
+                ],
+            }
+            path.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
+            return path
+
+        first = make_review_plan("approval-source", "Review this exact verified evidence.")
+        second = make_review_plan("approval-reuse", "Review this exact verified evidence.")
+        changed = make_review_plan("approval-changed-prompt", "Review this evidence under a changed policy.")
+        with patch.object(run_workflow, "RUN_STAGE", self.fake):
+            self.assertEqual(run_plan(first, execute=True, resume=False), 3)
+            self.assertEqual(run_plan(first, execute=True, resume=True,
+                                      approve_steps={"review-identical-evidence"}), 0)
+            legacy_state_path = self.root / "logs" / "workflow-approval-source.json"
+            legacy_state = json.loads(legacy_state_path.read_text(encoding="utf-8"))
+            legacy_state["steps"][1].pop("review_prompt_sha256", None)
+            legacy_state_path.write_text(json.dumps(legacy_state, indent=2) + "\n",
+                                         encoding="utf-8")
+            self.assertEqual(run_plan(second, execute=True, resume=False), 0)
+            self.assertEqual(run_plan(changed, execute=True, resume=False), 3)
+
+        reused_state = json.loads((self.root / "logs" / "workflow-approval-reuse.json").read_text(
+            encoding="utf-8"))
+        approval = reused_state["steps"][1]["approval"]
+        self.assertEqual(approval["reused_from_job_id"], "approval-source")
+        self.assertEqual(approval["approved_by"], getpass.getuser())
+
+    def test_resume_allows_a_later_passed_step_to_update_an_earlier_input(self):
+        manifest = self.root / "manifest.json"
+        manifest.write_text("original manifest\n", encoding="utf-8")
+        project = self.root / "stack.orcprj"
+        path = self.root / "later-manifest-writer.json"
+        plan = {
+            "schema": PLAN_SCHEMA, "job_id": "later-manifest-writer",
+            "episode": "S01E99", "episode_title": "Q-Less", "profile": str(self.profile),
+            "decisions": [],
+            "steps": [
+                {"id": "validate-inputs", "stage": "validate-inputs",
+                 "inputs": [str(manifest)], "outputs": []},
+                {"id": "select-reference", "stage": "stack-reference",
+                 "args": [f"--mutate={manifest}", f"--emit={project}"],
+                 "inputs": [str(self.input)], "outputs": [str(manifest), str(project)]},
+                {"id": "review-reference", "kind": "review", "for_stage": "stack-reference",
+                 "prompt": "Review the selection evidence.",
+                 "inputs": [str(manifest), str(project)], "outputs": []},
+            ],
+        }
+        path.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
+        with patch.object(run_workflow, "RUN_STAGE", self.fake):
+            self.assertEqual(run_plan(path, execute=True, resume=False), 3)
+            state_path = self.root / "logs" / "workflow-later-manifest-writer.json"
+            waiting = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(waiting["status"], "WAITING_APPROVAL")
+            self.assertEqual(run_plan(path, execute=True, resume=True,
+                                      approve_steps={"review-reference"}), 0)
+        self.assertEqual(manifest.read_text(encoding="utf-8"),
+                         "updated by a later completed step\n")
+
+    def test_resume_continues_and_records_handoff_when_workflow_version_changes(self):
+        path = self.write_plan(job_id="version-change")
+        version_file = self.root / "WORKFLOW_VERSION"
+        version_file.write_text("32\n", encoding="ascii")
+        with patch.object(run_workflow, "ROOT", self.root), \
+                patch.object(run_workflow, "RUN_STAGE", self.fake):
+            self.assertEqual(run_plan(path, execute=True, resume=False), 0)
+            state_path = self.root / "logs" / "workflow-version-change.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["workflow_version"] = "31"
+            state_path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+
+            self.assertEqual(run_plan(path, execute=True, resume=True), 0)
+
+        resumed = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertEqual(resumed["workflow_version"], "32")
+        self.assertEqual(resumed["workflow_version_history"][-1]["from"], "31")
+        self.assertEqual(resumed["workflow_version_history"][-1]["to"], "32")
+        self.assertIn("workflow_version_handoff=31->32",
+                      (self.root / "logs" / "workflow-version-change.log").read_text(encoding="utf-8"))
+
+    def test_resume_retries_failed_step_from_last_pass_when_outputs_are_unchanged(self):
+        steps = []
+        counters = []
+        for index in range(1, 5):
+            output = self.root / f"step-{index}.dat"
+            counter = self.root / f"step-{index}.attempts"
+            args = [f"--emit={output}", f"--counter={counter}"]
+            if index == 4:
+                args.append(f"--fail-once={self.root / 'step-4-failure.marker'}")
+            steps.append({"id": f"stage-{index}", "stage": "validate-inputs",
+                          "args": args, "inputs": [str(self.input)], "outputs": [str(output)]})
+            counters.append(counter)
+        plan_path = self.root / "safe-retry.json"
+        plan_path.write_text(json.dumps({
+            "schema": PLAN_SCHEMA, "job_id": "safe-retry", "episode": "S01E99",
+            "episode_title": "Q-Less", "profile": str(self.profile), "decisions": [],
+            "steps": steps,
+        }, indent=2) + "\n", encoding="utf-8")
+        with patch.object(run_workflow, "RUN_STAGE", self.fake):
+            self.assertEqual(run_plan(plan_path, execute=True, resume=False), 1)
+            state_path = self.root / "logs" / "workflow-safe-retry.json"
+            failed = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual([step["status"] for step in failed["steps"]],
+                             ["PASS", "PASS", "PASS", "FAILED"])
+            self.assertEqual(failed["steps"][3]["output_fingerprints_before"], [])
+
+            self.assertEqual(run_plan(plan_path, execute=True, resume=True), 0)
+
+        self.assertEqual([int(path.read_text(encoding="utf-8")) for path in counters],
+                         [1, 1, 1, 2])
+
+    def test_reference_selection_report_review_is_not_a_human_gate(self):
         path = self.write_plan(job_id="optional-reference-review", stage="stack-reference")
         data = json.loads(path.read_text(encoding="utf-8"))
         data["steps"].append({
@@ -444,9 +630,11 @@ class WorkflowPlanTests(unittest.TestCase):
         })
         path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         with patch.object(run_workflow, "RUN_STAGE", self.fake):
-            self.assertEqual(run_plan(path, execute=True, resume=False), 3)
-            self.assertEqual(run_plan(path, execute=True, resume=True,
-                                      approve_steps={"review-reference-selection"}), 0)
+            self.assertEqual(run_plan(path, execute=True, resume=False), 0)
+        saved = json.loads((self.root / "logs" / "workflow-optional-reference-review.json").read_text(
+            encoding="utf-8"))
+        self.assertEqual(saved["steps"][1]["status"], "PASS")
+        self.assertIn("User-requested", saved["steps"][1]["auto_review_skip"]["reason"])
 
     def test_denied_review_is_durable_and_terminal(self):
         path = self.write_plan(job_id="denied-review")

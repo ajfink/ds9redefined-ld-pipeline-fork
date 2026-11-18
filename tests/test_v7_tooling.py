@@ -13,7 +13,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import dependency_lock  # noqa: E402
 from dependency_lock import LockError, read_lock, target_for, version_relation  # noqa: E402
-from doctor import parse_windows_preflight  # noqa: E402
+from doctor import parse_windows_preflight, workflow_status_for  # noqa: E402
 from generate_runbooks import OUTPUTS, generated_text  # noqa: E402
 from run_stage import (STAGES, doctor_command, make_action, requires_doctor, validate_command,
                        write_stage_report)  # noqa: E402
@@ -73,6 +73,32 @@ class DependencyLockTests(unittest.TestCase):
             result = dependency_lock.compare_lock("macos-arm64", "python")
         self.assertFalse(result["ok"])
         self.assertTrue(any("actual_import_error" in item for item in result["mismatches"]))
+
+    def test_python_and_package_version_differences_are_informational(self):
+        lock_path = ROOT / "dependencies" / "requirements-windows-x86_64.lock.txt"
+        actual = {"python": "3.10.11", "executable": "python",
+                  "packages": {"numpy": "2.1.0"}, "import_errors": {}}
+        with patch.object(dependency_lock, "read_lock",
+                          return_value=(lock_path, "3.10.14", [("numpy", "2.2.6")])), \
+                patch.object(dependency_lock, "inspect_interpreter", return_value=actual):
+            result = dependency_lock.compare_lock("windows-x86_64", "python")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["mismatches"], [])
+        self.assertEqual(len(result["version_differences"]), 2)
+
+    def test_missing_direct_package_remains_a_blocker(self):
+        lock_path = ROOT / "dependencies" / "requirements-windows-x86_64.lock.txt"
+        actual = {"python": "3.10.11", "executable": "python",
+                  "packages": {"numpy": None}, "import_errors": {"numpy": "ModuleNotFoundError"}}
+        with patch.object(dependency_lock, "read_lock",
+                          return_value=(lock_path, "3.10.14", [("numpy", "2.2.6")])), \
+                patch.object(dependency_lock, "inspect_interpreter", return_value=actual):
+            result = dependency_lock.compare_lock("windows-x86_64", "python")
+        self.assertFalse(result["ok"])
+        self.assertTrue(any(item.get("reason") == "not-installed" for item in result["mismatches"]))
+
+    def test_doctor_workflow_label_uses_the_live_workflow_version(self):
+        self.assertEqual(workflow_status_for("windows", "22"), "V22 Windows x86_64 workflow")
 
 
 class StageRunnerTests(unittest.TestCase):

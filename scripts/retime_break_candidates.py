@@ -2,22 +2,14 @@
 """Pure helpers for report-first retime-break candidate preparation and recording."""
 from __future__ import annotations
 
-import hashlib
 import math
 from pathlib import Path
 
 from ldcommon import PipelineError
+from fileutil import sha256_file
 
 FPS = 30000.0 / 1001.0
 CANDIDATE_SCHEMA = "ld-pipeline-retime-break-candidates-v1"
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def validate_alignment(alignment) -> tuple[list[float], list[float]]:
@@ -31,6 +23,52 @@ def validate_alignment(alignment) -> tuple[list[float], list[float]]:
     if any(right <= left for left, right in zip(master_frames, master_frames[1:])):
         raise PipelineError("alignment master-frame samples must be strictly increasing")
     return master_frames, offsets
+
+
+def validate_visual_alignment_approval(ep, alignment_path: Path, dvd_path: Path,
+                                       master_path: Path) -> dict:
+    """Require a manifest marker bound to the exact candidate path and source media."""
+    review = ((getattr(ep, "data", {}) or {}).get("video") or {}).get("dvd_alignment_review") or {}
+    if review.get("status") != "APPROVED":
+        raise PipelineError("DVD/LD alignment has no explicit visual approval marker")
+    raw = str(review.get("path") or "")
+    marker = Path(raw).expanduser()
+    if not marker.is_absolute():
+        parts = marker.parts
+        if not parts or parts[0].casefold() != "probe" or ".." in parts:
+            raise PipelineError("visual alignment marker has an unsafe path")
+        marker = ep.ld.probe() / Path(*parts[1:])
+    try:
+        if marker.resolve(strict=True) != alignment_path.resolve(strict=True):
+            raise PipelineError("visual approval marker names a different alignment artifact")
+        if sha256_file(alignment_path) != review.get("sha256"):
+            raise PipelineError("approved alignment artifact changed after visual review")
+        if sha256_file(master_path) != review.get("master_source_sha256"):
+            raise PipelineError("master source changed after visual alignment review")
+        if sha256_file(dvd_path) != review.get("dvd_source_sha256"):
+            raise PipelineError("DVD source changed after visual alignment review")
+        raw_assets = Path(str(review.get("review_assets_path") or "")).expanduser()
+        if not raw_assets.is_absolute():
+            parts = raw_assets.parts
+            if not parts or parts[0].casefold() != "probe" or ".." in parts:
+                raise PipelineError("visual alignment approval has an unsafe review-assets path")
+            raw_assets = ep.ld.probe() / Path(*parts[1:])
+        assets_path = raw_assets.resolve(strict=True)
+        probe = ep.ld.probe().resolve(strict=True)
+        assets_path.relative_to(probe)
+        if sha256_file(assets_path) != review.get("review_assets_sha256"):
+            raise PipelineError("paired visual assets changed after alignment review")
+        with assets_path.open("r", encoding="utf-8-sig") as stream:
+            import json
+            assets = json.load(stream)
+        if (assets.get("schema") != "dvd-alignment-review-assets-v1" or
+                assets.get("identity") != ep.identity or
+                assets.get("alignment_sha256") != review.get("sha256") or
+                assets.get("candidate_is_approval") is not False):
+            raise PipelineError("paired visual assets do not match the approved alignment")
+    except OSError as exc:
+        raise PipelineError(f"cannot verify approved alignment/source evidence: {exc}") from exc
+    return review
 
 
 def _interval(row: dict, label: str) -> tuple[float, float]:

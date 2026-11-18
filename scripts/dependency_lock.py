@@ -142,9 +142,11 @@ def compare_lock(target: str, interpreter: str) -> dict:
     lock, expected_python, packages = read_lock(target)
     actual = inspect_interpreter(interpreter)
     mismatches = []
+    version_differences = []
     if actual["python"] != expected_python:
-        mismatches.append({"package": "Python", "expected": expected_python,
-                           "actual": actual["python"]})
+        version_differences.append({"package": "Python", "expected": expected_python,
+                                    "actual": actual["python"],
+                                    "version_status": version_relation(actual["python"], expected_python)})
     installed = actual["packages"]
     version_status: dict[str, str] = {}
     newer_accepted: list[dict[str, str]] = []
@@ -158,9 +160,12 @@ def compare_lock(target: str, interpreter: str) -> dict:
         if relation == "newer":
             newer_accepted.append({"package": name, "target": expected,
                                    "installed": str(actual_version)})
-        elif relation not in ("exact",):
+        if actual_version is None:
             mismatches.append({"package": name, "expected": expected,
-                               "actual": actual_version, "version_status": relation})
+                               "actual": None, "reason": "not-installed"})
+        elif relation not in ("exact",):
+            version_differences.append({"package": name, "expected": expected,
+                                        "actual": actual_version, "version_status": relation})
         if name in actual.get("import_errors", {}):
             mismatches.append({"package": name, "expected_import": "working",
                                "actual_import_error": actual["import_errors"][name]})
@@ -169,7 +174,8 @@ def compare_lock(target: str, interpreter: str) -> dict:
             "import_errors": actual.get("import_errors", {}),
             "package_version_status": version_status,
             "newer_versions_accepted": newer_accepted,
-            "expected_packages": dict(packages), "mismatches": mismatches,
+            "expected_packages": dict(packages), "version_differences": version_differences,
+            "mismatches": mismatches,
             "ok": not mismatches}
 
 

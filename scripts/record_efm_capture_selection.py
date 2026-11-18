@@ -19,6 +19,8 @@ sys.path.insert(0, str(ROOT))
 
 from ldcommon import (Ld, PipelineError, assert_writable_path, episode_manifest_path,
                       load_episode)
+from fileutil import sha256_file  # noqa: E402
+from manifest_io import manifest_lock as _manifest_lock  # noqa: E402
 from dependency_lock import LockError
 from local_source import fingerprint_file
 from verify_efm_capture import verify_source_file
@@ -28,12 +30,20 @@ from shared_workspace import validate_device_config_profile, validate_instance
 PAIR_RE = re.compile(r"\s*(\d+)\s*\+\s*(-?\d+)\s*")
 
 
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+def _source_path(downloads: Path, name: str, role: str) -> Path:
+    relative = Path(name)
+    if (not name or relative.is_absolute() or len(relative.parts) != 1 or
+            any(part in ("", ".", "..") for part in relative.parts)):
+        raise PipelineError(f"{role} is not one safe downloads filename")
+    raw = downloads / relative
+    if raw.is_symlink():
+        raise PipelineError(f"{role} may not be a symlink")
+    resolved = raw.resolve(strict=True)
+    try:
+        resolved.relative_to(downloads.resolve(strict=True))
+    except ValueError as exc:
+        raise PipelineError(f"{role} escaped the selected downloads folder") from exc
+    return resolved
 
 
 def parse_alignment_map(value: str, labels: list[str]) -> dict[str, int]:
@@ -50,38 +60,6 @@ def parse_alignment_map(value: str, labels: list[str]) -> dict[str, int]:
             raise PipelineError(f"alignment_map has negative prepended-pad count for {label}")
         offsets[label] = offset
     return offsets
-
-
-def _manifest_lock(path: Path):
-    class Lock:
-        def __enter__(self):
-            self.stream = path.open("x", encoding="utf-8", newline="\n")
-            self.stream.write(f"pid={os.getpid()} started_utc={datetime.now(timezone.utc).isoformat()}\n")
-            self.stream.flush()
-            os.fsync(self.stream.fileno())
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            self.stream.close()
-            path.unlink(missing_ok=True)
-            return False
-    return Lock()
-
-
-def _manifest_lock(path: Path):
-    class Lock:
-        def __enter__(self):
-            self.stream = path.open("x", encoding="utf-8", newline="\n")
-            self.stream.write(f"pid={os.getpid()} started_utc={datetime.now(timezone.utc).isoformat()}\n")
-            self.stream.flush()
-            os.fsync(self.stream.fileno())
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            self.stream.close()
-            path.unlink(missing_ok=True)
-            return False
-    return Lock()
 
 
 def record_selection(episode: str, series: str, capture: str, provenance_path: Path,
@@ -134,9 +112,17 @@ def record_selection(episode: str, series: str, capture: str, provenance_path: P
     verified = audio.get("efm_provenance") or {}
     if not isinstance(verified, dict):
         raise PipelineError("manifest audio.efm_provenance must be an object keyed by capture label")
-    labels = [str(row.get("label", "")) for row in manifest.get("captures", [])]
-    if not labels or len(labels) != len(set(labels)):
+    all_captures = manifest.get("captures", [])
+    all_labels = [str(row.get("label", "")) for row in all_captures]
+    if not all_labels or len(all_labels) != len(set(all_labels)):
         raise PipelineError("manifest capture labels are missing or duplicated")
+    eligible_captures = [row for row in all_captures
+                         if str(row.get("efm_file") or "").strip()]
+    labels = [str(row.get("label", "")) for row in eligible_captures]
+    if not labels or len(labels) != len(set(labels)):
+        raise PipelineError("manifest has no unique captures with declared raw EFM sources")
+    if capture not in labels:
+        raise PipelineError(f"selected capture {capture!r} has no declared raw EFM source")
     missing = [label for label in labels if not isinstance(verified.get(label), list) or not verified[label]]
     if missing:
         raise PipelineError("verify each capture's EFM log/WAV/report before selecting one; missing: " + ", ".join(missing))
@@ -214,6 +200,37 @@ def record_selection(episode: str, series: str, capture: str, provenance_path: P
                 candidate_report.get("source_tbc_json_md5") != capture_rows[label].get("json_md5") or
                 candidate_report.get("source_tbc_json_fingerprint") != metadata_fingerprint):
             raise PipelineError(f"TBC JSON metadata for {label} changed since EFM provenance verification")
+        efm_name = str(capture_rows[label].get("efm_file") or "")
+        efm_path = _source_path(downloads, efm_name, f"EFM source for {label}")
+        efm_fingerprint = verify_source_file(
+            efm_path, capture_rows[label], manifest, name_key="efm_file",
+            bytes_key="efm_bytes", md5_key="efm_md5", inventory_key="efm")
+        if (candidate_report.get("source_efm_file") != efm_name or
+                candidate_report.get("source_efm_bytes") != capture_rows[label].get("efm_bytes") or
+                candidate_report.get("source_efm_manifest_md5") != capture_rows[label].get("efm_md5") or
+                candidate_report.get("source_efm_fingerprint") != efm_fingerprint):
+            raise PipelineError(f"raw EFM source for {label} changed since provenance verification")
+        decoded_efm = candidate_report.get("decoded_efm") or {}
+        if (not re.fullmatch(r"[0-9a-f]{64}", str(decoded_efm.get("sha256", "")).lower()) or
+                type(decoded_efm.get("size_bytes")) is not int or decoded_efm.get("size_bytes") <= 0):
+            raise PipelineError(f"verified raw EFM decode fingerprint is missing for {label}")
+        decoded_relative = Path(str(decoded_efm.get("relative_path") or ""))
+        decoded_root_name = decoded_efm.get("root")
+        decoded_root = (downloads if decoded_root_name == "downloads" else
+                        ld.root("work") if decoded_root_name == "work" else None)
+        decoded_path = decoded_root / decoded_relative if decoded_root else None
+        if (decoded_path is None or decoded_relative.is_absolute() or not decoded_relative.parts or
+                any(part in ("", ".", "..") for part in decoded_relative.parts) or
+                decoded_path.is_symlink() or not decoded_path.is_file() or
+                decoded_path.stat().st_size != decoded_efm.get("size_bytes") or
+                sha256_file(decoded_path) != decoded_efm.get("sha256")):
+            raise PipelineError(f"decoded raw EFM input for {label} changed since provenance verification")
+        if (efm_path.suffix.casefold() == ".efm" and
+                (decoded_root_name != "downloads" or
+                 decoded_path.resolve(strict=True) != efm_path.resolve(strict=True))):
+            raise PipelineError(f"decoded raw EFM path for {label} does not match its manifest source")
+        if efm_path.name.casefold().endswith(".efm.7z") and decoded_root_name != "work":
+            raise PipelineError(f"extracted raw EFM for {label} is not preserved under roots.work")
         wav_rel = Path(str(candidate_report.get("wav_relative_path", "")))
         if wav_rel.is_absolute() or any(part in ("..", "") for part in wav_rel.parts):
             raise PipelineError(f"EFM WAV for {label} is not roots.audio-relative")
@@ -245,7 +262,8 @@ def record_selection(episode: str, series: str, capture: str, provenance_path: P
     ep = Episode(episode, manifest, ld, series)
     project = ep.path("stack_project").resolve(strict=True)
     source_order = project_source_labels(project)
-    if len(source_order) != len(labels) or set(source_order) != set(labels) or source_order[0] != ep.reference:
+    if (len(source_order) != len(all_labels) or set(source_order) != set(all_labels) or
+            source_order[0] != ep.reference):
         raise PipelineError("refreshed Orc project source labels do not match the manifest/reference")
     pads_by_label = parse_alignment_map(str(manifest.get("alignment_map") or ""), source_order)
     pad_frames = pads_by_label.get(capture)

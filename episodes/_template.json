@@ -63,12 +63,16 @@
     "head_trim": null,
     "fade_up_output": null,
     "tail_trim": null,
+    "trim_review": null,
     "delta_s": null,
     "tfm_period5_pct": null,
     "tfm_unmatched": null,
+    "tfm_combed_count": null,
+    "tfm_combed_spans": [],
     "inserts": null,
     "repair_frames": null,
-    "repair_pct": null
+    "repair_pct": null,
+    "cadence_review": null
   },
   "pads": {
     "map_pads": null,

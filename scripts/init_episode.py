@@ -215,11 +215,8 @@ def main() -> int:
             root_overrides["downloads"] = str(download_dir)
     else:
         root_overrides["downloads"] = str(download_dir)
-    shared_mode = (ld.profile.get("shared") or {}).get("enabled") is True
-    if shared_mode and root_overrides:
-        raise PipelineError(
-            "shared mode keeps machine-local absolute paths out of the shared manifest; "
-            "set local roots.downloads_root/downloads_template in machine.json so this folder resolves canonically")
+    # Keep a non-default selected download path in this device-scoped manifest.
+    # Episode outputs and workspace metadata continue to use profile/workspace roots.
     dl_manifest = download_dir / "download-manifest.csv"
     if not dl_manifest.is_file():
         raise PipelineError(f"verified download manifest missing: {dl_manifest}; run download_archive.ps1 first")
@@ -353,7 +350,7 @@ def main() -> int:
             code, title, ".vpy" if (ld.profile.get("os") or "windows").casefold() == "darwin" else ".avs"),
         "deliverable": "pre_upscale", "deliverable_tracks": ["ld"],
         "mux_tracks": ["ld"], "ld_audio_source": "ld_synced",
-        "_init_note": ("DVD/download locations use machine profile roots when possible; an explicitly selected outside DVD path is recorded in this device-scoped manifest. "
+         "_init_note": ("DVD/download locations use machine profile roots when possible; explicitly selected outside download/DVD paths are recorded in this device-scoped manifest. "
                         "Episode measurements are intentionally null; measure them before running stage scripts. "
                         "No-DVD mode is permitted only after the user explicitly chose --no-dvd; DVD-derived tracks are unavailable."),
     })

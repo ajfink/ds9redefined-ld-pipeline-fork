@@ -14,6 +14,8 @@ from PIL import Image, ImageTk
 
 IMAGE_SUFFIXES = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
 VIDEO_SUFFIXES = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".ts", ".webm"}
+AUDIO_SUFFIXES = {".aac", ".ac3", ".aif", ".aiff", ".flac", ".m4a", ".mp3", ".ogg",
+                  ".opus", ".wav", ".wma"}
 
 
 class HumanReviewPopup:
@@ -174,14 +176,19 @@ class HumanReviewPopup:
         row.pack(fill="x", pady=2)
         exists = path.exists()
         is_video = path.suffix.casefold() in VIDEO_SUFFIXES and path.is_file()
+        is_audio = path.suffix.casefold() in AUDIO_SUFFIXES and path.is_file()
         is_file = path.is_file()
-        text = (f"Video: {path}" if is_video else str(path)) if exists else f"{path}  [missing]"
+        prefix = "Video: " if is_video else "Audio: " if is_audio else ""
+        text = (f"{prefix}{path}" if exists else f"{path}  [missing]")
         link = ttk.Label(row, text=text, anchor="w", wraplength=900,
                          cursor="hand2" if is_file else "")
         link.pack(side="left", fill="x", expand=True)
         if is_file:
             link.configure(foreground="#0757a6")
             link.bind("<Button-1>", lambda _event, item=path: self._open_file(item))
+        if is_audio:
+            ttk.Button(row, text="Play audio",
+                       command=lambda item=path: self._open_file(item)).pack(side="right", padx=(6, 0))
         if exists:
             folder = path if path.is_dir() else path.parent
             ttk.Button(row, text="Open folder",

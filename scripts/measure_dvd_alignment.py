@@ -17,24 +17,19 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import shutil
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+SCRIPTS = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPTS.parent))
+sys.path.insert(0, str(SCRIPTS))
 from ldcommon import Ld, PipelineError, assert_writable_path, load_episode  # noqa: E402
+from numeric import normalize_rows as normalize  # noqa: E402
 
 FPS = 30000.0 / 1001.0
 FEATURES = 48 * 36
-
-
-def normalize(a):
-    import numpy as np
-    y = a.astype(np.float32, copy=True)
-    y -= y.mean(axis=1, keepdims=True)
-    n = np.linalg.norm(y, axis=1, keepdims=True)
-    n[n == 0] = 1
-    return y / n
 
 
 def load_desc(path: Path, role: str, code: str, source: Path):
@@ -61,6 +56,33 @@ def load_desc(path: Path, role: str, code: str, source: Path):
     return a
 
 
+def validate_anchor_coverage(first_sampled: int, last_sampled: int,
+                             required_frames: list[int]) -> None:
+    """Refuse a candidate path that cannot cover a required downstream anchor."""
+    outside = [frame for frame in required_frames
+               if frame < first_sampled or frame > last_sampled]
+    if outside:
+        raise PipelineError(
+            f"required master-frame anchor(s) {outside} are outside the sampled alignment "
+            f"range {first_sampled}..{last_sampled}; rerun with --first-master-frame "
+            "covering the earliest anchor, near the matched DVD origin. Do not extend into "
+            "unmatched LD-only front matter just to cover the anchor.")
+
+
+def measured_anchor_frames(video: dict, explicit_frames: list[int]) -> list[int]:
+    """Combine explicit downstream anchors with the manifest's measured delta_s."""
+    anchors = list(explicit_frames)
+    raw_delta = video.get("delta_s") if isinstance(video, dict) else None
+    if raw_delta is not None:
+        try:
+            delta = float(raw_delta)
+        except (TypeError, ValueError):
+            delta = math.nan
+        if math.isfinite(delta):
+            anchors.append(int(round(delta * FPS)))
+    return list(dict.fromkeys(anchors))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--episode", required=True)
@@ -73,6 +95,8 @@ def main() -> int:
     ap.add_argument("--warn-ncc", type=float, default=0.50, help="diagnostic low-correlation marker; does not adjudicate/fail the path")
     ap.add_argument("--transition-threshold", type=int, default=20, help="print transitions at least this many frames; TSV keeps every sample")
     ap.add_argument("--first-master-frame", type=int, help="override initial index; default=max(3000,-min-offset)")
+    ap.add_argument("--required-master-frame", type=int, action="append", default=[],
+                    help="downstream anchor that must lie in the sampled range; repeat as needed")
     ap.add_argument("--out", help="override alignment NPY output path")
     ap.add_argument("--report", help="override TSV diagnostics output path")
     ap.add_argument("--force", action="store_true", help="replace existing alignment outputs after preserving them")
@@ -112,6 +136,9 @@ def main() -> int:
     idxs = np.arange(first, last, args.step, dtype=np.int32)
     if len(idxs) < 100:
         raise PipelineError(f"alignment range has too few samples: {len(idxs)}")
+    required_frames = measured_anchor_frames(ep.data.get("video") or {},
+                                             args.required_master_frame)
+    validate_anchor_coverage(int(idxs[0]), int(idxs[-1]), required_frames)
     states = len(offs)
     emissions = np.full((len(idxs), states), -1.0, np.float32)
     for row, i in enumerate(idxs):
@@ -150,6 +177,8 @@ def main() -> int:
     edge=(offset_path==args.min_offset)|(offset_path==args.max_offset)
     print(f"master descriptors={len(master)} DVD descriptors={len(dvd)} samples={len(idxs)} states={states}")
     print(f"sampled master-frame range={int(idxs[0])}..{int(idxs[-1])}; downstream anchors outside this range must not be extrapolated")
+    if required_frames:
+        print(f"required master-frame anchors covered: {','.join(map(str, required_frames))}")
     print(f"state=DVD-master; path range={int(offset_path.min())}..{int(offset_path.max())}; range-edge samples={int(edge.sum())}/{len(edge)}")
     changes=np.flatnonzero(np.diff(offset_path)!=0)+1
     print(f"offset transitions >={args.transition_threshold} frames (full path is in TSV):")

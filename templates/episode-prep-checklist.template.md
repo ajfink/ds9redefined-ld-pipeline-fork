@@ -14,6 +14,11 @@
 | Matching DVD | `path or NONE` |
 | Prep started / updated | `<timestamps>` |
 
+> Keep this status current as the job advances. When the download verifies, replace the
+> transfer-in-progress status with its verified row count/bytes/time. As later gates close,
+> update the blocked-stage ledger with evidence and append timestamped corrections rather
+> than leaving an obsolete `pending`/`blocked` value to look current.
+
 ## Allowed while transfer is running
 
 | Task | Status | Evidence path / result | Exact blocker or next action |
@@ -42,5 +47,6 @@
 - Download manifest: `<path>` — verified rows: `<n>`; total bytes: `<bytes>`; completion time: `<UTC>`.
 - Re-run/record the input and readiness gates before any blocked stage starts.
 - Unresolved prep items and their exact owner/blocker: `<list>`.
+- Latest completed stage / next gate / updated-at time: `<stage and evidence path>`.
 - This checklist records status only; measurements and approvals belong in their prescribed
   reports and the active episode manifest after their gates pass.

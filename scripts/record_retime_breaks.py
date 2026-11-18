@@ -14,7 +14,6 @@ import hashlib
 import getpass
 import json
 import os
-import secrets
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -28,6 +27,7 @@ sys.path.insert(0, str(ROOT))
 from dependency_lock import LockError  # noqa: E402
 from ldcommon import (Ld, PipelineError, assert_writable_path, episode_manifest_path,
                       load_episode)  # noqa: E402
+from manifest_io import atomic_replace, exclusive_backup, manifest_lock as _manifest_lock  # noqa: E402
 from retime_break_candidates import (CANDIDATE_SCHEMA, candidate_break_entries,
                                      sha256_file)  # noqa: E402
 
@@ -84,7 +84,8 @@ def _validate_report_inputs(report: dict, report_path: Path, ep, ld: Ld,
     except OSError as exc:
         raise PipelineError(f"cannot verify candidate report DVD input: {exc}") from exc
     if (dvd_name != inputs.get("dvd_name") or dvd_size != inputs.get("dvd_size_bytes") or
-            dvd_mtime != inputs.get("dvd_mtime_ns")):
+            dvd_mtime != inputs.get("dvd_mtime_ns") or
+            (inputs.get("dvd_sha256") and sha256_file(dvd_path) != inputs.get("dvd_sha256"))):
         raise PipelineError("DVD identity/metadata changed after candidate preparation")
     actual_report_sha256 = sha256_file(report_path)
     if actual_report_sha256 != expected_report_sha256:
@@ -93,48 +94,15 @@ def _validate_report_inputs(report: dict, report_path: Path, ep, ld: Ld,
 
 
 def _exclusive_backup(path: Path, payload: bytes) -> Path:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    backup = path.with_name(f"{path.name}.bak-retime-breaks-{stamp}")
-    with backup.open("xb") as stream:
-        stream.write(payload)
-        stream.flush()
-        os.fsync(stream.fileno())
-    if backup.read_bytes() != payload:
-        raise PipelineError(f"manifest backup verification failed: {backup}")
-    return backup
+    return exclusive_backup(path, payload, label="retime-breaks",
+                            error_type=PipelineError)
 
 
 def _atomic_replace(path: Path, payload: bytes, expected_original: bytes) -> None:
-    if path.is_symlink() or path.read_bytes() != expected_original:
-        raise PipelineError("manifest changed during apply; refusing to replace it")
-    temp = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(6)}.tmp")
-    try:
-        with temp.open("xb") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        if path.read_bytes() != expected_original:
-            raise PipelineError("manifest changed before atomic replace; original preserved")
-        os.replace(temp, path)
-    finally:
-        temp.unlink(missing_ok=True)
-
-
-def _manifest_lock(path: Path):
-    """Return an exclusive lock-file context; stale locks fail closed for manual inspection."""
-    class Lock:
-        def __enter__(self):
-            self.stream = path.open("x", encoding="utf-8", newline="\n")
-            self.stream.write(f"pid={os.getpid()} started_utc={datetime.now(timezone.utc).isoformat()}\n")
-            self.stream.flush()
-            os.fsync(self.stream.fileno())
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            self.stream.close()
-            path.unlink(missing_ok=True)
-            return False
-    return Lock()
+    atomic_replace(
+        path, payload, expected_original, error_type=PipelineError,
+        changed_message="manifest changed during apply; refusing to replace it",
+        pre_replace_message="manifest changed before atomic replace; original preserved")
 
 
 def apply_candidates(report: dict, report_path: Path, ep, ld: Ld,

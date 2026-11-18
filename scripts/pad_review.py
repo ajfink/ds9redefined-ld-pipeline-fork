@@ -315,7 +315,7 @@ class PadReviewWindow:
         self.notebook = ttk.Notebook(self.window)
         self.notebook.pack(fill="both", expand=True, padx=8, pady=8)
         self.notebook.bind("<<NotebookTabChanged>>", self._tab_changed)
-        tab_specs = (("rife", "Interpolated cut pads"), ("cut", "Cut Pad Images"))
+        tab_specs = (("rife", "Interpolated pads"), ("cut", "Cut Pad Images"))
         for kind, title in tab_specs:
             tab = ttk.Frame(self.notebook, padding=8)
             self.notebook.add(tab, text=title)

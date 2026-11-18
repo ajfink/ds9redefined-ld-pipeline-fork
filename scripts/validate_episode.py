@@ -23,6 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from ldcommon import Ld, PipelineError, load_episode  # noqa: E402
 from local_source import LocalSourceError, fingerprint_file  # noqa: E402
+from fileutil import hash_file  # noqa: E402
 
 STAGES = ("manifest", "inputs", "stack", "cadence", "audio", "retime", "encode", "padfix", "deliverable")
 
@@ -50,11 +51,7 @@ class Checks:
 
 
 def md5(path: Path) -> str:
-    h = hashlib.md5()
-    with path.open("rb") as f:
-        for block in iter(lambda: f.read(8 * 1024 * 1024), b""):
-            h.update(block)
-    return h.hexdigest()
+    return hash_file(path, algorithm="md5", chunk_size=8 * 1024 * 1024)
 
 
 def resolve(ep, key: str) -> Path | None:
@@ -68,12 +65,142 @@ def nonnull(data: dict, section: str, key: str) -> bool:
     return isinstance(data.get(section), dict) and data[section].get(key) is not None
 
 
+def trim_review_is_current(ep, data: dict, ld: Ld) -> tuple[bool, str]:
+    video = data.get("video") or {}
+    audio = data.get("audio") or {}
+    review = video.get("trim_review") or {}
+    head, tail, pad = video.get("head_trim"), video.get("tail_trim"), audio.get("pad_frames")
+    if (review.get("status") != "APPROVED" or type(head) is not int or head < 0 or
+            type(tail) is not int or tail < 0 or type(pad) is not int or pad < 0 or
+            review.get("head_trim") != head or review.get("tail_trim") != tail or
+            review.get("audio_pad_frames") != pad or
+            review.get("capture") != audio.get("capture")):
+        return False, "visual trim approval is missing or does not match the measured trim/pad values"
+    try:
+        source = ep.path("stack_master")
+        native = ep.path("ld_native")
+        if (sha256(source) != review.get("stack_master_sha256") or
+                sha256(native) != review.get("native_audio_sha256")):
+            return False, "stack master or native audio changed since trim review"
+        selected = str(audio.get("capture") or "")
+        provenance = (audio.get("efm_provenance") or {}).get(selected) or []
+        if (not provenance or not isinstance(provenance[-1], dict) or
+                provenance[-1].get("report_sha256") != review.get("efm_provenance_sha256")):
+            return False, "trim review is not bound to current selected-capture provenance"
+        capture = next((row for row in ep.data.get("captures", [])
+                        if str(row.get("label")) == selected), None)
+        if capture is None:
+            return False, "selected capture inventory is missing"
+        provenance_checks = Checks()
+        validate_efm_capture_provenance(provenance_checks, ep, ld, capture, native)
+        if provenance_checks.failed:
+            return False, "selected EFM provenance is no longer current"
+        if data.get("dvd_reference_available") is True:
+            alignment_review = video.get("dvd_alignment_review") or {}
+            alignment = ep.path("align_npy")
+            raw = Path(str(alignment_review.get("path") or ""))
+            if not raw.is_absolute():
+                parts = raw.parts
+                if not parts or parts[0].casefold() != "probe" or ".." in parts:
+                    return False, "approved alignment path is unsafe"
+                raw = ld.probe() / Path(*parts[1:])
+            if (alignment_review.get("status") != "APPROVED" or
+                    raw.resolve(strict=True) != alignment.resolve(strict=True) or
+                    sha256(alignment) != alignment_review.get("sha256") or
+                    sha256(ep.path("dvd")) != alignment_review.get("dvd_source_sha256") or
+                    sha256(source) != alignment_review.get("master_source_sha256") or
+                    review.get("alignment_sha256") != alignment_review.get("sha256") or
+                    review.get("review_assets_sha256") != alignment_review.get("review_assets_sha256")):
+                return False, "trim review is not bound to the current approved DVD/LD alignment"
+            assets_raw = Path(str(alignment_review.get("review_assets_path") or ""))
+            if assets_raw.is_symlink():
+                return False, "paired boundary assets may not be a symbolic link"
+            if not assets_raw.is_absolute():
+                parts = assets_raw.parts
+                if not parts or parts[0].casefold() != "probe" or ".." in parts:
+                    return False, "paired boundary asset path is unsafe"
+                assets_raw = ld.probe() / Path(*parts[1:])
+            if sha256(assets_raw) != alignment_review.get("review_assets_sha256"):
+                return False, "paired boundary assets changed since alignment review"
+        elif data.get("dvd_reference_available") is False and data.get("no_dvd_proceed_approved") is not True:
+            return False, "no-DVD cadence requires the explicit no-DVD route approval"
+        return True, "visual trim review is hash-bound to current video/audio evidence"
+    except (OSError, ValueError, PipelineError) as exc:
+        return False, f"could not verify trim review inputs: {exc}"
+
+
+def _review_digest(value: dict) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _resolve_review_path(raw: str, ld: Ld) -> Path:
+    path = Path(raw).expanduser()
+    if path.is_absolute():
+        return path.resolve(strict=True)
+    parts = path.parts
+    if not parts or ".." in parts or parts[0] not in ("probe", "avs"):
+        raise PipelineError("review artifact has an unsafe root-relative path")
+    return (ld.root(parts[0]) / Path(*parts[1:])).resolve(strict=True)
+
+
+def cadence_review_is_current(ep, data: dict, ld: Ld) -> tuple[bool, str]:
+    video = data.get("video") or {}
+    review = video.get("cadence_review") or {}
+    trim_ok, trim_detail = trim_review_is_current(ep, data, ld)
+    if not trim_ok:
+        return False, trim_detail
+    if review.get("status") != "APPROVED":
+        return False, "visual cadence approval is missing"
+    if review.get("trim_review_sha256") != _review_digest(video.get("trim_review") or {}):
+        return False, "head/tail trim review changed after cadence review"
+    try:
+        mapped = ep.path("avs_encode")
+        if (_resolve_review_path(str(review.get("map_script_path") or ""), ld) != mapped.resolve(strict=True) or
+                sha256(mapped) != review.get("map_script_sha256")):
+            return False, "approved cadence map script changed"
+        evidence = _resolve_review_path(str(review.get("metrics_path") or ""), ld)
+        assets = _resolve_review_path(str(review.get("review_assets_path") or ""), ld)
+        if (sha256(evidence) != review.get("metrics_sha256") or
+                sha256(assets) != review.get("review_assets_sha256")):
+            return False, "approved cadence metrics or visual assets changed"
+        for path_key, hash_key in (
+                ("tfm_log_path", "tfm_log_sha256"),
+                ("motion_trace_path", "motion_trace_sha256"),
+                ("motion_report_path", "motion_report_sha256"),
+                ("di_map_path", "di_map_sha256"),
+                ("verification_report_path", "verification_report_sha256")):
+            artifact = _resolve_review_path(str(review.get(path_key) or ""), ld)
+            if sha256(artifact) != review.get(hash_key):
+                return False, f"approved cadence artifact changed: {path_key}"
+        metrics = json.loads(evidence.read_text(encoding="utf-8-sig"))
+        if (metrics.get("schema") != "cadence-measurements-v1" or
+                metrics.get("identity") != ep.identity or
+                metrics.get("status") != "CANDIDATE_ONLY"):
+            return False, "cadence metrics report is not candidate-only evidence for this episode"
+        if (type(video.get("tfm_period5_pct")) not in (int, float) or
+                type(video.get("tfm_unmatched")) is not int or
+                type(video.get("tfm_combed_count")) is not int or
+                type(video.get("inserts")) is not int or
+                type(video.get("repair_frames")) is not int or
+                type(video.get("repair_pct")) not in (int, float) or
+                not isinstance(video.get("tfm_combed_spans"), list)):
+            return False, "manifest cadence values are missing or malformed"
+        if (float(video["tfm_period5_pct"]) != float(metrics.get("period5_agreement_pct")) or
+                video["tfm_unmatched"] != metrics.get("unmatched_count") or
+                video["tfm_combed_count"] != metrics.get("combed_count") or
+                video["inserts"] != metrics.get("insert_count") or
+                video["tfm_combed_spans"] != metrics.get("combed_spans") or
+                video["repair_frames"] != metrics.get("repair_frame_count") or
+                float(video["repair_pct"]) != float(metrics.get("repair_frame_pct"))):
+            return False, "manifest cadence measurements differ from the approved metrics report"
+        return True, "visual cadence approval and evidence hashes match current files"
+    except (OSError, ValueError, PipelineError) as exc:
+        return False, f"could not verify cadence evidence: {exc}"
+
+
 def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return hash_file(path)
 
 
 def validate_efm_capture_provenance(checks: Checks, ep, ld: Ld, capture: dict,
@@ -189,10 +316,71 @@ def validate_efm_capture_provenance(checks: Checks, ep, ld: Ld, capture: dict,
                       report.get("source_tbc_json_bytes") == capture.get("json_bytes") and
                       str(report.get("source_tbc_json_md5") or "").lower() ==
                       str(capture.get("json_md5", "")).lower())
+        if tbc_ok:
+            efm_name = str(capture.get("efm_file", ""))
+            efm_relative = Path(efm_name)
+            efm_source = downloads / efm_relative
+            efm_ok = (bool(efm_name) and not efm_relative.is_absolute() and
+                      len(efm_relative.parts) == 1 and
+                      not any(part in ("", ".", "..") for part in efm_relative.parts) and
+                      not efm_source.is_symlink() and efm_source.is_file() and
+                      efm_source.stat().st_size == capture.get("efm_bytes"))
+            if efm_ok and capture.get("efm_md5"):
+                efm_md5 = md5(efm_source).lower()
+                efm_ok = (efm_md5 == str(capture.get("efm_md5")).lower() and
+                          report.get("source_efm_fingerprint") == {
+                              "method": "manifest-md5", "md5": efm_md5})
+            elif efm_ok:
+                inventory = ((ep.data.get("source_provenance") or {}).get("inventory") or {})
+                source = next((row for row in inventory.get("captures", [])
+                               if row.get("label") == capture.get("label")), {})
+                expected_fingerprint = ((source.get("files") or {}).get("efm") or {})
+                actual_fingerprint = fingerprint_file(
+                    efm_source, str(inventory.get("fingerprint_policy") or ""))
+                efm_ok = (expected_fingerprint.get("name") == capture.get("efm_file") and
+                          expected_fingerprint.get("sha256") == actual_fingerprint.get("sha256") and
+                          expected_fingerprint.get("hash_scope") == actual_fingerprint.get("hash_scope") and
+                          report.get("source_efm_fingerprint") == {
+                              "method": "local-inventory-sha256", **actual_fingerprint})
+            decoded_efm = report.get("decoded_efm") or {}
+            decoded_relative = Path(str(decoded_efm.get("relative_path") or ""))
+            decoded_root = decoded_efm.get("root")
+            decoded_root_path = (downloads if decoded_root == "downloads" else
+                                 ld.root("work") if decoded_root == "work" else None)
+            decoded_path = (decoded_root_path / decoded_relative
+                            if decoded_root_path is not None else None)
+            decoded_ok = (decoded_path is not None and not decoded_relative.is_absolute() and
+                          decoded_relative.parts and
+                          all(part not in ("", ".", "..") for part in decoded_relative.parts) and
+                          not decoded_path.is_symlink() and decoded_path.is_file() and
+                          type(decoded_efm.get("size_bytes")) is int and
+                          decoded_path.stat().st_size == decoded_efm.get("size_bytes") and
+                          sha256(decoded_path) == decoded_efm.get("sha256"))
+            if efm_ok and efm_source.suffix.casefold() == ".efm":
+                decoded_ok = decoded_ok and (
+                    decoded_root == "downloads" and
+                    decoded_path.resolve(strict=True) == efm_source.resolve(strict=True))
+            elif efm_ok and efm_source.name.casefold().endswith(".efm.7z"):
+                decoded_ok = decoded_ok and decoded_root == "work"
+            efm_ok = efm_ok and decoded_ok
+            efm_ok = (efm_ok and report.get("source_efm_file") == capture.get("efm_file") and
+                      report.get("source_efm_bytes") == capture.get("efm_bytes") and
+                      str(report.get("source_efm_manifest_md5") or "").lower() ==
+                      str(capture.get("efm_md5", "")).lower())
+        else:
+            efm_ok = False
     except (AttributeError, OSError, PipelineError, TypeError, ValueError):
         tbc_ok = False
+        efm_ok = False
     checks.require(tbc_ok,
                    "efm-provenance-tbc", "selected TBC still exists at the manifest size")
+    if report.get("source_efm_file"):
+        checks.require(efm_ok,
+                       "efm-provenance-source",
+                       "selected raw EFM source still matches its verified manifest fingerprint")
+    else:
+        checks.add("WARN", "efm-provenance-source",
+                   "legacy provenance does not bind the raw EFM source; reverify before a new capture selection")
     checks.require(isinstance(report.get("path_checks"), dict) and
                    all(report["path_checks"].get(key) is True for key in
                        ("loaded_tbc", "tbc_metadata", "efm_output", "efm_report", "efm_success")),
@@ -430,9 +618,25 @@ def main() -> int:
         for key in ("tfm_log", "stack_master", "avs_encode"):
             c.file(resolve(ep, key), key)
         c.require(nonnull(d, "audio", "pad_frames"), "audio-pad", "measured audio.pad_frames required for frame-domain alignment")
+        selected_label = str((d.get("audio") or {}).get("capture") or "")
+        selected_capture = next((row for row in captures
+                                 if str(row.get("label")) == selected_label), None)
+        native_audio = resolve(ep, "ld_native")
+        c.require((d.get("audio") or {}).get("efm_provenance_required") is True and
+                  selected_capture is not None,
+                  "cadence-efm-provenance", "verified selected Orc capture is required")
+        if selected_capture is not None:
+            validate_efm_capture_provenance(c, ep, ld, selected_capture, native_audio)
         c.require(nonnull(d, "video", "head_trim") and nonnull(d, "video", "tail_trim"), "video-trims", "measured video.head_trim and video.tail_trim required")
+        windows_cadence = str(ld.profile.get("os") or "").casefold() in ("windows", "win32")
+        if windows_cadence:
+            trim_ok, trim_detail = trim_review_is_current(ep, d, ld)
+            c.require(trim_ok, "visual-trim-review", trim_detail)
         for key in ("tfm_period5_pct", "tfm_unmatched", "inserts"):
             c.require(nonnull(d, "video", key), f"video.{key}", "record measured cadence analysis")
+        if windows_cadence:
+            cadence_ok, cadence_detail = cadence_review_is_current(ep, d, ld)
+            c.require(cadence_ok, "visual-cadence-review", cadence_detail)
 
     if args.stage == "audio":
         selected = d.get("audio", {}).get("capture")
@@ -482,10 +686,16 @@ def main() -> int:
         c.require(nonnull(d, "video", "frames") and int(d["video"]["frames"]) > 0, "video.frames", "probe source-derived AVS metadata and record its frame count")
         for key in ("duration_s", "head_trim", "tail_trim", "delta_s"):
             c.require(nonnull(d, "video", key), f"video.{key}", "measured value required")
+        if str(ld.profile.get("os") or "").casefold() in ("windows", "win32"):
+            cadence_ok, cadence_detail = cadence_review_is_current(ep, d, ld)
+            c.require(cadence_ok, "visual-cadence-review", cadence_detail)
 
     if args.stage == "padfix":
         for key in ("avs_encode", "stack_project", "avs_padfix"):
             c.file(resolve(ep, key), key)
+        if str(ld.profile.get("os") or "").casefold() in ("windows", "win32"):
+            cadence_ok, cadence_detail = cadence_review_is_current(ep, d, ld)
+            c.require(cadence_ok, "visual-cadence-review", cadence_detail)
         probe = ld.probe()
         c.file(probe / f"{ep.code}-pad-audit.tsv", "source-AVS-pad-audit")
         c.file(probe / f"{ep.code}-pad-repair-frames.txt", "confirmed-PAD-repair-list")

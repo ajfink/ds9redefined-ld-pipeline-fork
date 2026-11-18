@@ -26,6 +26,7 @@ from ldcommon import (Ld, PipelineError, assert_writable_path, episode_manifest_
 from dependency_lock import LockError
 from shared_workspace import validate_device_config_profile, validate_instance
 from local_source import fingerprint_file
+from fileutil import sha256_file as _shared_sha256_file, md5_file as _shared_md5_file
 
 SCHEMA = "ld-pipeline-efm-capture-provenance-v1"
 TBC_JSON_RE = re.compile(r"using legacy JSON metadata:\s*(.+?\.tbc\.json)\s*$", re.IGNORECASE)
@@ -45,19 +46,11 @@ QUALITY_PATTERNS = {
 
 
 def file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return _shared_sha256_file(path)
 
 
 def file_md5(path: Path) -> str:
-    digest = hashlib.md5()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return _shared_md5_file(path)
 
 
 def verify_source_file(path: Path, capture: dict, episode_data: dict,
@@ -189,9 +182,13 @@ def verify_efm_log(log_path: Path, expected_tbc: Path, wav_path: Path,
 
 
 def verify_capture(episode: str, series: str, capture: str, log_path: Path,
-                  wav_path: Path, report_path: Path, provenance_out: Path,
-                  expected_manifest_sha256: str,
-                  profile_path: Path | None = None) -> Path:
+                   wav_path: Path, report_path: Path, provenance_out: Path,
+                   expected_manifest_sha256: str,
+                   profile_path: Path | None = None, *,
+                   decoded_efm_path: Path | None = None,
+                   decoded_efm_sha256: str | None = None,
+                   decoded_efm_bytes: int | None = None,
+                   orc_project_path: Path | None = None) -> Path:
     series = series.upper()
     episode = episode.upper()
     identity = f"{series}:{episode}"
@@ -239,6 +236,71 @@ def verify_capture(episode: str, series: str, capture: str, log_path: Path,
     metadata_fingerprint = verify_source_file(
         expected_metadata, selected, ep.data, name_key="json_file",
         bytes_key="json_bytes", md5_key="json_md5", inventory_key="json")
+    efm_name = selected.get("efm_file")
+    if not isinstance(efm_name, str) or not efm_name:
+        raise PipelineError(f"capture {capture!r} has no manifest raw EFM source")
+    expected_efm = _source_path(downloads, efm_name, "EFM source")
+    efm_fingerprint = verify_source_file(
+        expected_efm, selected, ep.data, name_key="efm_file",
+        bytes_key="efm_bytes", md5_key="efm_md5", inventory_key="efm")
+    if decoded_efm_path is None and expected_efm.suffix.casefold() == ".efm":
+        decoded_efm_path = expected_efm
+    if decoded_efm_path is None and expected_efm.name.casefold().endswith(".efm.7z"):
+        raise PipelineError(
+            "compressed EFM provenance requires the extracted .efm file used by Orc")
+    decoded_efm_info = None
+    if decoded_efm_path is not None:
+        raw_efm = decoded_efm_path.expanduser()
+        if raw_efm.is_symlink() or not raw_efm.is_file() or raw_efm.stat().st_size <= 0:
+            raise PipelineError("decoded raw EFM input is missing, empty, or unsafe")
+        raw_efm = raw_efm.resolve(strict=True)
+        actual_decoded_sha256 = file_sha256(raw_efm)
+        if decoded_efm_sha256 and actual_decoded_sha256 != decoded_efm_sha256.lower():
+            raise PipelineError("raw EFM input changed during decode/provenance verification")
+        actual_decoded_bytes = raw_efm.stat().st_size
+        if decoded_efm_bytes is not None and actual_decoded_bytes != decoded_efm_bytes:
+            raise PipelineError("raw EFM input size changed during decode/provenance verification")
+        decoded_root = None
+        decoded_relative = None
+        for root_name, root_path in (("downloads", downloads.resolve(strict=True)),
+                                     ("work", ld.root("work").resolve(strict=True))):
+            try:
+                decoded_relative = raw_efm.relative_to(root_path)
+                decoded_root = root_name
+                break
+            except ValueError:
+                continue
+        if decoded_root is None or decoded_relative is None:
+            raise PipelineError("decoded raw EFM input must be preserved under roots.downloads or roots.work")
+        decoded_efm_info = {
+            "root": decoded_root, "relative_path": decoded_relative.as_posix(),
+            "sha256": actual_decoded_sha256, "size_bytes": actual_decoded_bytes,
+        }
+    if orc_project_path is not None:
+        raw_project = orc_project_path.expanduser()
+        if raw_project.is_symlink() or not raw_project.is_file():
+            raise PipelineError("generated Orc EFM decode project is missing or unsafe")
+        if decoded_efm_path is None:
+            raise PipelineError("generated Orc project cannot be verified without its raw EFM input")
+        try:
+            from efm_decode import build_decode_project, project_formats
+            video_format, source_format, amplitude_unit = project_formats(ep.path("stack_project"))
+            expected_project_text = build_decode_project(
+                episode=episode, capture=str(selected["label"]), tbc=expected_tbc,
+                efm=Path(decoded_efm_path).resolve(strict=True),
+                wav=wav_path.resolve(strict=True), video_format=video_format,
+                source_format=source_format, amplitude_unit=amplitude_unit)
+            actual_project_text = raw_project.read_text(encoding="utf-8")
+        except (OSError, ValueError, PipelineError) as exc:
+            raise PipelineError(f"cannot validate generated Orc EFM project: {exc}") from exc
+        if actual_project_text != expected_project_text:
+            raise PipelineError(
+                "generated Orc project does not bind the declared TBC, raw EFM input, "
+                "WAV output, and audio/report settings")
+        project_sha256 = file_sha256(raw_project)
+    else:
+        raw_project = None
+        project_sha256 = None
     raw_wav = wav_path.expanduser()
     raw_efm_report = report_path.expanduser()
     if raw_wav.is_symlink() or raw_efm_report.is_symlink():
@@ -283,6 +345,13 @@ def verify_capture(episode: str, series: str, capture: str, log_path: Path,
         "source_tbc_json_bytes": selected.get("json_bytes"),
         "source_tbc_json_md5": selected.get("json_md5"),
         "source_tbc_json_fingerprint": metadata_fingerprint,
+        "source_efm_file": efm_name,
+        "source_efm_bytes": selected.get("efm_bytes"),
+        "source_efm_manifest_md5": selected.get("efm_md5"),
+        "source_efm_fingerprint": efm_fingerprint,
+        "decoded_efm": decoded_efm_info,
+        "orc_project_name": raw_project.name if raw_project else None,
+        "orc_project_sha256": project_sha256,
         "orc_log_name": log_path.name, "orc_log_sha256": match["log_sha256"],
         "wav_name": wav.name, "wav_relative_path": wav_relative.as_posix(),
         "wav_size_bytes": wav.stat().st_size,
@@ -369,13 +438,21 @@ def main() -> int:
     parser.add_argument("--report-out", required=True)
     parser.add_argument("--confirm-manifest-sha256", required=True)
     parser.add_argument("--profile")
+    parser.add_argument("--decoded-efm", help="raw EFM file actually supplied to Orc")
+    parser.add_argument("--decoded-efm-sha256", help="expected SHA-256 of the raw EFM input")
+    parser.add_argument("--decoded-efm-bytes", type=int, help="expected raw EFM input size")
+    parser.add_argument("--orc-project", help="generated Orc project used for this decode")
     args = parser.parse_args()
     try:
         verify_capture(args.episode, args.series or os.environ.get("LDP_SERIES", "DS9"),
                        args.capture, Path(args.orc_log),
-                       Path(args.wav), Path(args.efm_report), Path(args.report_out),
-                       args.confirm_manifest_sha256,
-                       Path(args.profile) if args.profile else None)
+                        Path(args.wav), Path(args.efm_report), Path(args.report_out),
+                        args.confirm_manifest_sha256,
+                        Path(args.profile) if args.profile else None,
+                        decoded_efm_path=Path(args.decoded_efm) if args.decoded_efm else None,
+                        decoded_efm_sha256=args.decoded_efm_sha256,
+                        decoded_efm_bytes=args.decoded_efm_bytes,
+                        orc_project_path=Path(args.orc_project) if args.orc_project else None)
         return 0
     except (PipelineError, LockError, OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"EFM PROVENANCE ERROR: {exc}", file=sys.stderr)

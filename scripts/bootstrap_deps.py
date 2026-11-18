@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Check or explicitly install the V7 direct Python-package lock.
+"""Check required Python packages or repair missing/broken lock-listed packages.
 
-Read-only by default. ``--install`` applies only the selected target's pinned
+Read-only by default. ``--install`` applies only the selected target's reference
 pip requirements, with dependency resolution disabled; it never installs native
-tools, changes Python, edits machine.json, or updates plugins/models.
+tools, changes Python, edits machine.json, or updates plugins/models. Installed
+versions that differ from reference pins are informational, not failures.
 """
 from __future__ import annotations
 
@@ -56,7 +57,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--profile", help="machine.json; defaults to LDP_PROFILE or bundle machine.json")
     ap.add_argument("--install", action="store_true",
-                    help="explicitly install/update only the direct packages pinned for this host")
+                    help="explicitly repair missing/broken packages using this host's reference pins")
     ap.add_argument("--print", dest="print_command", action="store_true",
                     help="print the exact installation command without running it")
     ap.add_argument("--json", action="store_true", help="emit machine-readable result")
@@ -81,10 +82,7 @@ def main() -> int:
         result["read_only"] = not args.install
         if args.print_command:
             result["command_text"] = subprocess.list2cmdline(command) if os.name == "nt" else shlex.join(command)
-        python_mismatch = any(item.get("package") == "Python" for item in result.get("mismatches", []))
-        if args.install and python_mismatch:
-            result["install_skipped"] = "selected interpreter Python version does not match the target lock"
-        elif args.install and result.get("ok"):
+        if args.install and result.get("ok"):
             result["install_skipped"] = "all locked direct packages are already satisfied"
         elif args.install:
             proc = subprocess.run(command, capture_output=True, text=True,
@@ -118,9 +116,9 @@ def main() -> int:
                 if name == "opencv-python-headless":
                     actual = actual or result["packages"].get("opencv-python")
                 state = result.get("package_version_status", {}).get(name, "unverified")
-                label = "PASS" if state in ("exact", "newer") else "FAIL"
-                suffix = " (newer-than-target accepted)" if state == "newer" else ""
-                print(f"  {label} {name}: target={version}, installed={actual}{suffix}")
+                label = "PASS" if actual is not None else "FAIL"
+                suffix = f" (version differs from reference pin: {state})" if actual is not None and state != "exact" else ""
+                print(f"  {label} {name}: reference={version}, installed={actual}{suffix}")
             if args.print_command:
                 print("install command (not run): " + result["command_text"])
             elif args.install and result.get("install_exit_code") == 0:

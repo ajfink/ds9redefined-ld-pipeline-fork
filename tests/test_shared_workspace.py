@@ -14,7 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tests"))
 
+from support import temporary_directory  # noqa: E402
 import shared_workspace  # noqa: E402
 from ldcommon import (Ld, PipelineError, assert_writable_path, episode_manifest_path,
                       shared_instance_root)  # noqa: E402
@@ -28,7 +30,7 @@ class SharedWorkspaceTests(unittest.TestCase):
     def setUp(self):
         self.device_identity_root = tempfile.TemporaryDirectory()
         self.identity_env = patch.dict(os.environ, {
-            "LDP_DEVICE_ID_DIR": self.device_identity_root.name,
+            "LDP_DEVICE_ID_DIR": str(Path(self.device_identity_root.name).resolve()),
         }, clear=False)
         self.identity_env.start()
 
@@ -37,7 +39,7 @@ class SharedWorkspaceTests(unittest.TestCase):
         self.device_identity_root.cleanup()
 
     def test_bootstrap_creates_device_folder_then_bound_profile_and_reuses_identity(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with temporary_directory() as temp:
             bundle = Path(temp) / "fromstuntokill-v15-app"
             bundle.mkdir()
             (bundle / "machine.example.json").write_bytes(
@@ -84,7 +86,7 @@ class SharedWorkspaceTests(unittest.TestCase):
                     Ld(profile_path)
 
     def test_ensure_creates_readme_relative_workspace_and_reuses_it(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with temporary_directory() as temp:
             bundle = Path(temp) / "ld-pipeline"
             (bundle / "devices").mkdir(parents=True)
             (bundle / "WORKFLOW_VERSION").write_text("7\n", encoding="ascii")
@@ -103,7 +105,7 @@ class SharedWorkspaceTests(unittest.TestCase):
             self.assertTrue((Path(first["instance_root"]) / "logs" / "README.md").is_file())
 
     def test_workspace_creation_failure_falls_back_to_local_roots_without_gating(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with temporary_directory() as temp:
             bundle = Path(temp) / "ld-pipeline"
             bundle.mkdir()
             (bundle / "WORKFLOW_VERSION").write_text("7\n", encoding="ascii")
@@ -139,7 +141,7 @@ class SharedWorkspaceTests(unittest.TestCase):
                     validated / "manifest" / "S01E09.json")
 
     def test_legacy_shared_workspace_mode_is_inferred_without_rewriting_provenance(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with temporary_directory() as temp:
             bundle = Path(temp) / "ld-pipeline"
             (bundle / "devices").mkdir(parents=True)
             (bundle / "WORKFLOW_VERSION").write_text("9\n", encoding="ascii")
@@ -166,7 +168,7 @@ class SharedWorkspaceTests(unittest.TestCase):
             self.assertEqual(unchanged["workflow_version"], "7")
 
     def test_legacy_local_fallback_mode_is_inferred_without_rewriting_workspace(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with temporary_directory() as temp:
             bundle = Path(temp) / "ld-pipeline"
             bundle.mkdir()
             (bundle / "WORKFLOW_VERSION").write_text("9\n", encoding="ascii")
@@ -193,7 +195,7 @@ class SharedWorkspaceTests(unittest.TestCase):
             self.assertNotIn("storage_mode", json.loads(metadata_path.read_text(encoding="utf-8")))
 
     def test_shared_profile_configuration_is_external_and_no_overwrite(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with temporary_directory() as temp:
             bundle = Path(temp) / "ld-pipeline"
             bundle.mkdir()
             (bundle / "avsplugins").mkdir()
@@ -215,7 +217,7 @@ class SharedWorkspaceTests(unittest.TestCase):
                     configure_shared_profile(source, output, None)
 
     def test_new_episodes_reuse_one_stable_machine_folder(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with temporary_directory() as temp:
             bundle = Path(temp) / "ld-pipeline"
             devices = bundle / "devices"
             devices.mkdir(parents=True)
@@ -247,7 +249,7 @@ class SharedWorkspaceTests(unittest.TestCase):
             self.assertEqual(sorted(p.name for p in device_folders[0].iterdir()), ["S01E07", "S01E08"])
 
     def test_legacy_multiple_device_folders_require_explicit_operator_choice(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with temporary_directory() as temp:
             devices = Path(temp) / "devices"
             devices.mkdir()
             profile = {"machine": "MAC-OPENCODE", "shared": {
@@ -272,7 +274,7 @@ class SharedWorkspaceTests(unittest.TestCase):
                         no_profile_override, "MAC-OPENCODE", devices)
 
     def test_ambiguous_legacy_ids_fall_back_without_creating_a_third_shared_folder(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with temporary_directory() as temp:
             root = Path(temp)
             bundle = root / "ld-pipeline"
             devices = bundle / "devices"
@@ -299,7 +301,7 @@ class SharedWorkspaceTests(unittest.TestCase):
             self.assertEqual(len(list(devices.glob("MAC-OPENCODE-*/"))), 2)
 
     def test_incomplete_legacy_folder_is_not_silently_bypassed(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with temporary_directory() as temp:
             devices = Path(temp) / "devices"
             (devices / "DEVICE-A1B2C3D4").mkdir(parents=True)
             profile = {"machine": "DEVICE-A", "shared": {"device_name": "DEVICE"}}
@@ -307,7 +309,7 @@ class SharedWorkspaceTests(unittest.TestCase):
                 shared_workspace.stable_device_instance_id(profile, "DEVICE", devices)
 
     def test_saved_device_identity_selects_its_legacy_episode_workspace(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with temporary_directory() as temp:
             root = Path(temp)
             bundle = root / "ld-pipeline"
             devices = bundle / "devices"
@@ -333,7 +335,7 @@ class SharedWorkspaceTests(unittest.TestCase):
             self.assertIn("MAC-OPENCODE-4DD0B985", result["instance_root"])
 
     def test_one_legacy_device_folder_is_adopted_for_future_episodes(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with temporary_directory() as temp:
             root = Path(temp)
             bundle = root / "ld-pipeline"
             old = bundle / "devices" / "DEVICE-A1B2C3D4" / "episodes" / "S01E01"
@@ -356,7 +358,7 @@ class SharedWorkspaceTests(unittest.TestCase):
                              "A1B2C3D4")
 
     def test_explicit_legacy_workspace_selection_persists_machine_identity(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with temporary_directory() as temp:
             root = Path(temp)
             bundle = root / "ld-pipeline"
             devices = bundle / "devices"
@@ -372,7 +374,7 @@ class SharedWorkspaceTests(unittest.TestCase):
                              "A1B2C3D4")
 
     def test_repeated_init_refuses_to_create_a_sibling_workspace(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with temporary_directory() as temp:
             bundle = Path(temp) / "ld-pipeline"
             (bundle / "devices").mkdir(parents=True)
             (bundle / "WORKFLOW_VERSION").write_text("9\n", encoding="ascii")
@@ -389,7 +391,7 @@ class SharedWorkspaceTests(unittest.TestCase):
             self.assertEqual(Path(first["instance_root"]).resolve(), folders[0].resolve())
 
     def test_shared_manifest_resolves_inside_current_instance_and_rejects_release_writes(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with temporary_directory() as temp:
             bundle = Path(temp) / "ld-pipeline"
             devices = bundle / "devices"
             device_root = devices / "DEVICE-A1B2C3D4"
@@ -434,7 +436,7 @@ class SharedWorkspaceTests(unittest.TestCase):
                     assert_writable_path(device_root / "local device config" / "oops.json", bad_ld)
 
     def test_reference_and_cut_pad_publication_refuse_overwrites_and_preserve_provenance(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with temporary_directory() as temp:
             bundle = Path(temp) / "ld-pipeline"
             devices = bundle / "devices"
             devices.mkdir(parents=True)

@@ -2,28 +2,33 @@ from __future__ import annotations
 
 import csv
 import copy
+import hashlib
 import json
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
+from support import temporary_directory  # noqa: E402
 
 from run_workflow import load_plan  # noqa: E402
 from workflow_app_model import (WorkflowAppError, build_intake_plan,
                                 build_archive_picker_tree,
                                 build_retime_candidate_plan,
-                                build_retime_candidate_record_plan,
-                                choose_existing_profile, create_default_profile,
+                                 build_retime_candidate_record_plan,
+                                 build_orc_reference_measurement_plan,
+                                 choose_existing_profile, create_default_profile,
                                 archive_series_from_url_identifier, default_profile_path,
                                 episode_code_from_url_identifier,
                                 load_archive_picker_catalog, resolve_archive_picker_selection,
                                 read_intake_template, resolve_episode_code, resolve_episode_identity,
                                 resolve_series_episode_identity,
-                                resolve_local_source,
-                                write_new_plan)  # noqa: E402
+                                 resolve_local_source,
+                                 parse_verified_orc_reference_report,
+                                 estimate_stack_render_gib,
+                                 write_new_plan)  # noqa: E402
 
 
 def intake_template() -> dict:
@@ -111,10 +116,82 @@ def create_local_download(root: Path, *, include_manifest: bool = True,
 
 
 class WorkflowAppPlanTests(unittest.TestCase):
+    def test_orc_reference_report_provides_exact_alignment_and_total_frame_measurement(self):
+        report = """# Automatic Orc reference selection - S01E18
+
+- Status: **SELECTED**
+
+| Pass | Sources | Input order | Suggested reference | Runner-up | Stack sigma | Coverage 1/2/3+ | Fit trusted | Saved/completed |
+|---:|---:|---|---|---|---:|---|---|---|
+| 1 | 3 | `L1, M1, P1` | `L1` (input 1) | `M1` | 1.2 | 5/19/83110 | True | True/True |
+
+Measured alignment map: `1+0, 2+5, 3+61`
+"""
+        result = parse_verified_orc_reference_report(report, ["L1", "M1", "P1"], "L1")
+        self.assertEqual(result["alignment_map"], "1+0, 2+5, 3+61")
+        self.assertEqual(result["coverage"], [5, 19, 83110])
+        self.assertEqual(result["stack_frames"], 83134)
+        self.assertGreaterEqual(estimate_stack_render_gib(result["stack_frames"]), 1)
+
+    def test_orc_reference_report_rejects_incomplete_coverage_or_conflicting_reference(self):
+        report = """- Status: **SELECTED**
+| Pass | Sources | Input order | Suggested reference | Runner-up | Stack sigma | Coverage 1/2/3+ | Fit trusted | Saved/completed |
+|---:|---:|---|---|---|---:|---|---|---|
+| 1 | 2 | `M1, L1` | `M1` (input 1) | `L1` | 1.2 | ?/19/83110 | True | True/True |
+Measured alignment map: `1+0, 2+5`
+"""
+        with self.assertRaisesRegex(WorkflowAppError, "invalid"):
+            parse_verified_orc_reference_report(report, ["M1", "L1"], "M1")
+
+    def test_verified_orc_report_builds_manifest_recording_stage(self):
+        with temporary_directory() as temporary:
+            root = Path(temporary)
+            profile = root / "machine.json"
+            manifest = root / "S01E18.json"
+            downloads = root / "downloads"
+            project = root / "stack.orcprj"
+            report = root / "selection.md"
+            profile.write_text("{}\n", encoding="utf-8")
+            downloads.mkdir()
+            project.write_text("verified project\n", encoding="utf-8")
+            report.write_text(
+                "- Status: **SELECTED**\n"
+                "| Pass | Sources | Input order | Suggested reference | Runner-up | Stack sigma | Coverage 1/2/3+ | Fit trusted | Saved/completed |\n"
+                "|---:|---:|---|---|---|---:|---|---|---|\n"
+                "| 1 | 2 | `L1, M1` | `L1` (input 1) | `M1` | 1.2 | 2/3/100 | True | True/True |\n"
+                "Measured alignment map: `1+0, 2+5`\n", encoding="utf-8")
+            manifest.write_text(json.dumps({
+                "episode": "S01E18", "series": "DS9", "reference": "L1",
+                "captures": [{"label": "L1"}, {"label": "M1"}],
+                "alignment_map": "", "stack": {"frames": None},
+            }), encoding="utf-8")
+            context = {
+                "completed_stage": {
+                    "stage": "stack-reference",
+                    "outputs": [str(project), str(report), str(manifest)],
+                },
+                "identity": "DS9:S01E18", "episode": "S01E18", "series": "DS9",
+                "profile": profile, "instance_root": root, "manifest": manifest,
+                "downloads": downloads, "project": project, "reference_report": report,
+                "capture_labels": ["L1", "M1"],
+            }
+
+            plan = build_orc_reference_measurement_plan(context)
+
+            self.assertEqual(plan["steps"][0]["stage"], "record-orc-reference-measurements")
+            self.assertIn(str(manifest), plan["steps"][0]["outputs"])
+            self.assertIn(str(report.resolve()), plan["steps"][0]["inputs"])
+            self.assertFalse(set(plan["steps"][0]["outputs"]) & set(plan["steps"][0]["inputs"]))
+            plan_path = root / "record-measurements-plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            validated, _raw = load_plan(plan_path)
+            self.assertEqual(validated["steps"][0]["stage"], "record-orc-reference-measurements")
+
     def test_default_profile_locations_are_per_user_and_portable(self):
         home = Path("C:/Users/tester")
         windows = default_profile_path(system="Windows", env={"LOCALAPPDATA": "C:/Users/tester/AppData/Local"}, home=home)
-        self.assertEqual(windows, Path("C:/Users/tester/AppData/Local/ld-pipeline/profiles/machine.json"))
+        self.assertEqual(str(windows).replace("\\", "/"),
+                         "C:/Users/tester/AppData/Local/ld-pipeline/profiles/machine.json")
         mac = default_profile_path(system="Darwin", env={"HOME": "/Users/tester"}, home=Path("/Users/tester"))
         self.assertTrue(str(mac).replace("\\", "/").endswith(
             "/Users/tester/Library/Application Support/ld-pipeline/profiles/machine.json"))
@@ -123,7 +200,7 @@ class WorkflowAppPlanTests(unittest.TestCase):
             "/home/tester/.cfg/ld-pipeline/profiles/machine.json"))
 
     def test_default_profile_creation_uses_template_and_refuses_overwrite(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with temporary_directory() as temporary:
             root = Path(temporary)
             profile_path = root / "profiles" / "machine.json"
             created, did_create = create_default_profile(
@@ -140,7 +217,7 @@ class WorkflowAppPlanTests(unittest.TestCase):
             self.assertEqual(json.loads(same_path.read_text(encoding="utf-8"))["notes"], ["preserve"])
 
     def test_legacy_profile_hint_is_auto_selected_from_default_profile_folder(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with temporary_directory() as temporary:
             directory = Path(temporary) / "profiles"
             directory.mkdir()
             default = directory / "machine.json"
@@ -234,7 +311,7 @@ class WorkflowAppPlanTests(unittest.TestCase):
                                               "files": []})
 
     def test_voy_archive_intake_plan_persists_series_and_routes_series_flag(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with temporary_directory() as temporary:
             root = Path(temporary)
             values = values_for(root)
             values.update({"series": "VOY", "episode": "S01E01",
@@ -253,7 +330,7 @@ class WorkflowAppPlanTests(unittest.TestCase):
             self.assertEqual(init_args[init_args.index("--series") + 1], "VOY")
 
     def test_local_voy_capture_prefix_clarifies_series_and_plan_preserves_it(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with temporary_directory() as temporary:
             root = Path(temporary)
             folder, tbc = create_local_download(root, include_manifest=False, series="VOY")
             info = resolve_local_source(tbc)
@@ -268,7 +345,7 @@ class WorkflowAppPlanTests(unittest.TestCase):
             self.assertEqual(plan["steps"][0]["args"][plan["steps"][0]["args"].index("--series") + 1], "VOY")
 
     def test_v15_retime_candidate_plan_is_series_aware_report_only_and_review_gated(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with temporary_directory() as temporary:
             root = Path(temporary)
             probe = root / "probe"
             probe.mkdir()
@@ -278,12 +355,29 @@ class WorkflowAppPlanTests(unittest.TestCase):
             manifest = root / "S01E01.json"
             master = probe / "master.npy"
             alignment = probe / "alignment.npy"
+            alignment_review_assets = probe / "alignment-review.json"
+            master_source = root / "master.mkv"
             dvd = root / "dvd.mkv"
-            for path in (manifest, master, alignment, dvd):
+            for path in (master, alignment, alignment_review_assets, master_source, dvd):
                 path.write_bytes(b"synthetic evidence")
+            manifest_data = {
+                "episode": "S01E01", "series": "VOY", "identity": "VOY:S01E01",
+                "video": {"dvd_alignment_review": {
+                    "status": "APPROVED", "path": "probe/alignment.npy",
+                    "sha256": hashlib.sha256(alignment.read_bytes()).hexdigest(),
+                    "master_source_sha256": hashlib.sha256(master_source.read_bytes()).hexdigest(),
+                    "dvd_source_sha256": hashlib.sha256(dvd.read_bytes()).hexdigest(),
+                    "review_assets_path": "probe/alignment-review.json",
+                    "review_assets_sha256": hashlib.sha256(alignment_review_assets.read_bytes()).hexdigest(),
+                }},
+            }
+            manifest.write_text(json.dumps(manifest_data), encoding="utf-8")
             context = {"series": "VOY", "episode": "S01E01", "identity": "VOY:S01E01",
                        "title": "Caretaker", "profile": profile, "manifest": manifest,
-                       "master_descriptors": master, "alignment": alignment, "dvd": dvd,
+                       "master_descriptors": master, "alignment": alignment,
+                       "stack_master": master_source, "dvd": dvd,
+                       "alignment_review_assets": alignment_review_assets,
+                       "manifest_data": manifest_data,
                        "probe": probe, "instance_root": None}
             plan = build_retime_candidate_plan(context, {
                 "ld_thresholds": [5, 10, 15], "ld_min_duration_s": "0.3",
@@ -293,7 +387,8 @@ class WorkflowAppPlanTests(unittest.TestCase):
             })
             self.assertEqual(plan["identity"], "VOY:S01E01")
             self.assertEqual([step.get("stage", step.get("kind")) for step in plan["steps"]],
-                             ["measure-ld-black", "prepare-retime-breaks", "review"])
+                             ["measure-ld-black", "prepare-retime-breaks",
+                              "retime-review-assets", "review"])
             prepare = plan["steps"][1]
             self.assertIn("--ld-threshold", prepare["args"])
             self.assertIn("--report-out", prepare["args"])
@@ -303,11 +398,19 @@ class WorkflowAppPlanTests(unittest.TestCase):
             plan_path.write_text(json.dumps(plan), encoding="utf-8")
             loaded, _raw = load_plan(plan_path)
             self.assertEqual(loaded["identity"], "VOY:S01E01")
+            context["manifest_data"]["video"]["dvd_alignment_review"]["status"] = "REJECTED"
+            with self.assertRaisesRegex(WorkflowAppError, "visual DVD/LD alignment approval"):
+                build_retime_candidate_plan(context, {
+                    "ld_thresholds": [5, 10, 15], "ld_min_duration_s": "0.3",
+                    "ld_threshold": "15", "dvd_silence_noise_db": "-40",
+                    "dvd_silence_min_duration_s": "0.015", "pair_tolerance_s": "4",
+                    "max_offset_spread_frames": "4", "dvd_audio_selector": "",
+                })
 
     def test_v15_retime_record_plan_binds_report_digest_and_requires_review(self):
         import hashlib
 
-        with tempfile.TemporaryDirectory() as temporary:
+        with temporary_directory() as temporary:
             root = Path(temporary)
             probe = root / "probe"
             probe.mkdir()
@@ -346,7 +449,8 @@ class WorkflowAppPlanTests(unittest.TestCase):
                        "title": "The Wire", "profile": profile, "manifest": manifest,
                        "alignment": alignment, "dvd": dvd, "probe": probe, "instance_root": None}
             plan = build_retime_candidate_record_plan(
-                context, report_path, ["B1"], ["B2"], "Reviewed synthetic pair evidence")
+                context, report_path, ["B1"], ["B2"], "Reviewed synthetic pair evidence",
+                expected_report_sha256=hashlib.sha256(report_path.read_bytes()).hexdigest())
             self.assertEqual([step.get("stage", step.get("kind")) for step in plan["steps"]],
                              ["validate-inputs", "review", "record-retime-breaks"])
             record = plan["steps"][-1]
@@ -400,7 +504,7 @@ class WorkflowAppPlanTests(unittest.TestCase):
         self.assertIn("two-part", emissary["picker_reason"])
 
     def test_local_source_does_not_require_download_manifest_and_resolves_folder_or_file(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with temporary_directory() as temporary:
             root = Path(temporary)
             folder, tbc = create_local_download(root, include_manifest=False)
             from_folder = resolve_local_source(folder)
@@ -419,7 +523,7 @@ class WorkflowAppPlanTests(unittest.TestCase):
                 resolve_local_source(raw_only)
 
     def test_local_intake_plan_skips_download_and_tracks_local_source_evidence(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with temporary_directory() as temporary:
             root = Path(temporary)
             folder, tbc = create_local_download(root, include_manifest=False)
             values = values_for(root)
@@ -442,7 +546,7 @@ class WorkflowAppPlanTests(unittest.TestCase):
             self.assertEqual(loaded["steps"][0]["stage"], "init-local-episode")
 
     def test_local_dvd_intake_needs_neither_title_nor_no_dvd_cut_pad_choice(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with temporary_directory() as temporary:
             root = Path(temporary)
             folder, tbc = create_local_download(root, include_manifest=False)
             dvd = root / "Deep Space Nine - S01E07.mkv"
@@ -472,7 +576,7 @@ class WorkflowAppPlanTests(unittest.TestCase):
             self.assertIn("replace it from evidence", " ".join(plan["_instructions_DO_NOT_EDIT"]))
 
     def test_no_dvd_requires_cut_pad_choice_but_not_a_dvd_path(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with temporary_directory() as temporary:
             values = values_for(Path(temporary))
             values["dvd_path"] = ""
             plan = build_intake_plan(intake_template(), values)
@@ -484,7 +588,7 @@ class WorkflowAppPlanTests(unittest.TestCase):
     def test_real_intake_template_builds_without_modifying_source(self):
         template_path = ROOT / "CONFIGURE HERE FIRST.example.json"
         before = template_path.read_bytes()
-        with tempfile.TemporaryDirectory() as temporary:
+        with temporary_directory() as temporary:
             root = Path(temporary)
             template = read_intake_template(template_path)
             plan = build_intake_plan(template, values_for(root))
@@ -496,7 +600,7 @@ class WorkflowAppPlanTests(unittest.TestCase):
         self.assertEqual(template_path.read_bytes(), before)
 
     def test_no_dvd_plan_matches_audit_choice_and_never_mutates_template(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with temporary_directory() as temporary:
             root = Path(temporary)
             template = intake_template()
             original = copy.deepcopy(template)
@@ -512,7 +616,7 @@ class WorkflowAppPlanTests(unittest.TestCase):
                 values_for(root)["downloads_dir"], values_for(root)["manifest_path"]])
 
     def test_dvd_plan_passes_exact_file_and_omits_no_dvd_options(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with temporary_directory() as temporary:
             root = Path(temporary)
             dvd = root / "Deep Space Nine - S01E07.mkv"
             dvd.write_bytes(b"fixture")
@@ -535,7 +639,7 @@ class WorkflowAppPlanTests(unittest.TestCase):
             self.assertEqual(command_args[command_args.index("--dvd") + 1], str(dvd.resolve()))
 
     def test_archive_plan_uses_operator_selected_download_destination(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with temporary_directory() as temporary:
             root = Path(temporary)
             values = values_for(root)
             profile = Path(values["profile"])
@@ -552,23 +656,29 @@ class WorkflowAppPlanTests(unittest.TestCase):
             self.assertEqual(loaded["steps"][1]["args"][
                 loaded["steps"][1]["args"].index("--downloads") + 1], str(chosen.resolve()))
 
-    def test_shared_archive_download_destination_must_match_configured_profile_folder(self):
-        with tempfile.TemporaryDirectory() as temporary:
+    def test_shared_archive_download_destination_can_be_user_selected_outside_device_root(self):
+        with temporary_directory() as temporary:
             root = Path(temporary)
             values = values_for(root)
             profile = Path(values["profile"])
             configured_root = root / "downloads"
+            selected_root = root / "another-volume" / "episode-data"
             profile.write_text(json.dumps({
-                "shared": {"enabled": True},
+                "shared": {"enabled": True, "release_root": str(root / "release")},
                 "roots": {"downloads_root": str(configured_root),
                           "downloads_template": "DS9 {episode} LaserDisc"},
             }), encoding="utf-8")
-            values["downloads_dir"] = str(root / "different-folder")
-            with self.assertRaisesRegex(WorkflowAppError, "shared profile download destination"):
-                build_intake_plan(intake_template(), values)
+            values["downloads_dir"] = str(selected_root)
+
+            plan = build_intake_plan(intake_template(), values)
+
+            self.assertEqual(plan["_fromstuntokill_intake"]["downloads_dir"]["value"],
+                             str(selected_root.resolve()))
+            self.assertEqual(plan["steps"][0]["outputs"], [str(selected_root.resolve())])
+            self.assertIn(values["manifest_path"], plan["steps"][1]["outputs"])
 
     def test_shared_profile_allows_existing_local_source_outside_download_template(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with temporary_directory() as temporary:
             root = Path(temporary)
             source, _tbc = create_local_download(root, include_manifest=False)
             dvd = root / "Deep Space Nine - S01E07.mkv"
@@ -596,7 +706,7 @@ class WorkflowAppPlanTests(unittest.TestCase):
             self.assertNotIn(str(configured_downloads), json.dumps(plan))
 
     def test_refuses_missing_dvd_and_mismatched_or_non_archive_urls(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with temporary_directory() as temporary:
             root = Path(temporary)
             values = values_for(root)
             values.update({"dvd_mode": "dvd-backed", "dvd_path": str(root / "missing.mkv")})
@@ -608,7 +718,7 @@ class WorkflowAppPlanTests(unittest.TestCase):
                 build_intake_plan(intake_template(), values)
 
     def test_refuses_existing_manifest_and_plan_destinations(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with temporary_directory() as temporary:
             root = Path(temporary)
             values = values_for(root)
             manifest = Path(values["manifest_path"])

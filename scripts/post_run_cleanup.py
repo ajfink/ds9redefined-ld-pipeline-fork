@@ -19,6 +19,7 @@ import tkinter as tk
 from typing import Any, Callable
 
 from dependency_lock import redact_shared_text, shared_redactions
+from fileutil import sha256_file as _shared_sha256_file
 from workflow_app_model import WorkflowAppError
 
 LARGE_AUDIO_BYTES = 100 * 1024 * 1024
@@ -364,11 +365,7 @@ def build_cleanup_inventory(context: dict[str, Any], plan: dict[str, Any],
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return _shared_sha256_file(path)
 
 
 def preserve_download_metadata(inventory: CleanupInventory,

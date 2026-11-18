@@ -180,11 +180,19 @@ class CandidatePairingTests(unittest.TestCase):
             ld_report_path = probe / "S01E12-ld-black-intervals.json"
             master = probe / "master.npy"
             alignment = probe / "align.npy"
+            assets_index = probe / "alignment-review" / "index.json"
             dvd = root / "dvd.mkv"
+            master_source = root / "master.mkv"
             manifest = root / "S01E12.json"
             master.write_bytes(b"master descriptor bytes")
             np.save(alignment, align_for([(10.0, 11.0)]))
             dvd.write_bytes(b"dvd")
+            master_source.write_bytes(b"master video")
+            assets_index.parent.mkdir()
+            assets_index.write_text(json.dumps({
+                "schema": "dvd-alignment-review-assets-v1", "identity": "DS9:S01E12",
+                "candidate_is_approval": False, "alignment_sha256": sha256_file(alignment),
+            }), encoding="utf-8")
             manifest.write_text(json.dumps({"episode": "S01E12"}), encoding="utf-8")
             ld_report_path.write_text(json.dumps({
                 "schema": "ld-pipeline-ld-black-intervals-v2",
@@ -201,10 +209,18 @@ class CandidatePairingTests(unittest.TestCase):
                 code = "S01E12"
                 series = "DS9"
                 identity = "DS9:S01E12"
+                data = {"video": {"dvd_alignment_review": {
+                    "status": "APPROVED", "path": "probe/align.npy",
+                    "sha256": sha256_file(alignment),
+                    "master_source_sha256": sha256_file(master_source),
+                    "dvd_source_sha256": sha256_file(dvd),
+                    "review_assets_path": "probe/alignment-review/index.json",
+                    "review_assets_sha256": sha256_file(assets_index),
+                }}}
 
                 def path(self, key):
                     return {"align_npy": alignment, "dvd": dvd,
-                            "master_descriptors": master}[key]
+                            "master_descriptors": master, "stack_master": master_source}[key]
 
             FakeEpisode.ld = SimpleNamespace(probe=lambda: probe)
 
@@ -222,7 +238,7 @@ class CandidatePairingTests(unittest.TestCase):
             self.assertEqual(report["parameters"]["dvd_silence_noise_db"], -40.0)
             self.assertEqual(report["inputs"]["alignment_sha256"], sha256_file(alignment))
 
-    def test_prepare_cli_returns_nonzero_and_writes_report_for_zero_candidates(self):
+    def test_prepare_cli_preserves_zero_candidate_report_for_in_app_review(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             probe = root / "probe"
@@ -230,11 +246,19 @@ class CandidatePairingTests(unittest.TestCase):
             ld_report_path = probe / "S01E12-ld-black-intervals.json"
             master = probe / "master.npy"
             alignment = probe / "align.npy"
+            assets_index = probe / "alignment-review" / "index.json"
             dvd = root / "dvd.mkv"
+            master_source = root / "master.mkv"
             manifest = root / "S01E12.json"
             master.write_bytes(b"master descriptor bytes")
             np.save(alignment, align_for([(10.0, 11.0)]))
             dvd.write_bytes(b"dvd source")
+            master_source.write_bytes(b"master video")
+            assets_index.parent.mkdir()
+            assets_index.write_text(json.dumps({
+                "schema": "dvd-alignment-review-assets-v1", "identity": "DS9:S01E12",
+                "candidate_is_approval": False, "alignment_sha256": sha256_file(alignment),
+            }), encoding="utf-8")
             original = json.dumps({"episode": "S01E12"}).encode()
             manifest.write_bytes(original)
             ld_report_path.write_text(json.dumps({
@@ -250,9 +274,17 @@ class CandidatePairingTests(unittest.TestCase):
 
             class FakeEpisode:
                 code, series, identity, ld = "S01E12", "DS9", "DS9:S01E12", None
+                data = {"video": {"dvd_alignment_review": {
+                    "status": "APPROVED", "path": "probe/align.npy",
+                    "sha256": sha256_file(alignment),
+                    "master_source_sha256": sha256_file(master_source),
+                    "dvd_source_sha256": sha256_file(dvd),
+                    "review_assets_path": "probe/alignment-review/index.json",
+                    "review_assets_sha256": sha256_file(assets_index),
+                }}}
                 def path(self, key):
                     return {"align_npy": alignment, "dvd": dvd,
-                            "master_descriptors": master}[key]
+                            "master_descriptors": master, "stack_master": master_source}[key]
 
             FakeEpisode.ld = FakeLd()
 
@@ -269,7 +301,7 @@ class CandidatePairingTests(unittest.TestCase):
                     patch.object(prepare_retime_breaks, "detect_dvd_silences",
                                  return_value=("0:a:0", 10.0, [])), \
                     patch.object(sys, "argv", argv):
-                self.assertEqual(prepare_retime_breaks.main(), 1)
+                self.assertEqual(prepare_retime_breaks.main(), 0)
             report = json.loads(out.read_text(encoding="utf-8"))
             self.assertEqual(report["status"], "NO_CANDIDATES")
             self.assertEqual(report["candidates"], [])
@@ -284,18 +316,34 @@ class CandidatePairingTests(unittest.TestCase):
             ld_report_path = probe / "ld-report.json"
             master = probe / "master.npy"
             alignment = probe / "align.npy"
+            assets_index = probe / "alignment-review" / "index.json"
             dvd = root / "dvd.mkv"
+            master_source = root / "master.mkv"
             manifest = root / "S01E12.json"
             master.write_bytes(b"master")
             ld_report_path.write_text("ld report", encoding="utf-8")
             np.save(alignment, align_for([(1.0, 2.0)]))
             dvd.write_bytes(b"dvd")
+            master_source.write_bytes(b"master video")
+            assets_index.parent.mkdir()
+            assets_index.write_text(json.dumps({
+                "schema": "dvd-alignment-review-assets-v1", "identity": "DS9:S01E12",
+                "candidate_is_approval": False, "alignment_sha256": sha256_file(alignment),
+            }), encoding="utf-8")
             manifest.write_text("{}", encoding="utf-8")
             class FakeEpisode:
                 code, series, identity = "S01E12", "DS9", "DS9:S01E12"
+                data = {"video": {"dvd_alignment_review": {
+                    "status": "APPROVED", "path": "probe/align.npy",
+                    "sha256": sha256_file(alignment),
+                    "master_source_sha256": sha256_file(master_source),
+                    "dvd_source_sha256": sha256_file(dvd),
+                    "review_assets_path": "probe/alignment-review/index.json",
+                    "review_assets_sha256": sha256_file(assets_index),
+                }}}
                 def path(self, key):
                     return {"align_npy": alignment, "dvd": dvd,
-                            "master_descriptors": master}[key]
+                            "master_descriptors": master, "stack_master": master_source}[key]
             FakeEpisode.ld = SimpleNamespace(probe=lambda: probe)
             with patch.object(prepare_retime_breaks, "episode_manifest_path", return_value=manifest):
                 report = build_candidate_report(

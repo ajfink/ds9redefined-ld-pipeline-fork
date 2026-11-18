@@ -26,6 +26,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from ldcommon import Ld, PipelineError, assert_writable_path, load_episode  # noqa: E402
+from fileutil import sha256_file  # noqa: E402
 from pad_review import PadReviewError, PreviewCache  # noqa: E402
 from record_pad_classifications import (  # noqa: E402
     MAX_MEAN, MAX_RGB, RIFE_MISIDENTIFICATION_WARNING, SCHEMA,
@@ -36,14 +37,6 @@ from shared_workspace import validate_device_config_profile, validate_instance  
 
 class PadClassificationReviewError(RuntimeError):
     """PAD audit evidence or visual review inputs are unavailable."""
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _read_tsv(path: Path, required: tuple[str, ...], label: str) -> dict[int, dict[str, str]]:

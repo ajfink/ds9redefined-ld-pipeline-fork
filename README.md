@@ -1,8 +1,8 @@
 # DS9 LaserDisc OpenCode Operator Pack
 
-**Workflow version: 22 (FromStunToKill app branch)** — check `WORKFLOW_VERSION` and follow the
-core-change/device-log rules in `WORKFLOW_VERSIONING.md` before editing or syncing workflow files.
-This V22 increment is scoped to the app branch; production `main` and the W shared tree remain
+**Workflow version: 37 (FromStunToKill app branch)** — check `WORKFLOW_VERSION` and follow the
+core-change/device-log rules in `Versioning/WORKFLOW_VERSIONING.md` before editing or syncing workflow files.
+This V37 increment is scoped to the app branch; production `main` and the W shared tree remain
 at V15 and are not modified by this release.
 
 **Design goal:** make the workflow clear and reliable enough for capable free or low-cost
@@ -20,17 +20,10 @@ episode data, reference archives, media/caches, and third-party AviSynth DLLs. S
 must be filled with this job's confirmed values before it can be planned. Job IDs and
 approval identity/time are generated automatically.
 
-**Live-workflow source boundary:** `V*-QUEUE.md` files are planning/backlog records only.
-Do not read, cite, or apply queue entries as episode instructions, measurements, approvals,
-stage arguments, or gates during a live job. Use this README, the canonical runbook, and
-released scripts at `WORKFLOW_VERSION`; a queued proposal becomes operative only after it is
-implemented and released.
-
-**Changelog boundary:** `changelog.txt` and release/version-history summaries are retrospective
-records only, not live workflow inputs. Ignore them as inputs to a live job: do not derive
-episode identity, title,
-measurements, stage arguments, approvals, or gates from changelog text. If a current runbook,
-helper, manifest, or explicit user decision is missing or ambiguous, stop and clarify.
+**Versioning archive:** `Versioning/` contains retrospective release and app-branch records,
+not live episode instructions or measurements. Use this README, the canonical runbook, the
+active manifest, and released scripts at `WORKFLOW_VERSION`. If current evidence or an explicit
+user decision is missing or ambiguous, stop and clarify.
 
 **Start here.** An OpenCode instance given this folder and the three job inputs
 below should read this README, then follow `DS9 LaserDisc OpenCode Runbook.md`.
@@ -543,14 +536,18 @@ missing, verify and regenerate it before continuing.
        selecting a WAV. Preserve each native WAV/report and set `audio.pad_frames` from the
        selected capture's final Orc input-order alignment.
     6. **Choose the audio/reference path.** If a DVD is available, keep the DVD-reference
-       workflow: decode it sequentially (never `-ss` a non-monotonic DVD), extract the DVD
-       and master descriptor grids, adjudicate the picture map/edges and robust-rate/fade
-       evidence, then build `ld_corrected` and sample-accurate `ld_synced`. At midpoint
-       commercial-break fades, keep the LD's internal picture/audio timeline even when the
-       DVD black/fade interval is shorter or longer. Use mapped boundaries for piecewise DVD
-       5.1/SRT retiming; judge success by measured content alignment and final A/V QC, not
-       equal black durations. Do not use the
-       DVD-rate fit as an assumed value. If the user explicitly chose no-DVD mode, run
+        workflow: decode it sequentially (never `-ss` a non-monotonic DVD), extract the DVD
+        and master descriptor grids, adjudicate the picture map/edges, and run the audio
+        evidence bundle. It automatically reports duration/PAD, primary fade-midpoint, and,
+        only after a visually approved hash-bound picture map, raw-provisional DVD-picture/audio
+        correlation. These remain evidence, not rate/origin approvals. The runbook defines no
+        DVD fit-agreement threshold or exact pad-corrected WAV0 intercept convention; keep
+        `ld_corrected`, `audio.skip_s`, and `ld_synced` uncommitted until the A/V-origin sample
+        is adjudicated. Do not use a DVD-rate fit as an assumed value. At midpoint
+        commercial-break fades, keep the LD's internal picture/audio timeline even when the
+        DVD black/fade interval is shorter or longer. Use mapped boundaries for piecewise DVD
+        5.1/SRT retiming; judge success by measured content alignment and final A/V QC, not
+        equal black durations. If the user explicitly chose no-DVD mode, run
        `python scripts/audio_timing_diagnostic.py --episode <code> --promote-dvd-free --report-out <new-unique.json>` only
        after measured video frames/DELTA and PAD counts/endpoints are available. It applies
        the E07-validated duration/PAD rate and capture-pad geometry, runs a measured
@@ -622,18 +619,90 @@ permission.
 
 ## Optional FromStunToKill desktop app
 
-Launch the local GUI with `python scripts/workflow_app.py`. It uses the V22 allowlisted
-runner and automatically saves concrete, immutable workflow plans under the device's
-`devices/<DEVICE>-<ID>/plans/` folder when **Preview** is clicked; no separate save step is
-needed. Intake fields remain editable after preview and until **Run** is confirmed; edits
-cause the next Preview/Run to create another plan rather than changing a saved plan. A direct
-**Run** click on a new or edited intake saves and previews first, then requires a second click
-to execute. It does not require an AI service to select an episode, build a plan, or run the
-workflow. In **Archive URL** mode, the
-Series control is hidden and the picker/Archive metadata resolves the series automatically.
+Launch the local GUI with `python scripts/workflow_app.py`. **Run** saves an immutable intake
+plan when needed, previews it, then proceeds with the run in the same action; a separate
+Preview button is not required. Review gates and final-delivery confirmations still require
+their explicit operator decisions. **Pause** suspends the active workflow process tree;
+**Resume** continues that step in place, or resumes a durable job from verified completed steps.
+Failed non-download stages are not blindly restarted.
+
+When an episode already has a resumable job, **Run** continues the newest evidence-eligible job
+for that selected episode/workspace. If a completed Orc reference selection is the latest
+verified stack step, the app consumes its saved report without opening it for user review,
+records the exact `alignment_map` and the sum of Orc's 1/2/3+ source-coverage counts in the
+manifest with a backup, then builds and runs the stack-render plan automatically. The render
+space budget is calculated from that measured frame count and still passes the configured
+free-space reserve gate. Human review of the rendered stack remains required.
+
+Less-used controls are under expandable **Advanced** options. After rendered-stack approval, the
+GUI automatically creates and runs an allowlisted Orc/EFMSink batch for every manifest capture
+with a raw EFM source. It supplies each capture's `.efm` sidecar explicitly, enables audio decode
+and the native report, refuses existing outputs, and verifies the source TBC/metadata/EFM, Orc
+log, WAV, report, and generated decode project before recording provenance with a manifest
+backup. A `.efm.7z` archive is listed and only its exact matching `.efm` member is streamed to
+device work storage after a free-space check and retained as a fingerprinted decode input; archive
+paths are never extracted directly.
+The app selects a capture only when one verified report uniquely Pareto-dominates the other
+available EFM captures. Otherwise the comparison UI permits auditioning the selected native WAV
+before the user records a choice. Legacy/external decodes can still be provenance-verified. After
+capture selection, the app automatically runs the report-only duration/PAD and fade-midpoint
+evidence suite; raw-provisional picture/audio correlation runs only when a visually approved,
+hash-bound DVD/LD alignment exists. Its structured metrics appear in-app, not as a report-reading
+task. DVD-backed rate/origin, `ld_corrected`, and `audio.skip_s` remain unset: the runbook defines
+neither a numerical fit-agreement threshold nor an exact pad-corrected WAV0 convention. The explicit
+no-DVD route auto-promotes only after measured output frames/head trim and the one-frame endpoint
+gate pass. Candidate-only fade-fit and flagged picture/audio windows automatically produce
+short, low-resolution A/V samples with the reported WAV/master anchors and preview-only rate;
+approved hash-bound alignment is required to translate DVD-domain fit-B points. The app verifies
+the preview stream start times and durations, fingerprints the samples, and presents candidate
+playback controls without recording an approval. Retime reports open automatically in the candidate classification UI, full-resolution
+PAD checks open cut classification, and RIFE completion opens the interpolated-frame review before
+padfix. The GUI does not
+require an AI service to select an episode, build a plan, or run the workflow. At startup it
+offers matching incomplete jobs from this device with the last completed-step time; loading a
+job only opens its plan; **Run** and **Resume** both retain the saved-state evidence checks. In
+**Archive URL** mode, the Series control is hidden and the picker/Archive metadata resolves the series automatically.
 In **Open local** mode, the Series selector is shown when filenames do not identify DS9 or
 VOY. The canonical identity is displayed as `SERIES:SxxExx`, and existing bare DS9 plans
 remain supported.
+
+When a DVD reference is available, EFM handoff automatically starts sequential master/DVD
+descriptor extraction and continuity-constrained alignment. The app shows the candidate offset
+timeline, exact paired-frame contact sheet, and short animated A/B samples at weak matches,
+range edges, transitions, and measured boundaries. A frame-rate mismatch must be explicitly
+acknowledged. Only an explicit visual approval records a lock/hash/backup-bound `video.dvd_alignment_review`
+marker and updates the selected alignment artifact paths. The approved path then enables raw-provisional
+picture/audio corroboration and retime candidate preparation. The existing candidate UI shows paired
+visual context and verified DVD-audio excerpts; ambiguous/colliding pairings are never batch-selected.
+Approval does not set retime offsets, `AudioSkip`, or an audio rate.
+
+For Windows cadence work, the app first offers an explicit head/tail visual review. The operator
+enters already measured trims in the 23.976 output-frame domain; the app does not convert source
+frames, DVD timestamps, or audio samples into trim values. A trim approval binds the exact master,
+native audio, measured PAD, and (when available) the approved DVD/LD map/contact assets. The
+allowlisted cadence chain then generates a temporary full-side TFM script, forces the full aligned
+source through FFmpeg's null output, verifies contiguous TFM log coverage against a measured source
+frame count, emits the pad-aligned motion trace, and runs the deterministic map builder. An
+in-app cadence plot and side-by-side raw/TFM clips cover every flagged interval plus representative
+clean samples. No cadence metrics are recorded until every sample is explicitly reviewed; the
+manifest recorder rechecks all hashes and uses a lock, backup, and atomic update. PAD repair and
+final encoding remain blocked until that approval is current.
+
+The **Dependency update** button compares installed, lock-listed Python packages with the
+newest stable release compatible with the selected interpreter, and checks supported
+WinGet/Homebrew-managed executables against their package catalog. The pop-up lists local and
+newest versions; available updates start checked. Use **Select all available**, **Clear all**,
+or individual checkboxes, then **Update now** to install the selected updates. A final
+confirmation is required. Only recognized package-manager matches are offered; specialist
+tools without a safe supported package source are left to their vendor. Doctor/readiness checks
+require required tools and modules to be present and usable, not to match a version pin. During
+installation the bottom message box streams installer output; each selected row changes through
+Queued..., Updating..., and Updated! (or Failed).
+If an installer is in progress when the popup is closed, it offers **Stop updates and close**,
+**Continue updates and close**, and **Continue updates and stay**. Stopping terminates the active
+installer process tree and does not start queued updates; continuing in the background keeps
+workflow actions disabled until the installers finish. While versions are only being checked or
+installations have not started, closing the popup closes it directly and cancels pending installs.
 
 On first launch, the app reserves a stable device identity, creates
 `devices/<DEVICE>-<ID>/` first, then creates that device's machine profile at
@@ -650,8 +719,11 @@ or free-space checks. TNG combined-item entries and Emissary remain blocked from
 single-episode intake. Local intake inventories decoded captures and records fingerprints
 without asserting Archive origin. A selected local capture folder or exact DVD may be outside
 the profile's default download/DVD roots; its path is retained in that device's episode
-manifest so local validation can reopen it. Archive download destinations remain constrained
-by the machine profile's download template.
+manifest so local validation can reopen it. For Archive intake, the profile's download template
+is only the initial suggestion: the user may choose any writable download folder. The selected
+path is saved in the device-local episode manifest and reused by later plans and helpers;
+manifests, plans, logs, work, and outputs remain in their normal device/episode locations. The
+shared release tree remains protected from download writes.
 
 The episode title is optional in local intake; if omitted, the plan records `Title not
 supplied (SERIES:SxxExx)` and instructs the operator to replace it with an evidence-confirmed
@@ -698,13 +770,15 @@ measurements or grants approval.
 | `scripts/bootstrap_deps.py` / `dependencies/` | Direct Python version locks for Windows x64, Mac arm64, and candidate Linux x86_64; check-only by default, `--install` is explicit |
 | `scripts/run_stage.py` | Allowlisted stage dispatcher; dry-run plan by default, explicit `--execute`, series-aware stage identity, downloader-specific checks for early download, and full gates before other writes |
 | `scripts/run_workflow.py` | Ordered JSON-plan orchestration; series-scoped status/log/locks/resume, input/output fingerprints, conservative resume, and per-step progress bar |
-| `scripts/workflow_app.py` | Optional Tk desktop intake, episode status, PAD cut review, EFM provenance/selection, process monitoring, guided workbenches, and post-run cleanup review |
+| `scripts/workflow_app.py` | Optional Tk desktop intake, verified latest-job resume, automatic Orc-reference-to-render and approved-render-to-EFM continuation, episode status, PAD/EFM review, guided workbenches, and post-run cleanup review |
+| `scripts/record_orc_reference_measurements.py` | Record `alignment_map` and measured stack frame coverage from the verified Orc report with a manifest lock, hash check, and backup |
+| `scripts/decode_efm_captures.py` / `scripts/verify_efm_capture.py` | Run Orc/EFMSink for available raw EFM sources, safely unpack `.efm.7z` when needed, and bind every decode to source, project, log, WAV, and report provenance |
 | `scripts/post_run_cleanup.py` | Clean-QC-gated inventory and opt-in Recycle Bin/Trash operation that preserves small download metadata and workflow evidence |
 | `scripts/pad_classification_review.py` / `record_pad_classifications.py` | P95 motion-baseline PAD defaults, human cut/outlier review, and immutable manifest recording before RIFE |
 | `scripts/verify_efm_capture.py` / `record_efm_capture_selection.py` | Bind each EFMSink decode to its manifest TBC/log/WAV/report, then record an explicit human capture choice |
 | `scripts/backup_device_workspace.py` | Checksum-verified per-episode/device evidence archives and dry-run-first no-merge restore |
 | `scripts/episode_dashboard.py` / `scripts/job_monitor.py` | Read-only stage validation with unique gate logs/reports, plus advisory process-stall diagnostics; no automatic termination |
-| `scripts/workflow_workbenches.py` | Immutable report-only audio/cadence plans and separately approved delivery/QC plan templates |
+| `scripts/workflow_workbenches.py` | Immutable report-only audio evidence bundle, measured motion/cadence plans, no-DVD promotion plan, and separately approved delivery/QC plan templates |
 | `scripts/retime_break_review.py` | GUI table for explicit V15 candidate classification; creates a separately reviewed record plan |
 | `scripts/measure_ld_black.py`, `scripts/prepare_retime_breaks.py`, `scripts/record_retime_breaks.py` | Threshold-sensitivity report, ambiguous-safe DVD/LD pairing report, and explicit backed-up recording of reviewed intervals; offsets remain unmeasured until edge adjudication |
 | `scripts/retime_break_candidates.py` | Pure pairing/record-validation helpers used by the report and recorder; no manifest write on report path |
@@ -712,40 +786,8 @@ measurements or grants approval.
 | `scripts/stage_clock.py` | Pause/resume timer for manual stages; separates active work from human gate waits and writes a timestamped record in the device workspace |
 | `scripts/shared_workspace.py` | Ensure one stable per-machine device folder with series-scoped episode workspaces; publish no-overwrite references and reviewed cut-PAD provenance |
 | `scripts/generate_runbooks.py` / `templates/runbooks/` | Regenerate model variants from the canonical runbook plus model-policy templates; `--check` detects drift |
-| `WORKFLOW_VERSION` / `WORKFLOW_VERSIONING.md` | Authoritative workflow version and core-change/device-log rules |
-| `V7-RELEASE.md` | V7 tooling overview and platform validation boundaries |
-| `V8-RELEASE.md` | V8 stage timing and README-relative device workspace changes |
-| `V9-RELEASE.md` | V9 ordered workflow orchestration and intake configuration |
-| `V10-RELEASE.md` | V10 retime verification, measurement diagnostics, workspace compatibility, and analysis safeguards |
-| `V11-RELEASE.md` | Queue-use boundary and `init_episode` shared-mode regression fix |
-| `V12-RELEASE.md` | Optional report-only LD/DVD audio comparator and regression coverage |
-| `V13-RELEASE.md` | Fail-closed break edges, cut-PAD policy/provenance, stable workspaces, Orc resume, and bounded extraction |
-| `V14-RELEASE.md` | Section 31 Archive tree, natural resolver, and series-aware VOY workflow release record |
-| `V15-RELEASE.md` | Changelog source boundary, fail-closed break candidate intake, and retime output verification improvements |
-| `FROMSTUNTOKILL-V15-APP.md` | Optional desktop app integration, review boundaries, validation, and platform limits |
-| `V16-RELEASE.md` | FromStunToKill app-branch PAD/EFM provenance and workspace-safety hardening; production `main` remains V15 |
-| `V16-QUEUE.md` | Non-operative record of unresolved reconstructed episode evidence; not live instructions |
-| `FROMSTUNTOKILL-V16-APP.md` | V16 app-branch integration scope, validation, and publication boundary |
-| `V17-RELEASE.md` | P95 motion-baseline automatic PAD classification and human review of cut-like candidates |
-| `FROMSTUNTOKILL-V17-APP.md` | Historical V17 desktop integration and validation boundary |
-| `V18-RELEASE.md` | Historical V18 dashboard, guided workbenches, monitoring, and delivery-plan changes |
-| `FROMSTUNTOKILL-V18-APP.md` | Historical V18 desktop integration and validation boundary |
-| `V19-RELEASE.md` | Historical CLI workflow progress display and validation |
-| `FROMSTUNTOKILL-V19-APP.md` | Historical V19 app-branch integration and validation boundary |
-| `V20-RELEASE.md` | Historical post-run download/audio cleanup review and safety gates |
-| `FROMSTUNTOKILL-V20-APP.md` | Historical V20 cleanup integration and validation boundary |
-| `V21-RELEASE.md` | Historical DVD-referenced boundary proposal and limitations |
-| `FROMSTUNTOKILL-V21-APP.md` | Historical V21 boundary-review policy |
-| `V22-RELEASE.md` | Final A/V alignment priority and internal-break decision |
-| `FROMSTUNTOKILL-V22-APP.md` | Current V22 alignment policy and validation boundary |
-| `V9-QUEUE.md` | Historical V9 device-log review and inherited carry-overs; planning only |
-| `V10-QUEUE.md` | Historical V10 scope and implementation record; planning only |
-| `V11-QUEUE.md` | Historical V11 record and dependency-policy proposal; planning only |
-| `V12-QUEUE.md` | V12 planning/review record; not live workflow instructions |
-| `V13-QUEUE.md` | V13 implementation/evidence record and held episode findings; non-operative |
-| `V14-QUEUE.md` | Archive catalog/resolver scope and coverage limitations; planning only |
-| `V15-QUEUE.md` | V15 implementation record and acceptance evidence; planning only, never live instructions |
-| `changelog.txt` | Short release history; retrospective V1–V5 notes and accepted V6 changes |
+| `WORKFLOW_VERSION` / `Versioning/WORKFLOW_VERSIONING.md` | Root machine-readable version marker and archived versioning policy |
+| `Versioning/README.md` | Index of archived release and app-branch records and the workflow-versioning policy |
 | `Cut Pad Images/<episode>/` | Curated single-frame DVD cut-PAD repair stills, named by verified DVD timestamp/frame; not a DVD reference substitute |
 | `scripts/download_archive.ps1` | Metadata-verified, resumable source download; checks profile curl (>=7.71.0), and ListOnly prints inventory, integrity metadata, aggregate bytes, and projected free space |
 | `scripts/check_space_budget.py` | Projected per-stage free-space gate that preserves the configured reserve |
@@ -762,11 +804,20 @@ measurements or grants approval.
 | `scripts/measure_break_edges.py` | Long-window content offsets, DP comparison, score/runner-up; clips windows away from adjacent recorded blacks |
 | `scripts/extract_candidate_frames.py` | Bounded exact-index PNG extraction; caps output/select terms and records hashes |
 | `scripts/measure_audio_rate.py` | Multi-window audio-vs-picture-map diagnostic with OLS and robust checks; never auto-selects a correction |
+| `scripts/fade_midpoint_fit.py` | Primary report-only native-WAV fade-midpoint fit; fit A/B and OLS/Theil-Sen remain candidates, never approvals |
+| `scripts/build_alignment_samples.py` | Builds timestamp-verified, low-resolution report-bound A/V decision clips; no manifest or production-audio writes |
+| `scripts/build_alignment_review_assets.py` | Sequentially extracts descriptor-matched paired frames and short local-offset GIF samples for visual DVD/LD path review |
+| `scripts/record_dvd_alignment_review.py` | Records APPROVED/REJECTED visual alignment review; only approved hash-bound paths update manifest files/marker, with lock and backup |
+| `scripts/build_retime_review_assets.py` | Sequential DVD-audio excerpts around projected intervals and silence candidates, with source/report hashes and measured durations |
+| `scripts/generate_cadence_evidence.py` | Full-side pad-aligned TFM generation, FFmpeg null decode, exact source/log frame-count gate, and preserved failure evidence |
+| `scripts/analyze_cadence_evidence.py` | Structured period-5, unmatched, combed, insert, motion, and review-interval metrics parsed from the verified TFM log |
+| `scripts/build_cadence_review_assets.py` | Side-by-side raw/TFM short samples and contact sheet for flagged/clean intervals |
+| `scripts/record_video_trim_review.py` / `scripts/record_cadence_measurements.py` | Hash-bound human trim/cadence review recorders with exclusive locks, backups, and atomic manifest writes |
 | `scripts/ld_dvd_audio_compare.py` | Optional report-only LD/DVD envelope and band comparison; never selects a rate or gates QC |
 | `scripts/measure_pad_audio.py` | Report-only PAD_1 audio occupancy vs nearby PCM controls; never recommends a rate |
 | `scripts/measure_ld_black.py` | Report-only descriptor-luma dark-run intervals across selected thresholds |
 | `scripts/efm_paths.py` | Episode-scoped EFM WAV/report path plan with existing-output refusal |
-| `scripts/audio_timing_diagnostic.py` | DVD-free duration/PAD report; candidate-only by default, or `--promote-dvd-free` for the user's explicit no-DVD selection |
+| `scripts/audio_timing_diagnostic.py` | Duration/PAD evidence; candidate-only by default, or corrected+synced promotion after explicit no-DVD selection and the measured endpoint gate |
 | `scripts/build_ld_synced.py` | Sample-accurate AudioSkip + exact target sample count into FLAC; audio-only, refuses overwrites and records recipe/hashes |
 | `scripts/build_map.ps1` | TFM log + optional motion trace to cadence report, deinterlace map, AVS |
 | `scripts/build_map_vpy.py` | macOS VapourSynth rendering of measured cadence outputs; does not re-measure and refuses an unselected deinterlace path |
@@ -781,7 +832,10 @@ measurements or grants approval.
 | `scripts/scan_padfixed_black.py` / `verify_pad_identities.py` | PAD-black and replacement identity gates |
 | `scripts/av_check_output.py` / `scripts/ld_only_sync_check.py` / `sync_check.py` | DVD-referenced absolute A/V, no-DVD exact timeline/sample-budget validation, and between-track drift checks |
 | `scripts/qc_report.py` | Final delivery report; skipped/unverified required checks fail closed |
-| `scripts/regen_plain_text.py` | Rebuild the ASCII companion from the main Markdown runbook |
+| `scripts/regen_plain_text.py` | Rebuild the ASCII companion; `--check` verifies exact generated bytes without writing |
+| `scripts/run_tests.py` | Run the unittest suite with shared import paths and normalized temporary roots |
+| `scripts/fileutil.py`, `scripts/manifest_io.py`, `scripts/numeric.py`, `scripts/streamutil.py` | Shared hash, manifest-mutation, numeric, and console/stream primitives |
+| `scripts/workflow_app_process.py` / `scripts/workflow_process_control.py` / `scripts/workflow_recovery.py` | GUI process controller, cross-platform suspend/resume, and incomplete-job discovery |
 
 ### V14 entry points (authoring candidate)
 
@@ -982,6 +1036,11 @@ authoritative manifests contain newer file-key coverage, so those duplicate copi
 not imported. Large media, WAVs, PNGs, raw descriptors, and temporary files were not copied.
 
 ## Validation status
+
+For a repository regression run, use `python scripts/run_tests.py`. It resolves the temporary
+root before discovery so POSIX `/var` symlink aliases do not make path assertions host-dependent.
+CI also checks compilation, generated docs, and active PowerShell syntax on Windows; dependency
+versions remain informational in readiness checks.
 
 Validation outcomes below are **historical regression evidence**, not current-machine
 readiness. Run the profile-specific update gate and preflight/capability checks on each

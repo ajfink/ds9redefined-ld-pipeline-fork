@@ -33,6 +33,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))         # sibling modules (vspipe_util)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # ldcommon
 from ldcommon import Ld, PipelineError, load_episode  # noqa: E402
+from fileutil import sha256_file as _shared_sha256_file  # noqa: E402
 from vspipe_util import run_source_ffmpeg  # noqa: E402
 
 FPS = 24000.0 / 1001.0
@@ -47,11 +48,7 @@ DVD_IMAGE_RE = re.compile(r"^DVD-(\d{2})-(\d{2})-(\d{2})\.(\d{3})-f(\d{8})\.png$
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return _shared_sha256_file(path)
 
 
 def validate_human_classification(episode_data: dict, candidate_frames: set[int],

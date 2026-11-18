@@ -15,6 +15,7 @@ from pathlib import Path
 
 EPISODE_RE = re.compile(r"^S\d{2}E\d{2}$", re.IGNORECASE)
 CAPTURE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
+RUN_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$")
 
 
 class EfmPathError(ValueError):
@@ -35,6 +36,29 @@ def require_new_outputs(wav: Path, report: Path) -> None:
     existing = [str(path) for path in (wav, report) if path.exists()]
     if existing:
         raise EfmPathError("refusing to overwrite existing EFM output/report: " + ", ".join(existing))
+
+
+def decode_artifact_paths(audio_root: str | Path, instance_root: str | Path,
+                          episode: str, capture: str, run_token: str) -> dict[str, Path]:
+    """Return fixed audio plus unique, episode-workspace Orc/provenance artifact paths."""
+    if not EPISODE_RE.fullmatch(episode):
+        raise EfmPathError(f"episode must be SxxExx: {episode!r}")
+    if not CAPTURE_RE.fullmatch(capture) or capture in (".", ".."):
+        raise EfmPathError(f"unsafe capture label: {capture!r}")
+    if not RUN_TOKEN_RE.fullmatch(run_token):
+        raise EfmPathError("run token must be 8..64 safe ASCII characters")
+    audio_dir = Path(audio_root).expanduser().resolve(strict=False) / episode.upper()
+    reference_dir = Path(instance_root).expanduser().resolve(strict=False) / "references"
+    log_dir = Path(instance_root).expanduser().resolve(strict=False) / "logs"
+    prefix = f"{episode.upper()}-{capture}-{run_token}"
+    wav = audio_dir / f"{capture}-efm.wav"
+    return {
+        "wav": wav,
+        "report": Path(str(wav) + ".txt"),
+        "orc_log": log_dir / f"efm-decode-{prefix}.log",
+        "orc_project": reference_dir / f"efm-decode-{prefix}.orcprj",
+        "provenance": reference_dir / f"efm-provenance-{prefix}.json",
+    }
 
 
 def main() -> int:

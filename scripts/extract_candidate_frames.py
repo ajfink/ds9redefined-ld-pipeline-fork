@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import shutil
 import sys
 import tempfile
@@ -26,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from ldcommon import (Ld, PipelineError, assert_writable_path, load_episode,
                       redact_shared_text)  # noqa: E402
+from fileutil import sha256_file  # noqa: E402
 from vspipe_util import run_source_ffmpeg  # noqa: E402
 
 WIDTH, HEIGHT = 768, 484
@@ -76,12 +76,7 @@ def frame_chunks(frames: list[int], size: int = SELECT_TERMS_PER_CALL) -> list[l
     return [frames[i:i + size] for i in range(0, len(frames), size)]
 
 
-def file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+file_sha256 = sha256_file
 
 
 def extract_frames(ld: Ld, video: Path, frames: list[int], out_dir: Path) -> Path:

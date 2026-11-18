@@ -9,7 +9,6 @@ source/report hashes, and exact sample count against the final video timeline.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -22,17 +21,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from ldcommon import (Ld, PipelineError, assert_writable_path, load_episode,
                       redact_shared_text)  # noqa: E402
+from fileutil import hash_file  # noqa: E402
 
 FPS_NUM, FPS_DEN = 24000, 1001
 SAMPLE_RATE = 44100
 
 
 def sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for block in iter(lambda: f.read(8 * 1024 * 1024), b""):
-            h.update(block)
-    return h.hexdigest()
+    return hash_file(path, chunk_size=8 * 1024 * 1024)
 
 
 def probe_stream(ld: Ld, media: Path, selector: str) -> dict:

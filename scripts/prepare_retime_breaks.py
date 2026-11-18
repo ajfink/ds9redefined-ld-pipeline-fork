@@ -35,7 +35,7 @@ from dependency_lock import LockError  # noqa: E402
 from ldcommon import (Ld, PipelineError, assert_writable_path, episode_manifest_path,
                       load_episode)  # noqa: E402
 from retime_break_candidates import (CANDIDATE_SCHEMA, pair_ld_intervals,
-                                     sha256_file)  # noqa: E402
+                                     sha256_file, validate_visual_alignment_approval)  # noqa: E402
 from retime_dvd_assets import parse_silence_intervals  # noqa: E402
 
 LD_BLACK_SCHEMA = "ld-pipeline-ld-black-intervals-v2"
@@ -136,14 +136,17 @@ def build_candidate_report(ep, ld_report_path: Path, ld_report: dict, ld_thresho
     intervals = threshold_intervals(ld_report, ld_threshold)
     alignment_path = ep.path("align_npy")
     dvd_path = ep.path("dvd")
+    master_path = ep.path("stack_master")
     if not alignment_path.is_file() or not dvd_path.is_file():
         raise PipelineError("candidate preparation needs the measured alignment path and verified DVD")
+    validate_visual_alignment_approval(ep, alignment_path, dvd_path, master_path)
     probe_root = ep.ld.probe().resolve()
     try:
         ld_report_relative_path = ld_report_path.resolve().relative_to(probe_root).as_posix()
     except ValueError as exc:
         raise PipelineError("LD-black report must be under this episode's profile probe root") from exc
     alignment_sha256 = sha256_file(alignment_path)
+    dvd_sha256 = sha256_file(dvd_path)
     dvd_stat_before = dvd_path.stat()
     import numpy as np
     alignment = np.load(alignment_path)
@@ -160,6 +163,9 @@ def build_candidate_report(ep, ld_report_path: Path, ld_report: dict, ld_thresho
         labels, ordered_dvd_silences, alignment,
         pair_tolerance_s=pair_tolerance_s,
         max_offset_spread_frames=max_offset_spread_frames)
+    if (sha256_file(alignment_path) != alignment_sha256 or
+            sha256_file(dvd_path) != dvd_sha256):
+        raise PipelineError("alignment or DVD changed while retime candidates were being prepared")
     manifest_path = episode_manifest_path(ep.code, ep.ld, series=ep.series)
     status = "REPORT_ONLY" if candidates else "NO_CANDIDATES"
     return {
@@ -177,6 +183,7 @@ def build_candidate_report(ep, ld_report_path: Path, ld_report: dict, ld_thresho
             "ld_black_report_sha256": sha256_file(ld_report_path),
             "alignment_sha256": alignment_sha256,
             "dvd_name": dvd_path.name,
+            "dvd_sha256": dvd_sha256,
             "dvd_size_bytes": dvd_stat_before.st_size,
             "dvd_mtime_ns": dvd_stat_before.st_mtime_ns,
             "dvd_duration_s": dvd_duration_s,
@@ -284,8 +291,7 @@ def main() -> int:
         else:
             print(json.dumps(report, indent=2, ensure_ascii=False))
         if not report["candidates"]:
-            print("NO CANDIDATES: no manifest changes made", file=sys.stderr)
-            return 1
+            print("NO CANDIDATES: retained the report for in-app review; no manifest changes made")
         return 0
     except (OSError, json.JSONDecodeError, ValueError, LockError, PipelineError) as exc:
         print(f"RETIME CANDIDATE ERROR: {exc}", file=sys.stderr)

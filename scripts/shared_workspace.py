@@ -56,6 +56,7 @@ run logs for diagnosis; do not clean them as part of a rerun.
 """
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fileutil import sha256_file as _shared_sha256_file  # noqa: E402
 from dependency_lock import LockError, redact_shared_text, shared_redactions  # noqa: E402
 
 
@@ -932,11 +933,7 @@ def validate_instance(root_value: str, profile_path: Path, profile: dict,
 
 
 def sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for block in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(block)
-    return h.hexdigest()
+    return _shared_sha256_file(path)
 
 
 def copy_exclusive(source: Path, destination: Path) -> None:

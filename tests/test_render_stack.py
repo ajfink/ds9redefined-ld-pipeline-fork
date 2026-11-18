@@ -7,7 +7,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from render_stack import expected_pair_count, validate_render_evidence  # noqa: E402
+from render_stack import (expected_pair_count, move_existing_master_to_backup,
+                          validate_render_evidence)  # noqa: E402
 
 
 class StackRenderEvidenceTests(unittest.TestCase):
@@ -49,6 +50,18 @@ class StackRenderEvidenceTests(unittest.TestCase):
         self.assertTrue(result["ok"], result["issues"])
         self.assertEqual(result["pair_count_check"], "pass: 6 all-pairs")
         self.assertTrue(result["review_flags"])
+
+    def test_explicit_restart_moves_old_master_to_timestamped_backup(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temporary:
+            master = Path(temporary) / "stack.mov"
+            master.write_bytes(b"prior reviewed master")
+
+            backup = move_existing_master_to_backup(master, "restart-test")
+
+            self.assertFalse(master.exists())
+            self.assertEqual(backup.read_bytes(), b"prior reviewed master")
 
 
 if __name__ == "__main__":

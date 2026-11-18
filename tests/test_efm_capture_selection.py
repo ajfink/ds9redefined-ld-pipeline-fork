@@ -57,10 +57,15 @@ class EfmCaptureSelectionTests(unittest.TestCase):
                 sidecar = downloads / json_name
                 sidecar.write_text(json.dumps({"frames": 2}), encoding="utf-8")
                 json_md5 = hashlib.md5(sidecar.read_bytes()).hexdigest()
+                efm_name = f"DS9-S01E13-{label}.efm"
+                efm = downloads / efm_name
+                efm.write_bytes((label + "-raw-efm").encode())
+                efm_md5 = hashlib.md5(efm.read_bytes()).hexdigest()
                 captures.append({"label": label, "tbc_file": tbc_name,
                                  "tbc_bytes": len(bytes_value), "tbc_md5": tbc_md5,
                                  "json_file": json_name, "json_bytes": sidecar.stat().st_size,
-                                 "json_md5": json_md5})
+                                 "json_md5": json_md5, "efm_file": efm_name,
+                                 "efm_bytes": efm.stat().st_size, "efm_md5": efm_md5})
                 wav = audio_root / f"S01E13-{label}-efm.wav"
                 wav.write_bytes((label + "-wav").encode())
                 efm_text = Path(str(wav) + ".txt")
@@ -75,6 +80,12 @@ class EfmCaptureSelectionTests(unittest.TestCase):
                     "source_tbc_json_bytes": sidecar.stat().st_size,
                     "source_tbc_json_md5": json_md5,
                     "source_tbc_json_fingerprint": {"method": "manifest-md5", "md5": json_md5},
+                    "source_efm_file": efm_name, "source_efm_bytes": efm.stat().st_size,
+                    "source_efm_manifest_md5": efm_md5,
+                    "source_efm_fingerprint": {"method": "manifest-md5", "md5": efm_md5},
+                    "decoded_efm": {"root": "downloads", "relative_path": efm.name,
+                                    "sha256": hashlib.sha256(efm.read_bytes()).hexdigest(),
+                                    "size_bytes": efm.stat().st_size},
                     "wav_relative_path": wav.name, "wav_size_bytes": wav.stat().st_size,
                     "wav_sha256": hashlib.sha256(wav.read_bytes()).hexdigest(),
                     "efm_report_relative_path": efm_text.name,
@@ -88,10 +99,23 @@ class EfmCaptureSelectionTests(unittest.TestCase):
                                       "report_sha256": report_sha,
                                       "wav_sha256": report_data["wav_sha256"]}]
                 reports[label] = (report_path, report_sha)
+            tbc_name = "DS9-S01E13-L2.tbc"
+            tbc = downloads / tbc_name
+            tbc.write_bytes(b"capture with no EFM")
+            metadata = downloads / (tbc_name + ".json")
+            metadata.write_text(json.dumps({"frames": 2}), encoding="utf-8")
+            captures.append({
+                "label": "L2", "tbc_file": tbc_name,
+                "tbc_bytes": tbc.stat().st_size,
+                "tbc_md5": hashlib.md5(tbc.read_bytes()).hexdigest(),
+                "json_file": metadata.name, "json_bytes": metadata.stat().st_size,
+                "json_md5": hashlib.md5(metadata.read_bytes()).hexdigest(),
+                "efm_file": "", "efm_bytes": None, "efm_md5": "",
+            })
             manifest_path = instance / "manifest.json"
             manifest_data = {
                 "episode": "S01E13", "series": "DS9", "identity": "DS9:S01E13",
-                "captures": captures, "alignment_map": "1+0, 2+7", "reference": "M1",
+                "captures": captures, "alignment_map": "1+0, 2+3, 3+7", "reference": "M1",
                 "audio": {"capture": "", "efm_provenance_required": True,
                           "efm_provenance": provenance},
                 "files": {"stack_project": {"name": str(project)}},
@@ -118,7 +142,7 @@ class EfmCaptureSelectionTests(unittest.TestCase):
                     patch.object(selection, "assert_writable_path"), \
                     patch.object(selection, "episode_manifest_path", return_value=manifest_path), \
                     patch("ldcommon.Episode", FakeEpisode), \
-                    patch.object(selection, "project_source_labels", return_value=["M1", "P3"]), \
+                     patch.object(selection, "project_source_labels", return_value=["M1", "L2", "P3"]), \
                     patch.dict("os.environ", {"LDP_INSTANCE_ROOT": str(instance)}, clear=False):
                 selection.record_selection(
                     "S01E13", "DS9", "P3", reports["P3"][0], reports["P3"][1],
@@ -127,7 +151,7 @@ class EfmCaptureSelectionTests(unittest.TestCase):
             updated = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(updated["audio"]["capture"], "P3")
             self.assertEqual(updated["audio"]["pad_frames"], 7)
-            self.assertEqual(updated["audio"]["capture_selection"]["orc_source_order"], ["M1", "P3"])
+            self.assertEqual(updated["audio"]["capture_selection"]["orc_source_order"], ["M1", "L2", "P3"])
             self.assertTrue(list(instance.glob("manifest.json.bak-efm-selection-*")))
             self.assertEqual(updated["files"]["ld_native"], {"root": "audio", "name": "S01E13-P3-efm.wav"})
 

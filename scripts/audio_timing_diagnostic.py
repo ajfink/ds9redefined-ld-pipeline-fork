@@ -27,8 +27,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ldcommon import (BUNDLE, Ld, PipelineError, assert_writable_path,
-                     episode_manifest_path, load_episode,
-                     redact_shared_text)  # noqa: E402
+                      episode_manifest_path, load_episode,
+                      redact_shared_text)  # noqa: E402
+from fileutil import hash_file  # noqa: E402
+from manifest_io import manifest_lock  # noqa: E402
 from pad_audit import reference_map_ranges, source_id_for_capture  # noqa: E402
 
 FPS = 30000.0 / 1001.0
@@ -46,11 +48,7 @@ def no_dvd_audio_plan_gib(source_bytes: int) -> float:
 
 
 def sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for block in iter(lambda: f.read(8 * 1024 * 1024), b""):
-            h.update(block)
-    return h.hexdigest()
+    return hash_file(path, chunk_size=8 * 1024 * 1024)
 
 
 def wav_info(path: Path) -> dict:
@@ -244,10 +242,10 @@ def make_synced_candidate(ld: Ld, ep, source: Path, destination: Path,
             "output_sha256": sha256_file(destination)}
 
 
-def promote_no_dvd_manifest(ep, report: dict, corrected: Path, synced: Path,
-                            report_path: Path, endpoint_residual: float,
-                            expected_manifest_sha256: str) -> Path:
-    """Atomically record the explicitly selected, no-DVD duration/PAD production route."""
+def _promote_no_dvd_manifest_locked(ep, report: dict, corrected: Path, synced: Path,
+                                    report_path: Path, endpoint_residual: float,
+                                    expected_manifest_sha256: str) -> Path:
+    """Commit the explicit no-DVD route while the caller owns the manifest lock."""
     if ep.data.get("dvd_reference_available") is not False:
         raise PipelineError("DVD-free promotion requires dvd_reference_available=false in the manifest")
     if ep.data.get("no_dvd_proceed_approved") is not True:
@@ -330,6 +328,20 @@ def promote_no_dvd_manifest(ep, report: dict, corrected: Path, synced: Path,
     return backup
 
 
+def promote_no_dvd_manifest(ep, report: dict, corrected: Path, synced: Path,
+                            report_path: Path, endpoint_residual: float,
+                            expected_manifest_sha256: str) -> Path:
+    """Lock, revalidate, back up, and atomically record the explicit no-DVD route."""
+    manifest_path = episode_manifest_path(
+        ep.code, ep.ld, series=getattr(ep, "series", "DS9"))
+    lock_path = manifest_path.with_name(manifest_path.name + ".dvd-free-audio.lock")
+    assert_writable_path(lock_path, ep.ld)
+    with manifest_lock(lock_path):
+        return _promote_no_dvd_manifest_locked(
+            ep, report, corrected, synced, report_path, endpoint_residual,
+            expected_manifest_sha256)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--episode", required=True)
@@ -343,6 +355,10 @@ def main() -> int:
     ap.add_argument("--promote-dvd-free", action="store_true",
                     help="build corrected+synced audio and record the approved no-DVD method in a manifest initialized with --no-dvd")
     ap.add_argument("--report-out", help="override report path (default: roots.probe/<episode>-dvd-free-audio-timing.json)")
+    ap.add_argument("--corrected-out", help="override the new corrected-audio path for --promote-dvd-free")
+    ap.add_argument("--synced-out", help="override the new synced-audio path for --promote-dvd-free")
+    ap.add_argument("--confirm-manifest-sha256",
+                    help="expected manifest SHA-256 captured when the promotion plan was built")
     args = ap.parse_args()
     if args.candidate_out and args.synced_candidate_out:
         raise PipelineError("choose either --candidate-out or --synced-candidate-out, not both")
@@ -353,11 +369,18 @@ def main() -> int:
                                   args.wav0_master_frame is not None):
         raise PipelineError("--promote-dvd-free selects the measured duration/PAD path and its manifest-derived inputs/outputs; "
                             "do not combine it with experimental overrides")
+    if (args.corrected_out or args.synced_out) and not args.promote_dvd_free:
+        raise PipelineError("--corrected-out and --synced-out are only valid with --promote-dvd-free")
+    if args.promote_dvd_free and not re.fullmatch(r"[0-9a-fA-F]{64}",
+                                                   str(args.confirm_manifest_sha256 or "")):
+        raise PipelineError("--promote-dvd-free requires --confirm-manifest-sha256 from the reviewed plan")
 
     ld = Ld()
     ep = load_episode(args.episode, ld)
     manifest_path = episode_manifest_path(ep.code, ld, series=getattr(ep, "series", "DS9"))
     manifest_sha256 = sha256_file(manifest_path) if args.promote_dvd_free else ""
+    if args.promote_dvd_free and manifest_sha256 != args.confirm_manifest_sha256.lower():
+        raise PipelineError("episode manifest changed after the DVD-free audio promotion plan was built")
     source = Path(args.audio) if args.audio else ep.path("ld_native")
     project = ep.path("stack_project")
     for path in (source, project):
@@ -450,10 +473,14 @@ def main() -> int:
             raise PipelineError("DVD-free audio space gate did not pass; no audio outputs were started")
         report["dvd_free_audio_space_plan_gib"] = planned_gib
         report["dvd_free_audio_space_gate"] = (gate.stdout or "").strip()
-        corrected_out = ep.optional_path("ld_corrected") or (
-            ld.root("audio") / f"{ep.code}-LD20-dvd-free-{chosen_rate_2x}-corrected.flac")
-        synced_out = ep.optional_path("ld_synced") or (
-            ld.root("audio") / f"{ep.code}-LD20-synced.flac")
+        corrected_out = (Path(args.corrected_out) if args.corrected_out else
+                         ep.optional_path("ld_corrected") or (
+                             ld.root("audio") / f"{ep.code}-LD20-dvd-free-{chosen_rate_2x}-corrected.flac"))
+        synced_out = (Path(args.synced_out) if args.synced_out else
+                      ep.optional_path("ld_synced") or (
+                          ld.root("audio") / f"{ep.code}-LD20-synced.flac"))
+        if corrected_out.resolve(strict=False) == synced_out.resolve(strict=False):
+            raise PipelineError("corrected and synced DVD-free outputs must be different files")
         report["experimental_candidate"] = make_candidate(
             ld, source, corrected_out, chosen_rate_2x, use_soxr)
         report["experimental_synced_candidate"] = make_synced_candidate(
@@ -491,9 +518,10 @@ def main() -> int:
 
     backup = None
     if args.promote_dvd_free:
-        backup = promote_no_dvd_manifest(ep, report, corrected_out, synced_out,
-                                         out, float(report["audio_minus_projected_content_frames"]),
-                                         manifest_sha256)
+        backup = promote_no_dvd_manifest(
+            ep, report, corrected_out, synced_out,
+            out, float(report["audio_minus_projected_content_frames"]),
+            manifest_sha256)
         report["promoted_to_manifest"] = True
         report_text = json.dumps(report, indent=2) + "\n"
         if instance_root and (ld.profile.get("shared") or {}).get("enabled") is True:

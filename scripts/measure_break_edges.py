@@ -19,18 +19,14 @@ import shutil
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+SCRIPTS = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPTS.parent))
+sys.path.insert(0, str(SCRIPTS))
 from ldcommon import Ld, PipelineError, assert_writable_path, load_episode  # noqa: E402
+from numeric import normalize_rows as normalize  # noqa: E402
 
 FPS = 30000.0 / 1001.0
 FEATURES = 48 * 36
-
-
-def normalize(a):
-    import numpy as np
-    x=a.astype(np.float32,copy=True);x-=x.mean(axis=1,keepdims=True)
-    n=np.linalg.norm(x,axis=1,keepdims=True);n[n==0]=1
-    return x/n
 
 
 def load_array(path: Path, label: str, code: str, role: str, source: Path):

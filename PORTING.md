@@ -4,7 +4,7 @@ The workflow is profile-driven. Resolve executables and storage roots from the l
 `machine.json`; do not assume a host name, drive letter, user directory, or mount point,
 and do not edit scripts to insert machine-specific paths.
 The authoritative version is stored in `WORKFLOW_VERSION`; core-update and device-log
-rules are in `WORKFLOW_VERSIONING.md`.
+rules are in `Versioning/WORKFLOW_VERSIONING.md`.
 
 ---
 

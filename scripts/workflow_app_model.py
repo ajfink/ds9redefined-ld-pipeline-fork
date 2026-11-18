@@ -185,6 +185,10 @@ def inspect_stack_console(profile_value: str | Path, manifest_value: str | Path,
         project = episode_data.path("stack_project").expanduser().resolve(strict=False)
         master = episode_data.path("stack_master").expanduser().resolve(strict=False)
         probe = Path(os.path.expandvars(os.path.expanduser(str(ld.probe())))).resolve(strict=False)
+        completed_reference = _find_verified_completed_stack_stage(
+            profile_path, instance_root_value, code, series, "stack-reference", project)
+        completed_render = _find_verified_completed_stack_stage(
+            profile_path, instance_root_value, code, series, "render-stack", master)
     except WorkflowAppError:
         raise
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, PipelineError,
@@ -199,30 +203,38 @@ def inspect_stack_console(profile_value: str | Path, manifest_value: str | Path,
 
     if not downloads.is_dir():
         raise WorkflowAppError(f"manifest download/capture folder is missing: {downloads}")
-    if master.exists():
-        raise WorkflowAppError(
-            f"stack master already exists; this console never overwrites or rerenders it: {master}")
     reference = str(manifest_data.get("reference") or "").strip()
     alignment_map = str(manifest_data.get("alignment_map") or "").strip()
-    if project.exists():
+    completed_stage = completed_render or completed_reference
+    stack_frames = 0
+    if master.exists():
+        if not completed_render:
+            raise WorkflowAppError(
+                f"a stack master exists but no fingerprint-verified completed render step owns it; "
+                f"inspect before continuing: {master}")
+        phase = "render-complete"
+        measurement_requirements = []
+    elif project.exists():
+        if not completed_reference:
+            raise WorkflowAppError(
+                f"an Orc project exists but no fingerprint-verified completed reference-selection step owns it; "
+                f"inspect before continuing: {project}")
         if not reference or reference not in labels:
             raise WorkflowAppError(
-                f"an Orc project exists but the manifest reference is incomplete; reconcile it before continuing: {project}")
+                f"completed reference-selection output exists, but manifest reference is incomplete: {project}")
+        measurement_requirements = []
         if not alignment_map:
-            raise WorkflowAppError(
-                "reference selection is complete. Review its report, then record the measured alignment_map in the manifest. "
-                "The app will not infer the map; reopen Stage Console afterward.")
+            measurement_requirements.append("record the measured alignment_map from the verified selection report")
         try:
             stack_frames = int((manifest_data.get("stack") or {}).get("frames"))
         except (TypeError, ValueError):
             stack_frames = 0
         if stack_frames <= 0:
-            raise WorkflowAppError(
-                "reference selection is complete. Measure the expected positive stack.frames from the refreshed Orc evidence, "
-                "record it in the manifest, then reopen Stage Console. The app will not infer it.")
-        phase = "render"
+            measurement_requirements.append("record the measured positive stack.frames from the refreshed Orc evidence")
+        phase = "reference-complete" if measurement_requirements else "render"
     else:
         phase = "reference"
+        measurement_requirements = []
     return {
         "episode": code,
         "series": series,
@@ -237,17 +249,258 @@ def inspect_stack_console(profile_value: str | Path, manifest_value: str | Path,
         "master": master,
         "probe": probe,
         "capture_count": len(labels),
+        "capture_labels": list(labels),
+        "reference": reference,
+        "alignment_map": alignment_map,
+        "stack_frames": stack_frames,
         "phase": phase,
+        "completed_stage": completed_stage,
+        "reference_report": next((Path(path) for path in
+                                   (completed_reference or {}).get("outputs", [])
+                                   if str(path).casefold().endswith(".md") and Path(path).is_file()), None),
+        "measurement_requirements": measurement_requirements,
         "fingerprint_policy": "balanced",
     }
 
 
+def parse_verified_orc_reference_report(report_text: str, capture_labels: list[str],
+                                        reference: str) -> dict[str, Any]:
+    """Read the final, saved Orc alignment-map and its exhaustive coverage counts."""
+    status = re.search(r"(?mi)^- Status:\s*\*\*([^*]+)\*\*\s*$", report_text)
+    if not status or status.group(1).strip().casefold() != "selected":
+        raise WorkflowAppError("the verified Orc report does not have SELECTED status")
+    maps = re.findall(r"(?mi)^Measured alignment map:\s*`([^`]+)`\s*$", report_text)
+    if not maps:
+        raise WorkflowAppError("the verified Orc report has no measured alignment map")
+    alignment_map = maps[-1].strip()
+    map_parts = [part.strip() for part in alignment_map.split(",")]
+    if len(map_parts) != len(capture_labels):
+        raise WorkflowAppError("the Orc alignment map does not cover each refreshed source")
+    for index, part in enumerate(map_parts, start=1):
+        match = re.fullmatch(r"(\d+)\s*\+\s*(\d+)", part)
+        if not match or int(match.group(1)) != index:
+            raise WorkflowAppError("the Orc alignment map is malformed or out of project order")
+
+    rows: list[list[str]] = []
+    for line in report_text.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip().replace("`", "") for cell in line.strip().strip("|").split("|")]
+        if len(cells) >= 9 and cells[0].isdigit():
+            rows.append(cells)
+    if not rows:
+        raise WorkflowAppError("the verified Orc report has no completed refresh-decision table")
+    if len(maps) != len(rows):
+        raise WorkflowAppError("the Orc report is missing a measured alignment map for a completed refresh pass")
+    final = rows[-1]
+    try:
+        order = [label.strip() for label in final[2].split(",")]
+        suggested = re.match(r"\s*([^\s(]+)\s*\(input\s+(\d+)\)", final[3])
+        raw_coverage = [value.strip() for value in final[6].split("/")]
+    except (IndexError, TypeError) as exc:
+        raise WorkflowAppError("the final Orc report row lacks source/frame evidence") from exc
+    if (len(order) != len(capture_labels) or set(order) != set(capture_labels) or
+            not order or order[0].casefold() != reference.casefold()):
+        raise WorkflowAppError("the final Orc report input order does not match the preserved project")
+    if not suggested or suggested.group(1).casefold() != reference.casefold() or int(suggested.group(2)) != 1:
+        raise WorkflowAppError("the final Orc refresh did not confirm its reference at input 1")
+    if len(raw_coverage) != 3 or any(not value.isdigit() for value in raw_coverage):
+        raise WorkflowAppError("the Orc report's 1/2/3+ source coverage counts are invalid")
+    coverage = [int(value) for value in raw_coverage]
+    frames = sum(coverage)
+    if frames <= 0:
+        raise WorkflowAppError("the Orc report's measured stack frame count is not positive")
+    if final[8].casefold().replace(" ", "") not in ("true/true", "yes/yes", "1/1"):
+        raise WorkflowAppError("the final Orc refresh row is not recorded as saved and completed")
+    return {"alignment_map": alignment_map, "stack_frames": frames,
+            "input_order": order, "coverage": coverage}
+
+
+def build_orc_reference_measurement_plan(context: dict[str, Any],
+                                          fingerprint_policy: str = "balanced") -> dict[str, Any]:
+    """Build a noninteractive plan to persist measurements from a verified Orc report."""
+    if fingerprint_policy not in ("balanced", "full"):
+        raise WorkflowAppError("fingerprint_policy must be 'balanced' or 'full'")
+    completed = context.get("completed_stage") or {}
+    report = context.get("reference_report")
+    if completed.get("stage") != "stack-reference" or not report:
+        raise WorkflowAppError("a verified completed Orc reference report is required")
+    report = Path(report).resolve(strict=True)
+    manifest = Path(context["manifest"]).resolve(strict=False)
+    downloads = Path(context["downloads"]).resolve(strict=False)
+    project = Path(context["project"]).resolve(strict=False)
+    outputs = {Path(value).resolve(strict=False) for value in completed.get("outputs", [])}
+    if report not in outputs or project not in outputs:
+        raise WorkflowAppError("the Orc report/project are not both verified outputs of the completed step")
+    try:
+        manifest_bytes = manifest.read_bytes()
+        manifest_data = json.loads(manifest_bytes.decode("utf-8-sig"))
+        report_text = report.read_text(encoding="utf-8-sig")
+        measurements = parse_verified_orc_reference_report(
+            report_text, list(context.get("capture_labels") or []),
+            str(manifest_data.get("reference") or ""))
+        current_map = str(manifest_data.get("alignment_map") or "").strip()
+        current_frames = (manifest_data.get("stack") or {}).get("frames")
+        if current_map and current_map != measurements["alignment_map"]:
+            raise WorkflowAppError("manifest alignment_map conflicts with the verified Orc report")
+        if current_frames not in (None, ""):
+            current_frames = int(current_frames)
+            if current_frames < 0 or (current_frames > 0 and
+                                      current_frames != measurements["stack_frames"]):
+                raise WorkflowAppError("manifest stack.frames conflicts with the verified Orc report")
+        manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    except WorkflowAppError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise WorkflowAppError(f"could not fingerprint the episode manifest: {exc}") from exc
+    token = uuid.uuid4().hex[:12]
+    identity = str(context["identity"])
+    plan = {
+        "schema": PLAN_SCHEMA,
+        "job_id": f"record-stack-reference-{identity.lower().replace(':', '-')}-{token}",
+        "episode": str(context["episode"]),
+        "series": str(context["series"]).upper(),
+        "profile": str(context["profile"]),
+        "instance_root": str(context["instance_root"]) if context.get("instance_root") else None,
+        "fingerprint_policy": fingerprint_policy,
+        "decisions": [{
+            "id": "verified-orc-report",
+            "value": "Use the final saved/completed Orc refresh row; persist its measured alignment map and total frame coverage.",
+        }],
+        "steps": [{
+            "id": "record-orc-reference-measurements",
+            "stage": "record-orc-reference-measurements",
+            "args": ["--report", str(report), "--expected-manifest-sha256", manifest_sha256],
+            "inputs": [str(downloads), str(project), str(report)],
+            "outputs": [str(manifest)],
+        }],
+    }
+    return plan
+
+
+def estimate_stack_render_gib(stack_frames: int) -> int:
+    """Estimate SD ProRes HQ plus scratch from the measured output frame count."""
+    if isinstance(stack_frames, bool) or not isinstance(stack_frames, int) or stack_frames <= 0:
+        raise WorkflowAppError("automatic stack-space budgeting requires measured positive stack frames")
+    gib = 1024 ** 3
+    # The per-frame envelope includes headroom over the measured 720x486 ProRes-HQ class;
+    # one extra GiB covers Orc temporary files. The normal free-space gate remains mandatory.
+    return math.ceil(stack_frames * 320 * 1024 / gib + 1.0)
+
+
+def _find_verified_completed_stack_stage(profile_path: Path, instance_root_value: str | Path | None,
+                                          episode: str, series: str, stage_name: str,
+                                          output_path: Path) -> dict[str, Any] | None:
+    """Find a durable successful stack step whose declared output still verifies exactly."""
+    if not instance_root_value:
+        return None
+    instance = Path(instance_root_value).expanduser().resolve(strict=False)
+    logs_dir = instance / "logs"
+    plan_dirs = [instance / "plans"]
+    device_root = profile_path.parent.parent
+    plan_dirs.append(device_root / "plans")
+    if not logs_dir.is_dir() or logs_dir.is_symlink():
+        return None
+    profile_sha256 = hashlib.sha256(profile_path.read_bytes()).hexdigest()
+    plans_by_digest: dict[str, tuple[Path, dict[str, Any]]] = {}
+    for directory in plan_dirs:
+        if not directory.is_dir() or directory.is_symlink():
+            continue
+        for path in directory.glob("*.json"):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                raw = path.read_bytes()
+                plan = json.loads(raw.decode("utf-8-sig"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if isinstance(plan, dict) and plan.get("schema") == PLAN_SCHEMA:
+                plans_by_digest[hashlib.sha256(raw).hexdigest()] = (path, plan)
+    if not plans_by_digest:
+        return None
+
+    from run_workflow import (_downstream_completed_output_ids, _verify_passed_step,
+                              validate_resume_state)
+    matches = []
+    for state_path in logs_dir.glob("workflow-*.json"):
+        if state_path.is_symlink() or not state_path.is_file():
+            continue
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if (not isinstance(state, dict) or
+                state.get("status") == "REJECTED" or
+                str(state.get("episode", "")).upper() != episode.upper() or
+                str(state.get("series", "DS9")).upper() != series.upper() or
+                state.get("identity", f"DS9:{episode}") != f"{series}:{episode}" or
+                state.get("profile_sha256") != profile_sha256):
+            continue
+        found = plans_by_digest.get(str(state.get("plan_sha256", "")))
+        if not found:
+            continue
+        plan_path, plan = found
+        validation_plan = dict(plan)
+        if not validation_plan.get("job_id"):
+            validation_plan["job_id"] = state.get("job_id")
+        try:
+            validate_resume_state(state, validation_plan,
+                                  str(state.get("plan_sha256", "")), profile_sha256)
+        except (OSError, RuntimeError, ValueError, KeyError, TypeError):
+            continue
+        for index, (saved, step) in enumerate(zip(state.get("steps", []), plan.get("steps", []))):
+            if (not isinstance(saved, dict) or not isinstance(step, dict) or
+                    step.get("kind", "stage") != "stage" or saved.get("status") != "PASS"):
+                continue
+            stage = str(step.get("stage", ""))
+            outputs = [Path(value).expanduser().resolve(strict=False)
+                       for value in step.get("outputs", []) if isinstance(value, str)]
+            inputs = [Path(value).expanduser().resolve(strict=False)
+                      for value in step.get("inputs", []) if isinstance(value, str)]
+            reference_evidence_handoff = (
+                stage_name == "stack-reference" and
+                stage == "record-orc-reference-measurements" and
+                output_path.resolve(strict=False) in inputs)
+            if ((stage != stage_name and not reference_evidence_handoff) or
+                    (stage == stage_name and output_path.resolve(strict=False) not in outputs)):
+                continue
+            try:
+                _verify_passed_step(
+                    saved, step, str(plan.get("fingerprint_policy", "balanced")),
+                    superseded_path_ids=_downstream_completed_output_ids(plan, state, index))
+            except (OSError, RuntimeError, ValueError, KeyError, TypeError):
+                continue
+            finished = str(saved.get("finished_utc", ""))
+            verified_artifacts = outputs
+            if reference_evidence_handoff:
+                verified_artifacts = list(dict.fromkeys([*outputs, *inputs]))
+            matches.append((finished, {
+                "stage": stage_name, "step_id": step["id"],
+                "job_id": str(state.get("job_id", state_path.stem)),
+                "state": state, "state_path": state_path.resolve(strict=False),
+                "plan": plan, "plan_path": plan_path.resolve(strict=False),
+                "outputs": [str(path) for path in verified_artifacts],
+                "finished_utc": finished,
+            }))
+    return max(matches, key=lambda item: item[0])[1] if matches else None
+
+
 def build_stack_console_plan(context: dict[str, Any], *, planned_gib: float | None = None,
-                             fingerprint_policy: str = "balanced") -> dict[str, Any]:
+                             fingerprint_policy: str = "balanced",
+                             restart_completed: bool = False) -> dict[str, Any]:
     """Build a bounded validate/reference-or-render plan with explicit review gates."""
     if fingerprint_policy not in ("balanced", "full"):
         raise WorkflowAppError("fingerprint_policy must be 'balanced' or 'full'")
     phase = str(context.get("phase", ""))
+    completed = context.get("completed_stage") or {}
+    if phase == "reference-complete":
+        if not restart_completed or completed.get("stage") != "stack-reference":
+            raise WorkflowAppError("continue from the verified reference output; do not build another reference plan")
+        phase = "reference"
+    elif phase == "render-complete":
+        if not restart_completed or completed.get("stage") != "render-stack":
+            raise WorkflowAppError("the verified stack render is already complete")
+        phase = "render"
     episode = str(context.get("episode", ""))
     series = str(context.get("series", "DS9")).upper()
     if series not in ("DS9", "VOY"):
@@ -260,38 +513,42 @@ def build_stack_console_plan(context: dict[str, Any], *, planned_gib: float | No
     token = uuid.uuid4().hex[:12]
     if phase == "reference":
         report = probe / f"{episode}-reference-selection-{token}.md"
-        if report.exists() or project.exists():
+        overwrite_project = bool(restart_completed and completed.get("stage") == "stack-reference")
+        if report.exists() or (project.exists() and not overwrite_project):
             raise WorkflowAppError("refusing to reuse an existing reference report or Orc project")
+        select_args = ["--report-out", str(report)]
+        if overwrite_project:
+            select_args.extend(("--reselect", "--overwrite-project"))
         steps = [
             {"id": "validate-stack-inputs", "stage": "validate-inputs",
              "inputs": [str(downloads), str(manifest)], "outputs": []},
             {"id": "select-stack-reference", "stage": "stack-reference",
-             "args": ["--report-out", str(report)], "inputs": [str(downloads)],
+             "args": select_args, "inputs": [str(downloads)],
              "outputs": [str(manifest), str(project), str(report)]},
-            {"id": "review-reference-selection", "kind": "review",
-             "for_stage": "stack-reference",
-             "prompt": ("Review the generated Orc reference-selection report and promoted project. "
-                        "Confirm stable source order/reference, all captures analyzed, and no unresolved warnings. "
-                        "After approval, record the measured alignment_map and stack.frames in the manifest from the evidence. "
-                        "The app will not infer these values; this approval does not authorize rendering."),
-             "inputs": [str(manifest), str(project), str(report)], "outputs": []},
         ]
         decision = "reference-selection phase only; no stack master render is included"
+        if overwrite_project:
+            decision += "; operator chose restart and overwrite of the existing Orc project, with backup"
     elif phase == "render":
         try:
-            estimate = float(planned_gib) if planned_gib is not None else 0.0
+            estimate = (float(planned_gib) if planned_gib is not None else
+                        float(estimate_stack_render_gib(int(context.get("stack_frames") or 0))))
         except (TypeError, ValueError) as exc:
-            raise WorkflowAppError("planned stack space must be a positive finite GiB estimate") from exc
+            raise WorkflowAppError("stack render needs a measured positive frame count for automatic space budgeting") from exc
         if not math.isfinite(estimate) or estimate <= 0:
-            raise WorkflowAppError("planned stack space must be a positive finite GiB estimate; do not guess")
+            raise WorkflowAppError("automatic stack-space estimate must be a positive finite GiB value")
         report = probe / f"{episode}-stack-render-{token}.json"
-        if report.exists() or master.exists():
+        overwrite_master = bool(restart_completed and completed.get("stage") == "render-stack")
+        if report.exists() or (master.exists() and not overwrite_master):
             raise WorkflowAppError("refusing to reuse an existing stack master or render report")
+        render_args = ["--planned-gib", f"{estimate:.6f}", "--report-out", str(report)]
+        if overwrite_master:
+            render_args.append("--overwrite-stack")
         steps = [
             {"id": "validate-stack-inputs", "stage": "validate-inputs",
              "inputs": [str(downloads), str(manifest)], "outputs": []},
             {"id": "render-stack", "stage": "render-stack",
-             "args": ["--planned-gib", f"{estimate:.6f}", "--report-out", str(report)],
+             "args": render_args,
              "inputs": [str(downloads), str(manifest), str(project)],
              "outputs": [str(master), str(report)]},
             {"id": "review-stack-evidence", "kind": "review",
@@ -301,7 +558,10 @@ def build_stack_console_plan(context: dict[str, Any], *, planned_gib: float | No
                         "measured references. Approval is required before cadence work."),
              "inputs": [str(master), str(report), str(project), str(manifest)], "outputs": []},
         ]
-        decision = f"render phase; operator supplied planned peak space={estimate:.6f} GiB"
+        decision = (f"render phase; automatic peak-space budget={estimate:.3f} GiB "
+                    f"from measured stack.frames={int(context.get('stack_frames') or 0)}")
+        if overwrite_master:
+            decision += "; operator chose restart and overwrite of the existing stack master, with backup"
     else:
         raise WorkflowAppError(f"unsupported stack-console phase: {phase!r}")
 
@@ -372,6 +632,7 @@ def inspect_retime_candidate_context(profile_value: str | Path, manifest_value: 
             "master_descriptors": episode_data.path("master_descriptors"),
             "alignment": episode_data.path("align_npy"),
             "dvd": episode_data.path("dvd"),
+            "stack_master": episode_data.path("stack_master"),
         }
         for role, path in raw_paths.items():
             if path.is_symlink():
@@ -383,20 +644,41 @@ def inspect_retime_candidate_context(profile_value: str | Path, manifest_value: 
             "master_descriptors": raw_paths["master_descriptors"].resolve(strict=False),
             "alignment": raw_paths["alignment"].resolve(strict=False),
             "dvd": raw_paths["dvd"].resolve(strict=False),
+            "stack_master": raw_paths["stack_master"].resolve(strict=False),
             "probe": raw_probe.resolve(strict=False),
             "manifest": manifest_path,
         }
-        for role in ("master_descriptors", "alignment", "dvd"):
+        for role in ("master_descriptors", "alignment", "dvd", "stack_master"):
             path = paths[role]
             if path.is_symlink() or not path.is_file():
                 raise WorkflowAppError(f"retime candidate input {role} is missing or unsafe: {path}")
         if paths["probe"].is_symlink() or not paths["probe"].is_dir():
             raise WorkflowAppError(f"profile probe root is missing or unsafe: {paths['probe']}")
+        alignment_review = (episode_data.data.get("video") or {}).get("dvd_alignment_review") or {}
+        raw_assets = str(alignment_review.get("review_assets_path") or "")
+        review_assets = None
+        if alignment_review.get("status") == "APPROVED" and not raw_assets:
+            raise WorkflowAppError("approved alignment is missing its paired visual review assets")
+        if raw_assets:
+            asset_path = Path(raw_assets).expanduser()
+            if not asset_path.is_absolute():
+                parts = asset_path.parts
+                if not parts or parts[0].casefold() != "probe" or ".." in parts:
+                    raise WorkflowAppError("approved alignment review assets have an unsafe path")
+                asset_path = paths["probe"].joinpath(*parts[1:])
+            asset_path = asset_path.resolve(strict=False)
+            if (asset_path.is_symlink() or not asset_path.is_file() or
+                    hashlib.sha256(asset_path.read_bytes()).hexdigest() !=
+                    alignment_review.get("review_assets_sha256")):
+                raise WorkflowAppError("approved alignment review assets changed; rebuild/review the alignment")
+            review_assets = asset_path
         return {
             "series": series,
             "episode": code,
             "identity": f"{series}:{code}",
             "title": episode_data.title,
+            "manifest_data": episode_data.data,
+            "alignment_review_assets": review_assets,
             "profile": profile_path,
             "manifest": manifest_path,
             "instance_root": (Path(instance_root_value).expanduser().resolve(strict=False)
@@ -467,7 +749,8 @@ def build_retime_candidate_plan(context: dict[str, Any], parameters: dict[str, A
     token = uuid.uuid4().hex[:12]
     ld_report = probe / f"{episode}-ld-black-intervals-{token}.json"
     candidate_report = probe / f"{episode}-retime-break-candidates-{token}.json"
-    if ld_report.exists() or candidate_report.exists():
+    review_assets = probe / f"{episode}-retime-review-audio-{token}"
+    if ld_report.exists() or candidate_report.exists() or review_assets.exists():
         raise WorkflowAppError("refusing to reuse an existing V15 retime candidate report path")
     measure_args = ["--thresholds", *[f"{value:g}" for value in thresholds],
                     "--min-duration", f"{min_run:g}", "--report-out", str(ld_report)]
@@ -484,21 +767,56 @@ def build_retime_candidate_plan(context: dict[str, Any], parameters: dict[str, A
     descriptor = Path(context["master_descriptors"]).resolve(strict=True)
     alignment = Path(context["alignment"]).resolve(strict=True)
     dvd = Path(context["dvd"]).resolve(strict=True)
+    master_source = Path(context["stack_master"]).resolve(strict=True)
+    alignment_review_assets = context.get("alignment_review_assets")
+    data = context.get("manifest_data")
+    if not isinstance(data, dict):
+        try:
+            data = json.loads(manifest.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise WorkflowAppError(f"cannot verify approved alignment marker: {exc}") from exc
+    review = (data.get("video") or {}).get("dvd_alignment_review") or {}
+    if not alignment_review_assets:
+        raise WorkflowAppError("retime candidate preparation needs the approved alignment's paired visual assets")
+    alignment_review_assets = Path(alignment_review_assets).resolve(strict=True)
+    if (hashlib.sha256(alignment_review_assets.read_bytes()).hexdigest() !=
+            review.get("review_assets_sha256")):
+        raise WorkflowAppError("paired visual review assets changed after alignment approval")
+    raw_review_path = Path(str(review.get("path") or "")).expanduser()
+    if not raw_review_path.is_absolute():
+        if (not raw_review_path.parts or raw_review_path.parts[0].casefold() != "probe" or
+                ".." in raw_review_path.parts):
+            raise WorkflowAppError("retime candidate preparation requires a safe visual alignment approval")
+        raw_review_path = probe / Path(*raw_review_path.parts[1:])
+    if (review.get("status") != "APPROVED" or
+            raw_review_path.resolve(strict=False) != alignment or
+            hashlib.sha256(alignment.read_bytes()).hexdigest() != review.get("sha256") or
+            hashlib.sha256(master_source.read_bytes()).hexdigest() != review.get("master_source_sha256") or
+            hashlib.sha256(dvd.read_bytes()).hexdigest() != review.get("dvd_source_sha256")):
+        raise WorkflowAppError(
+            "retime candidate preparation requires a current, hash-bound visual DVD/LD alignment approval")
     steps = [
         {"id": "measure-ld-black-sensitivity", "stage": "measure-ld-black",
          "args": measure_args, "inputs": [str(manifest), str(descriptor)],
          "outputs": [str(ld_report)]},
         {"id": "prepare-retime-break-candidates", "stage": "prepare-retime-breaks",
-         "args": prepare_args,
-         "inputs": [str(manifest), str(ld_report), str(alignment), str(dvd)],
-         "outputs": [str(candidate_report)]},
+          "args": prepare_args,
+          "inputs": [str(manifest), str(ld_report), str(alignment), str(dvd)],
+          "outputs": [str(candidate_report)]},
+        {"id": "build-retime-audio-review-samples", "stage": "retime-review-assets",
+         "args": ["--series", series, "--candidate-report", str(candidate_report),
+                  "--out-dir", str(review_assets)],
+         "inputs": [str(manifest), str(candidate_report), str(alignment), str(dvd)],
+         "outputs": [str(review_assets)]},
         {"id": "review-retime-break-candidates", "kind": "review",
-         "for_stage": "prepare-retime-breaks",
-         "prompt": (f"Review every candidate and pairing for {identity}. This is report-only: "
-                    "confirm threshold sensitivity, alignment coverage, silence detection, "
-                    "ambiguity/collisions, and unmatched candidates. This approval records no "
-                    "manifest changes and chooses no offsets."),
-         "inputs": [str(manifest), str(ld_report), str(candidate_report)], "outputs": []},
+          "for_stage": "retime-review-assets",
+          "prompt": (f"Review every candidate and pairing for {identity}. This is report-only: "
+                     "confirm threshold sensitivity, alignment coverage, silence detection, "
+                     "ambiguity/collisions, and unmatched candidates. This approval records no "
+                     "manifest changes and chooses no offsets."),
+          "inputs": [str(manifest), str(ld_report), str(candidate_report), str(review_assets),
+                     *([str(alignment_review_assets)] if alignment_review_assets else [])],
+          "outputs": []},
     ]
     decisions = [
         {"id": "retime-candidate-preparation", "value": "report-only; no manifest mutation"},
@@ -528,6 +846,7 @@ def build_retime_candidate_plan(context: dict[str, Any], parameters: dict[str, A
 def build_retime_candidate_record_plan(context: dict[str, Any], report_path: str | Path,
                                        selected_labels: list[str], merged_labels: list[str],
                                        review_note: str, *,
+                                       expected_report_sha256: str | None = None,
                                        fingerprint_policy: str = "balanced") -> dict[str, Any]:
     """Build a separate, review-gated plan to apply only explicitly reviewed candidates."""
     from retime_break_candidates import CANDIDATE_SCHEMA, candidate_break_entries, sha256_file
@@ -558,6 +877,8 @@ def build_retime_candidate_record_plan(context: dict[str, Any], report_path: str
             report.get("status") != "REPORT_ONLY" or report.get("identity") != identity):
         raise WorkflowAppError(f"candidate report does not identify a V15 report for {identity}")
     digest = sha256_file(path)
+    if expected_report_sha256 is not None and digest != expected_report_sha256:
+        raise WorkflowAppError("candidate report changed after visual/audio review")
     try:
         candidate_break_entries(report, selected_labels, merged_labels,
                                 reviewed_by=getpass.getuser(), review_note=review_note,
@@ -636,17 +957,24 @@ def build_retime_candidate_record_plan(context: dict[str, Any], report_path: str
 def default_profile_path(*, system: str | None = None,
                          env: dict[str, str] | None = None,
                          home: Path | None = None) -> Path:
-    """Portable per-user profile location shared by the GUI and CLI workflows."""
+    """Compute the per-user profile path, preserving simulated foreign-OS spelling."""
     env = os.environ if env is None else env
     home = Path.home() if home is None else Path(home)
     system = (system or platform.system()).casefold()
+    if system in ("win32",):
+        system = "windows"
+    elif system in ("darwin",):
+        system = "macos"
     if system in ("windows", "win32"):
         root = Path(env.get("LOCALAPPDATA") or (home / "AppData" / "Local"))
     elif system in ("darwin", "macos"):
         root = Path(env.get("HOME") or home) / "Library" / "Application Support"
     else:
         root = Path(env.get("XDG_CONFIG_HOME") or (Path(env.get("HOME") or home) / ".config"))
-    return (root / "ld-pipeline" / "profiles" / "machine.json").resolve(strict=False)
+    target = root / "ld-pipeline" / "profiles" / "machine.json"
+    host = platform.system().casefold()
+    host = "windows" if host == "windows" else "macos" if host == "darwin" else "linux"
+    return target.resolve(strict=False) if system == host else target
 
 
 def choose_existing_profile(default_path: Path, template: dict[str, Any], *,
@@ -1033,27 +1361,31 @@ def build_intake_plan(template: dict[str, Any], values: dict[str, str]) -> dict[
         profile_data = json.loads(profile_path.read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise WorkflowAppError(f"cannot read selected machine profile: {exc}") from exc
-    # A shared profile constrains Archive download destinations. A local source
-    # is an already-existing, explicitly selected capture folder and must not be
-    # forced to equal the configured future-download template.
-    if not local_info and (profile_data.get("shared") or {}).get("enabled") is True:
-        roots = profile_data.get("roots") or {}
-        download_root = roots.get("downloads_root")
-        download_template = roots.get("downloads_template") or "{series} {episode} LaserDisc"
-        if series != "DS9" and "{series}" not in download_template:
-            download_template = "{series} {episode} LaserDisc"
-        if not download_root:
-            raise WorkflowAppError("shared profile requires roots.downloads_root in the machine profile")
+    # Archive downloads are the one user-selected input allowed outside this
+    # device's normal roots. The absolute location is stored in the device-local
+    # episode manifest; all manifests, plans, logs, work, and outputs stay in the
+    # configured device/episode workspace.
+    shared = profile_data.get("shared") or {}
+    if shared.get("enabled") is True and not local_info and shared.get("release_root"):
+        release_root = Path(os.path.expandvars(
+            os.path.expanduser(str(shared["release_root"])))).resolve(strict=False)
         try:
-            expected_downloads = (Path(os.path.expandvars(os.path.expanduser(str(download_root)))) /
-                                  download_template.format(episode=episode, series=series)).resolve()
-        except (ValueError, KeyError) as exc:
-            raise WorkflowAppError(f"invalid profile download folder template: {exc}") from exc
-        if downloads.resolve() != expected_downloads:
-            mode = "local source" if local_info else "download destination"
-            raise WorkflowAppError(
-                f"shared profile {mode} must match its configured download folder: {expected_downloads}. "
-                "Change roots.downloads_root/downloads_template in the machine profile to move it.")
+            downloads.resolve(strict=False).relative_to(release_root)
+        except ValueError:
+            pass
+        else:
+            configured = (profile_data.get("roots") or {}).get("downloads_root")
+            if not configured:
+                raise WorkflowAppError(
+                    "a download selected inside the shared release must be under this device's roots.downloads_root")
+            configured_root = Path(os.path.expandvars(
+                os.path.expanduser(str(configured)))).resolve(strict=False)
+            try:
+                downloads.resolve(strict=False).relative_to(configured_root)
+            except ValueError as exc:
+                raise WorkflowAppError(
+                    "downloads inside the shared release must remain under this device's configured downloads root; "
+                    "choose an external folder for other locations") from exc
     manifest = _absolute(values["manifest_path"], "manifest_path")
     if manifest.name.casefold() != f"{episode}.json".casefold():
         raise WorkflowAppError(f"manifest_path filename must be {episode}.json")

@@ -10,9 +10,10 @@ mtime, and first/last-block SHA-256 by default. Plans may request full hashing.
     python scripts/run_workflow.py --plan <job.json> --execute
     python scripts/run_workflow.py --plan <job.json> --execute --resume
 
-Only the Archive download stage may be retried automatically after interruption,
-because the bundled downloader is explicitly resumable. Other interrupted/failed
-stages stop for inspection; their helpers retain their own overwrite protections.
+The Archive download stage may resume partial transfers under its declared policy.
+Other interrupted/failed stages can be retried only when saved input fingerprints and
+pre-attempt output fingerprints still match; completed earlier stages remain verified
+and skipped. Changed or unrecorded outputs require inspection and a new plan.
 """
 from __future__ import annotations
 
@@ -28,7 +29,6 @@ import shlex
 import signal
 import subprocess
 import sys
-import threading
 import time
 import unicodedata
 import uuid
@@ -47,6 +47,8 @@ from dependency_lock import (LockError, redact_shared_text, shared_redactions)  
 from ldcommon import device_workspace_enabled  # noqa: E402
 from run_stage import STAGES, load_profile  # noqa: E402
 from shared_workspace import resolve_instance_workspace  # noqa: E402
+from fileutil import hash_file  # noqa: E402
+from streamutil import configure_console, start_line_reader  # noqa: E402
 
 PLAN_SCHEMA = "ld-pipeline-workflow-plan-v1"
 STATE_SCHEMA = "ld-pipeline-workflow-state-v2"
@@ -55,6 +57,20 @@ STEP_ID_RE = JOB_ID_RE
 CHUNK_BYTES = 4 * 1024 * 1024
 FULL_HASH_LIMIT = 64 * 1024 * 1024
 INPUT_REF_RE = re.compile(r"\$\{input:([A-Za-z0-9_]+)\}")
+AUTO_SKIPPED_REPORT_REVIEWS = {
+    "review-reference-selection": (
+        "User-requested detailed-report review skip. The selector records the reference only; "
+        "alignment_map and stack.frames remain unmeasured and must be recorded before rendering."),
+    "review-retime-break-candidates": (
+        "User-requested detailed-report review skip. The exact report is opened automatically "
+        "in the episode-specific candidate-classification UI; no selections or offsets are inferred."),
+    "approve-retime-break-recording": (
+        "Candidate selections and rationale were explicitly recorded in the dedicated review UI; "
+        "the recorder still validates source digests, creates a backup, and writes only those selections."),
+    "review-recorded-efm-capture": (
+        "The verified capture was selected by the explicit quality policy or manual fallback; "
+        "the recorder still verifies provenance and updates the manifest atomically."),
+}
 
 
 class WorkflowError(RuntimeError):
@@ -66,13 +82,7 @@ def utc_now() -> str:
 
 
 def sha256_file(path: Path, heartbeat=None) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(CHUNK_BYTES), b""):
-            digest.update(block)
-            if heartbeat:
-                heartbeat()
-    return digest.hexdigest()
+    return hash_file(path, chunk_size=CHUNK_BYTES, on_chunk=heartbeat)
 
 
 def file_fingerprints(values: list[str], *, must_exist: bool = True,
@@ -516,7 +526,6 @@ def validate_resume_state(state: dict, plan: dict, plan_digest: str,
         "episode": plan["episode"],
         "series": plan.get("series", "DS9"),
         "identity": plan.get("identity", f"DS9:{plan['episode']}"),
-        "workflow_version": (ROOT / "WORKFLOW_VERSION").read_text(encoding="ascii").strip(),
         "plan_sha256": plan_digest,
         "profile_sha256": profile_digest,
         "fingerprint_policy": plan.get("fingerprint_policy", "balanced"),
@@ -543,17 +552,125 @@ def _fingerprint_payload(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "path_id": _path_id(row["path"])} for row in rows]
 
 
+def _downstream_completed_output_ids(plan: dict, state: dict, step_index: int) -> set[str]:
+    """Paths whose current contents are owned by a later, already-passed plan step."""
+    superseded: set[str] = set()
+    for index in range(step_index + 1, len(plan["steps"])):
+        saved = state["steps"][index]
+        step = plan["steps"][index]
+        if saved.get("status") != "PASS":
+            continue
+        superseded.update(_path_id(path) for path in step.get("outputs", []))
+    return superseded
+
+
+def _find_reusable_review_approval(logs: Path, state_path: Path, state: dict,
+                                  step: dict, input_fingerprints: list[dict[str, Any]],
+                                  prompt_sha256: str, plan_directory: Path
+                                  ) -> tuple[str, dict[str, Any]] | None:
+    """Reuse a human approval only for the same gate, prompt, identity, and evidence."""
+    expected_inputs = _fingerprint_payload(input_fingerprints)
+    current_state_path = state_path.resolve(strict=False)
+    plan_directories = [plan_directory]
+    for ancestor in plan_directory.parents:
+        if ancestor.name == "episodes":
+            plan_directories.append(ancestor.parent / "plans")
+            break
+    plan_directories = list(dict.fromkeys(plan_directories))
+    for candidate_path in logs.glob("workflow-*.json"):
+        if candidate_path.is_symlink() or candidate_path.resolve(strict=False) == current_state_path:
+            continue
+        try:
+            candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if (not isinstance(candidate, dict) or candidate.get("schema") != STATE_SCHEMA or
+                candidate.get("episode") != state.get("episode") or
+                str(candidate.get("series", "DS9")).upper() != str(state.get("series", "DS9")).upper() or
+                candidate.get("identity", f"DS9:{candidate.get('episode', '')}") !=
+                state.get("identity", f"DS9:{state.get('episode', '')}") or
+                candidate.get("profile_sha256") != state.get("profile_sha256")):
+            continue
+        prompt_map = candidate.get("plan_review_prompt_sha256")
+        saved_plan_prompt_sha256 = (prompt_map.get(step.get("id"))
+                                    if isinstance(prompt_map, dict) else None)
+        if not saved_plan_prompt_sha256:
+            plan_digest = candidate.get("plan_sha256")
+            for source_plan_dir in plan_directories:
+                for saved_plan_path in source_plan_dir.glob("*.json"):
+                    if saved_plan_path.is_symlink():
+                        continue
+                    try:
+                        saved_plan_raw = saved_plan_path.read_bytes()
+                        if hashlib.sha256(saved_plan_raw).hexdigest() != plan_digest:
+                            continue
+                        saved_plan = json.loads(saved_plan_raw.decode("utf-8-sig"))
+                    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                        continue
+                    if not isinstance(saved_plan, dict):
+                        continue
+                    saved_review = next((row for row in saved_plan.get("steps", [])
+                                         if isinstance(row, dict) and row.get("kind") == "review" and
+                                         row.get("id") == step.get("id")), None)
+                    if saved_review and isinstance(saved_review.get("prompt"), str):
+                        saved_plan_prompt_sha256 = hashlib.sha256(
+                            saved_review["prompt"].encode("utf-8")).hexdigest()
+                    break
+                if saved_plan_prompt_sha256:
+                    break
+        for saved_review in candidate.get("steps", []):
+            if (not isinstance(saved_review, dict) or saved_review.get("kind") != "review" or
+                    saved_review.get("id") != step.get("id") or
+                    saved_review.get("status") != "PASS" or
+                    (saved_review.get("review_prompt_sha256") or saved_plan_prompt_sha256) != prompt_sha256 or
+                    saved_review.get("input_fingerprints") != expected_inputs):
+                continue
+            approval = saved_review.get("approval")
+            if not isinstance(approval, dict) or not approval.get("approved_by"):
+                continue
+            if saved_review.get("auto_review_skip"):
+                continue
+            return str(candidate.get("job_id", candidate_path.stem)), approval
+    return None
+
+
 def _verify_passed_step(saved: dict, step: dict, fingerprint_policy: str,
-                        heartbeat=None) -> None:
+                        heartbeat=None, superseded_path_ids: set[str] | None = None) -> None:
     inputs, outputs = _step_file_lists(step)
     current_inputs = file_fingerprints(inputs, policy=fingerprint_policy, heartbeat=heartbeat)
     current_outputs = file_fingerprints(outputs, policy=fingerprint_policy, heartbeat=heartbeat)
     expected_inputs = saved.get("input_fingerprints") or []
-    if _fingerprint_payload(current_inputs) != expected_inputs:
+    superseded = superseded_path_ids or set()
+    current_input_payload = [row for row in _fingerprint_payload(current_inputs)
+                             if row["path_id"] not in superseded]
+    expected_input_payload = [row for row in expected_inputs if row.get("path_id") not in superseded]
+    if current_input_payload != expected_input_payload:
         raise WorkflowError(f"completed step {step['id']} input changed; refusing to skip or rerun it")
     expected_outputs = saved.get("output_fingerprints") or []
-    if _fingerprint_payload(current_outputs) != expected_outputs:
+    current_output_payload = [row for row in _fingerprint_payload(current_outputs)
+                              if row["path_id"] not in superseded]
+    expected_output_payload = [row for row in expected_outputs if row.get("path_id") not in superseded]
+    if current_output_payload != expected_output_payload:
         raise WorkflowError(f"completed step {step['id']} output changed or is missing; inspect it before continuing")
+
+
+def _verify_retryable_failed_step(saved: dict, step: dict, fingerprint_policy: str,
+                                  heartbeat=None) -> None:
+    """Retry only when the failed step's inputs and pre-attempt outputs are unchanged."""
+    if "output_fingerprints_before" not in saved:
+        raise WorkflowError(
+            f"failed step {step['id']} has no pre-attempt output evidence; inspect it and create a new plan")
+    current_inputs = file_fingerprints(step.get("inputs", []), policy=fingerprint_policy,
+                                       heartbeat=heartbeat)
+    if _fingerprint_payload(current_inputs) != (saved.get("input_fingerprints") or []):
+        raise WorkflowError(f"failed step {step['id']} inputs changed; inspect it and create a new plan")
+    current_outputs = file_fingerprints(step.get("outputs", []), must_exist=False,
+                                        policy=fingerprint_policy, heartbeat=heartbeat)
+    current_payload = _fingerprint_payload(current_outputs)
+    before_payload = _fingerprint_payload(saved.get("output_fingerprints_before") or [])
+    if current_payload != before_payload:
+        raise WorkflowError(
+            f"failed step {step['id']} outputs changed during the failed attempt; inspect and reconcile before retrying")
 
 
 def _command(plan: dict, step: dict, profile_path: Path,
@@ -587,17 +704,6 @@ STANDARD_OUTPUT_RE = re.compile(
 def standard_output_line(line: str) -> bool:
     """Keep notable diagnostics and gate/status lines in the concise console view."""
     return bool(STANDARD_OUTPUT_RE.search(line))
-
-
-def configure_console() -> None:
-    """Keep diagnostic streaming safe on Windows code pages without Unicode glyphs."""
-    for stream in (sys.stdout, sys.stderr):
-        reconfigure = getattr(stream, "reconfigure", None)
-        if callable(reconfigure):
-            try:
-                reconfigure(errors="replace")
-            except (OSError, ValueError):
-                pass
 
 
 class WorkflowProgress:
@@ -743,17 +849,7 @@ def _run_child(command: list[str], env: dict[str, str], log,
     except OSError as exc:
         raise WorkflowError(f"could not launch allowlisted stage runner: {exc}") from exc
     assert proc.stdout is not None
-    lines: queue.Queue[str | None] = queue.Queue()
-
-    def reader() -> None:
-        try:
-            for line in proc.stdout:
-                lines.put(line)
-        finally:
-            lines.put(None)
-
-    thread = threading.Thread(target=reader, name="workflow-stage-output", daemon=True)
-    thread.start()
+    lines, thread = start_line_reader(proc.stdout, name="workflow-stage-output")
     line_count = 0
     last_line: str | None = None
     recent_lines: list[str] = []
@@ -849,7 +945,9 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool,
         print(f"fingerprint policy: {plan.get('fingerprint_policy', 'balanced')}")
         for index, step in enumerate(plan["steps"], 1):
             if step.get("kind") == "review":
-                print(f"{index}. {step['id']} [REVIEW GATE] {step['prompt']}")
+                marker = ("AUTO-SKIPPED REPORT REVIEW" if step["id"] in AUTO_SKIPPED_REPORT_REVIEWS
+                          else "REVIEW GATE")
+                print(f"{index}. {step['id']} [{marker}] {step['prompt']}")
                 print(f"   evidence inputs={len(step.get('inputs', []))}")
                 continue
             command = _command(plan, step, profile_path, instance_root)
@@ -901,6 +999,23 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool,
                 raise WorkflowError("this workflow job was rejected at a human review gate and is terminal; create a new plan after reconciliation")
             if not log_path.is_file():
                 raise WorkflowError(f"workflow log is missing; refusing to resume without evidence: {log_path}")
+            current_version = (ROOT / "WORKFLOW_VERSION").read_text(encoding="ascii").strip()
+            previous_version = str(state.get("workflow_version", "unknown"))
+            if previous_version != current_version:
+                history = state.get("workflow_version_history")
+                if not isinstance(history, list):
+                    history = []
+                handoff = {"from": previous_version, "to": current_version,
+                           "resumed_at_utc": utc_now()}
+                history.append(handoff)
+                state["workflow_version_history"] = history
+                state["workflow_version"] = current_version
+                state["updated_utc"] = handoff["resumed_at_utc"]
+                save_state(state_path, state, redactions)
+                with log_path.open("a", encoding="utf-8", newline="\n") as log:
+                    log.write(f"\n[{handoff['resumed_at_utc']}] workflow_version_handoff="
+                              f"{previous_version}->{current_version}; resume allowed after identity, "
+                              "step-order, and evidence checks\n")
         else:
             state = _fresh_state(plan, digest, profile_digest)
             # Exclusive creation prevents accidentally replacing another job's evidence.
@@ -944,7 +1059,9 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool,
                     if step.get("kind") == "review":
                         if saved["status"] == "PASS":
                             _verify_passed_step(saved, step, fingerprint_policy,
-                                                heartbeat=progress.heartbeat)
+                                                heartbeat=progress.heartbeat,
+                                                superseded_path_ids=_downstream_completed_output_ids(
+                                                    plan, state, index))
                             progress.complete_step(index + 1, f"review {step['id']}", status="verified")
                             print(f"SKIP verified approved review: {step['id']}")
                             continue
@@ -962,13 +1079,19 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool,
                             raise WorkflowError(f"review step {step['id']} is not currently waiting for approval")
                         current_inputs = file_fingerprints(
                             inputs, policy=fingerprint_policy, heartbeat=progress.heartbeat)
+                        prompt_sha256 = hashlib.sha256(step["prompt"].encode("utf-8")).hexdigest()
                         if saved["status"] == "PENDING":
                             saved["input_fingerprints"] = current_inputs
                             saved["prompt"] = step["prompt"]
+                            saved["review_prompt_sha256"] = prompt_sha256
                             saved["status"] = "WAITING_APPROVAL"
                             saved["started_utc"] = utc_now()
                         elif _fingerprint_payload(current_inputs) != (saved.get("input_fingerprints") or []):
                             raise WorkflowError(f"review evidence changed for {step['id']}; rerun the preceding stage and review again")
+                        elif saved.get("review_prompt_sha256") not in (None, prompt_sha256):
+                            raise WorkflowError(f"review prompt changed for {step['id']}; create a new plan")
+                        else:
+                            saved["review_prompt_sha256"] = prompt_sha256
                         if step["id"] in deny_steps:
                             saved["status"] = "REJECTED"
                             saved["finished_utc"] = utc_now()
@@ -985,6 +1108,53 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool,
                             progress.finish("REJECTED")
                             print(f"REVIEW DENIED [{step['id']}] by {saved['denial']['denied_by']}")
                             return 4
+                        skip_reason = AUTO_SKIPPED_REPORT_REVIEWS.get(step["id"])
+                        if skip_reason:
+                            saved["status"] = "PASS"
+                            saved["finished_utc"] = utc_now()
+                            saved["output_fingerprints"] = []
+                            saved["auto_review_skip"] = {
+                                "reason": skip_reason,
+                                "at_utc": saved["finished_utc"],
+                                "reviewed_by_human": False,
+                            }
+                            saved.pop("prompt", None)
+                            state["status"] = "RUNNING"
+                            state["active_step"] = None
+                            state["active_index"] = None
+                            save_state(state_path, state, redactions)
+                            with log_path.open("a", encoding="utf-8", newline="\n") as skip_log:
+                                skip_log.write("\nREPORT REVIEW AUTO-SKIPPED " + json.dumps({
+                                    "step": step["id"], **saved["auto_review_skip"]}, ensure_ascii=False) + "\n")
+                            progress.complete_step(index + 1, f"review {step['id']}", status="auto-skipped")
+                            print(f"REPORT REVIEW AUTO-SKIPPED [{step['id']}] per configured user preference")
+                            continue
+                        reusable = _find_reusable_review_approval(
+                            logs, state_path, state, step, current_inputs, prompt_sha256,
+                            plan_path.parent)
+                        if reusable is not None:
+                            source_job_id, source_approval = reusable
+                            saved["status"] = "PASS"
+                            saved["finished_utc"] = utc_now()
+                            saved["output_fingerprints"] = []
+                            saved["approval"] = {
+                                "approved_by": source_approval["approved_by"],
+                                "approved_at_utc": source_approval.get("approved_at_utc"),
+                                "reused_from_job_id": source_job_id,
+                                "reused_at_utc": saved["finished_utc"],
+                                "reused_by": getpass.getuser(),
+                            }
+                            saved.pop("prompt", None)
+                            state["status"] = "RUNNING"
+                            state["active_step"] = None
+                            state["active_index"] = None
+                            save_state(state_path, state, redactions)
+                            with log_path.open("a", encoding="utf-8", newline="\n") as reuse_log:
+                                reuse_log.write("\nREVIEW APPROVAL REUSED " + json.dumps({
+                                    "step": step["id"], **saved["approval"]}, ensure_ascii=False) + "\n")
+                            progress.complete_step(index + 1, f"review {step['id']}", status="approval reused")
+                            print(f"REVIEW APPROVAL REUSED [{step['id']}] from {source_job_id}; evidence fingerprints match")
+                            continue
                         if step["id"] not in approve_steps:
                             state["status"] = "WAITING_APPROVAL"
                             state["active_step"] = step["id"]
@@ -1016,24 +1186,30 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool,
                         continue
                     if saved["status"] == "PASS":
                         _verify_passed_step(saved, step, fingerprint_policy,
-                                            heartbeat=progress.heartbeat)
+                                            heartbeat=progress.heartbeat,
+                                            superseded_path_ids=_downstream_completed_output_ids(
+                                                plan, state, index))
                         progress.complete_step(index + 1, step["stage"], status="verified")
                         print(f"SKIP verified completed step: {step['id']}")
                         continue
                     progress.start_step(index + 1, step["stage"])
                     if saved["status"] in ("RUNNING", "INTERRUPTED", "FAILED"):
-                        if step.get("resume_policy") != "download":
-                            raise WorkflowError(
-                                f"step {step['id']} ended as {saved['status']}; inspect its outputs/logs, "
-                                "then create a new job plan after reconciliation")
-                        current_inputs = file_fingerprints(
-                            inputs, policy=fingerprint_policy, heartbeat=progress.heartbeat)
-                        if _fingerprint_payload(current_inputs) != (saved.get("input_fingerprints") or []):
-                            raise WorkflowError(f"resumable download step {step['id']} inputs changed; refusing retry")
-                        print(f"RESUME downloader step: {step['id']}")
+                        if step.get("resume_policy") == "download":
+                            current_inputs = file_fingerprints(
+                                inputs, policy=fingerprint_policy, heartbeat=progress.heartbeat)
+                            if _fingerprint_payload(current_inputs) != (saved.get("input_fingerprints") or []):
+                                raise WorkflowError(f"resumable download step {step['id']} inputs changed; refusing retry")
+                            print(f"RESUME downloader step: {step['id']}")
+                        else:
+                            _verify_retryable_failed_step(
+                                saved, step, fingerprint_policy, heartbeat=progress.heartbeat)
+                            print(f"RETRY verified-safe step: {step['id']} from the last confirmed good step")
                     else:
                         saved["input_fingerprints"] = file_fingerprints(
                             inputs, policy=fingerprint_policy, heartbeat=progress.heartbeat)
+                        saved["output_fingerprints_before"] = file_fingerprints(
+                            outputs, must_exist=False, policy=fingerprint_policy,
+                            heartbeat=progress.heartbeat)
 
                     state["active_step"] = step["id"]
                     state["active_index"] = index

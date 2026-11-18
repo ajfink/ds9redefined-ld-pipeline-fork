@@ -8,7 +8,6 @@ threshold sensitivity and the reported run to independent picture/content eviden
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 from datetime import datetime, timezone
@@ -21,18 +20,11 @@ sys.path.insert(0, str(ROOT))
 
 from dependency_lock import LockError  # noqa: E402
 from ldcommon import Ld, PipelineError, assert_writable_path, load_episode, redact_shared_text  # noqa: E402
+from fileutil import sha256_file  # noqa: E402
 from measure_dvd_alignment import load_desc  # noqa: E402
 
 FPS = 30000.0 / 1001.0
 DEFAULT_THRESHOLDS = (5.0, 10.0, 15.0)
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def luma_runs(means, threshold: float, fps: float = FPS,

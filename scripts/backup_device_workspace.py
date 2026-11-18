@@ -18,6 +18,8 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
+from fileutil import sha256_file as _shared_sha256_file
+
 SCHEMA = "fromstuntokill-device-workspace-backup-v1"
 EPISODE_RE = re.compile(r"^S\d{2}E\d{2}$", re.IGNORECASE)
 SAFE_DEVICE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
@@ -32,11 +34,7 @@ class BackupError(RuntimeError):
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return _shared_sha256_file(path)
 
 
 def _read_workspace(instance: Path) -> tuple[dict, str, str, str]:

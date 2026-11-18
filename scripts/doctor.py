@@ -128,6 +128,15 @@ def shared_workspace_ready(shared_report: dict) -> bool:
             shared_report.get("device_roots_scoped") is True)
 
 
+def workflow_status_for(target_os: str, workflow_version: str) -> str:
+    """Describe platform workflow support without a stale hard-coded release label."""
+    if target_os == "windows":
+        return f"V{workflow_version} Windows x86_64 workflow"
+    if target_os == "macos":
+        return "macOS arm64 end-to-end workflow demonstrated on M5 (S01E10); fresh-device setup is not independently certified"
+    return "UNTESTED: x86_64 dependency/capability candidate only; do not process a delivery"
+
+
 def linux_preflight(profile: dict, profile_file: Path, interpreter: str,
                     lock_report: dict, episode: str | None) -> dict:
     checks: list[dict] = []
@@ -192,6 +201,7 @@ def linux_preflight(profile: dict, profile_file: Path, interpreter: str,
     add("dependency-lock", "PASS" if lock_report.get("ok") else "FAIL",
         f"{lock_report.get('lock')} Python {lock_report.get('python')}; "
         f"newer accepted={lock_report.get('newer_versions_accepted', [])}; "
+        f"version differences (informational)={lock_report.get('version_differences', [])}; "
         f"mismatches={lock_report.get('mismatches')}")
     return {"ok": all(c["status"] != "FAIL" for c in checks), "checks": checks,
             "episode": episode, "profile": str(profile_file)}
@@ -309,18 +319,15 @@ def main() -> int:
         else:
             platform_report = linux_preflight(profile, profile_file, interpreter, lock_report, args.episode)
 
-        workflow_status = {
-            "windows": "V12 Windows x86_64 reference workflow",
-            "macos": "macOS arm64 end-to-end workflow demonstrated on M5 (S01E10); fresh-device setup is not independently certified",
-            "linux": "UNTESTED: x86_64 dependency/capability candidate only; do not process a delivery",
-        }[target_os]
+        workflow_version = (ROOT / "WORKFLOW_VERSION").read_text(encoding="ascii").strip()
+        workflow_status = workflow_status_for(target_os, workflow_version)
         shared_ready = shared_workspace_ready(shared_report)
         ready = bool(platform_report.get("ok") and lock_report.get("ok") and
                      profile_os == target_os and target_os != "linux" and shared_ready)
         report = {
             "schema": "ld-pipeline-doctor-v1",
             "created_utc": datetime.now(timezone.utc).isoformat(),
-            "workflow_version": (ROOT / "WORKFLOW_VERSION").read_text(encoding="ascii").strip(),
+            "workflow_version": workflow_version,
             "host": {"system": platform.system(), "release": platform.release(),
                      "architecture": platform.machine(), "target": target},
             "profile": str(profile_file),

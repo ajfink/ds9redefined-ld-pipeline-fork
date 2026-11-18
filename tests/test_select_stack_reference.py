@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
 import scripts.select_stack_reference as selector  # noqa: E402
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -67,6 +68,60 @@ def e05_l1_first_report() -> dict:
 
 
 class SelectStackReferenceTests(unittest.TestCase):
+    def test_cli_accepts_report_out_for_stage_console_plan(self):
+        args = selector.build_parser().parse_args([
+            "--episode", "S01E18", "--report-out", r"D:\probe\selection.md"])
+        self.assertEqual(args.report_out, r"D:\probe\selection.md")
+
+    def test_restart_cli_requires_explicit_reselect_and_project_overwrite_flags(self):
+        args = selector.build_parser().parse_args([
+            "--episode", "S01E18", "--reselect", "--overwrite-project"])
+        self.assertTrue(args.reselect)
+        self.assertTrue(args.overwrite_project)
+
+    def test_explicit_reference_restart_backs_up_before_replacing_project(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original = root / "stack.orcprj"
+            stable = root / "stable.orcprj"
+            original.write_bytes(b"original project")
+            stable.write_bytes(b"new selected project")
+            original_sha = hashlib.sha256(original.read_bytes()).hexdigest()
+            ld = SimpleNamespace(profile={"shared": {"enabled": False}})
+
+            backup = selector._replace_existing_project(
+                original, stable, ld, run_id="restart-test", original_sha256=original_sha)
+
+            self.assertEqual(original.read_bytes(), stable.read_bytes())
+            self.assertEqual(backup.read_bytes(), b"original project")
+
+    def test_report_out_must_be_new_and_directly_inside_probe(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            probe = Path(temporary) / "probe"
+            probe.mkdir()
+            ld = SimpleNamespace(profile={"shared": {"enabled": False}})
+            report = probe / "selection.md"
+            self.assertEqual(selector._report_output_path(str(report), probe, ld), report)
+            report.write_text("existing", encoding="utf-8")
+            with self.assertRaisesRegex(PipelineError, "refusing to overwrite"):
+                selector._report_output_path(str(report), probe, ld)
+            with self.assertRaisesRegex(PipelineError, "directly inside the probe"):
+                selector._report_output_path(str(probe.parent / "outside.md"), probe, ld)
+
+    def test_configure_console_replaces_unencodable_orc_output(self):
+        class Stream:
+            def __init__(self):
+                self.options = {}
+
+            def reconfigure(self, **options):
+                self.options.update(options)
+
+        stdout, stderr = Stream(), Stream()
+        with patch.object(selector.sys, "stdout", stdout), patch.object(selector.sys, "stderr", stderr):
+            selector.configure_console()
+        self.assertEqual(stdout.options, {"errors": "replace"})
+        self.assertEqual(stderr.options, {"errors": "replace"})
+
     def test_parses_json_report_after_orc_progress_text(self):
         payload = "refresh progress...\n" + json.dumps(e05_l1_first_report(), indent=2)
         self.assertTrue(parse_refresh_report([payload])["completed"])

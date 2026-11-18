@@ -17,16 +17,10 @@ This is a repeatable process, not a license to copy Emissary-specific trims or t
 
 The numbered sections below are the actual procedure and gates; this list is only the orientation/quick review.
 
-**Live-run authority:** `V*-QUEUE.md` files are planning records, not episode instructions or
-evidence. Do not read, cite, or use queued proposals as measurements, approvals, stage
-arguments, or gates while running an episode. Follow this current runbook and README plus the
-released scripts matching `WORKFLOW_VERSION`; queue content has no effect until explicitly
-implemented and released.
-
-**Changelog boundary:** `changelog.txt` and version/release summaries are retrospective history,
-not live workflow inputs. Do not use them to choose an episode, copy measurements, choose stage
-arguments, approve actions, or change gates. If the current runbook, released helper, active
-manifest, or an explicit user decision is missing/ambiguous, stop and clarify.
+**Versioning archive:** `Versioning/` contains retrospective release and app-branch records, not
+live episode instructions or measurements. Follow this runbook, the README, the active manifest,
+and released scripts matching `WORKFLOW_VERSION`. If current evidence or an explicit user decision
+is missing or ambiguous, stop and clarify.
 
 ## Work ahead while the source transfer runs
 
@@ -353,14 +347,23 @@ cadence, trims, or retime schedule. Do not use another episode's measurements. O
 manifest fields with confirmed facts; retain the detailed DVD probe and its provenance in
 `roots.probe` / `roots.logs`. Do not add ad hoc manifest keys. Leave uncertain values unset.
 If a proposed prep step requires an episode manifest or verified LD artifact, queue it in
-the active episode's job checklist (not a `V*-QUEUE.md` release-planning file)
-for its proper later gate; never fabricate a temporary manifest to bypass that requirement.
+the active episode's job checklist for its proper later gate; never fabricate a temporary
+manifest to bypass that requirement.
 
 After download, initialize without guessing measurements:
 `python scripts\init_episode.py --url <Archive-URL> --downloads <folder> --dvd <DVD.mkv>`.
 Confirm the title/capture list and run `python scripts\validate_episode.py --episode <code> --stage inputs` before building the Orc graph. E01/E02 are rejected by the generic initializer because Emissary needs its two-part procedure.
 
 ## 3. Build the weighted ProRes master
+
+**Desktop app:** select the episode and DVD, then click **Run**. When a successfully completed
+Orc reference-selection result is fingerprint-verified, the app uses its saved report as evidence
+without opening it for user review. It records the report's measured `alignment_map` and computes
+`stack.frames` as the sum of Orc's `framesWith1Source`, `framesWith2Sources`, and
+`framesWith3PlusSources` coverage counts, with a manifest backup. It then automatically builds
+and runs the stack-render plan. The report must be saved/completed, the final selected reference
+must be input 1, and all three coverage counts must be present; otherwise the app restarts reference
+selection with a backup. It does not overwrite an unverified existing Orc project.
 
 1. After input validation, run `python scripts\select_stack_reference.py --episode <code>`.
    It builds a scratch project with a deterministic provisional input order, runs Orc's
@@ -371,7 +374,9 @@ Confirm the title/capture list and run `python scripts\validate_episode.py --epi
     value. If the manifest already has a different reference, use `--reselect` only when
     intentionally replacing it; an existing project is never overwritten. Read the
     selection report, verify all captures were analyzed and the final suggestion is input
-    1, then record the measured `alignment_map`. If Orc fails, emits no valid suggestion,
+    1, then record the measured `alignment_map`. Record positive `stack.frames` from the
+    complete Orc coverage counts (`1-source + 2-source + 3+-source`); do not copy another
+    episode's value. If Orc fails, emits no valid suggestion,
     or does not stabilize, STOP; do not choose a reference from noise alone or hand-derive
     offsets. Output is streamed and a heartbeat is logged during quiet refreshes. The helper
     checkpoints only completed passes; if interrupted, resume with
@@ -380,10 +385,12 @@ Confirm the title/capture list and run `python scripts\validate_episode.py --epi
     completed project/log hashes. Preserve the checkpoint and partial logs; do not restart with
     a different input set or add a harness timeout to a long background refresh.
 2. Graph: one `tbc_source` and `frame_map` per capture → `source_align` → `stacker Weighted` → `video_sink`. Keep the measured reference/input order. Sink baseline: `mov-prores`, `prores_profile=hq`, `decoder_type=ntsc3d`, `adapt_threshold=0.1`, `chroma_weight=2.0`, `ntsc_phase_comp=true`, display aspect 4:3. Do not add unmeasured crops or post-stack filters.
-3. Before the render, estimate the peak ProRes and scratch-space demand and run
+3. Before a CLI render, estimate the peak ProRes and scratch-space demand and run
    `python scripts\check_space_budget.py --stage stack-render --planned-gib <estimate>`.
    Preserve `limits.min_free_gb` after the planned writes; do not reuse another episode's
-   output size as a default. Render the manifest project with the profile-resolved Orc CLI:
+   output size as a default. The desktop app budgets 320 KiB per measured stack frame plus
+   1 GiB scratch, then applies the same configured free-space reserve gate. Render the
+   manifest project with the profile-resolved Orc CLI:
    `orc-cli <project> --process` (resolve `<project>` and executable from the profile/manifest).
    **Render from the local fast volume**: historical runs measured ~39 fps locally versus
    ~4.5 fps on an SMB share. In the first 60–90 seconds check one “Loaded” line per input,

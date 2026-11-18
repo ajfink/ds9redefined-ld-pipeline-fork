@@ -24,16 +24,19 @@ import re
 import shutil
 import subprocess
 import sys
-import threading
 import time
 from datetime import datetime, timezone
 from json import JSONDecoder
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+SCRIPTS = Path(__file__).resolve().parent
+ROOT = SCRIPTS.parent
+sys.path.insert(0, str(SCRIPTS))
+sys.path.insert(0, str(ROOT))
 from ldcommon import (BUNDLE, Ld, PipelineError, assert_writable_path,
                       episode_manifest_path, load_episode,
                       redact_shared_text)  # noqa: E402
+from streamutil import configure_console, start_line_reader  # noqa: E402
 
 MIN_CAPTURES = 2
 MAX_CAPTURES = 6
@@ -150,7 +153,6 @@ def _run_and_log(command: list[str], log_path: Path) -> subprocess.CompletedProc
     log_path.parent.mkdir(parents=True, exist_ok=True)
     ld = Ld()
     output: list[str] = []
-    lines: queue.Queue[str | None] = queue.Queue()
     safe_command = redact_shared_text(subprocess.list2cmdline(command), ld)
     try:
         log = log_path.open("x", encoding="utf-8", newline="\n")
@@ -170,15 +172,7 @@ def _run_and_log(command: list[str], log_path: Path) -> subprocess.CompletedProc
             raise PipelineError(f"could not run {command[0]}: {exc}") from exc
         assert child.stdout is not None
 
-        def pump() -> None:
-            try:
-                for line in child.stdout:
-                    lines.put(line)
-            finally:
-                lines.put(None)
-
-        reader = threading.Thread(target=pump, name="orc-output-reader", daemon=True)
-        reader.start()
+        lines, reader = start_line_reader(child.stdout, name="orc-output-reader")
         started = time.monotonic()
         last_output = "(no output yet)"
         try:
@@ -507,14 +501,61 @@ def _report_summary(
     return "\n".join(lines) + "\n"
 
 
+def _backup_file(path: Path, ld: Ld, *, label: str, run_id: str) -> Path:
+    if path.is_symlink() or not path.is_file():
+        raise PipelineError(f"refusing to back up a missing or unsafe output: {path}")
+    backup = path.with_name(f"{path.name}.bak-{label}-{run_id}")
+    assert_writable_path(backup, ld)
+    try:
+        with path.open("rb") as source, backup.open("xb") as destination:
+            shutil.copyfileobj(source, destination, 4 * 1024 * 1024)
+            destination.flush()
+            os.fsync(destination.fileno())
+    except FileExistsError as exc:
+        raise PipelineError(f"refusing to overwrite existing backup: {backup}") from exc
+    if hashlib.sha256(path.read_bytes()).digest() != hashlib.sha256(backup.read_bytes()).digest():
+        raise PipelineError(f"backup verification failed for {path}: {backup}")
+    return backup
+
+
+def _replace_existing_project(final_project: Path, stable_project: Path, ld: Ld,
+                              *, run_id: str, original_sha256: str) -> Path:
+    if final_project.is_symlink() or not final_project.is_file():
+        raise PipelineError(f"existing Orc project is missing or unsafe: {final_project}")
+    if hashlib.sha256(final_project.read_bytes()).hexdigest() != original_sha256:
+        raise PipelineError(f"existing Orc project changed during reference restart: {final_project}")
+    backup = _backup_file(final_project, ld, label="reference-restart", run_id=run_id)
+    temp_path = final_project.with_name(f".{final_project.name}.restart-{run_id}.tmp")
+    if temp_path.exists() or temp_path.is_symlink():
+        raise PipelineError(f"refusing to overwrite temporary Orc project {temp_path}")
+    stable_sha = hashlib.sha256(stable_project.read_bytes()).digest()
+    try:
+        with stable_project.open("rb") as source, temp_path.open("xb") as destination:
+            shutil.copyfileobj(source, destination, 4 * 1024 * 1024)
+            destination.flush()
+            os.fsync(destination.fileno())
+        if hashlib.sha256(temp_path.read_bytes()).digest() != stable_sha:
+            raise PipelineError(f"temporary Orc project copy failed hash verification: {temp_path}")
+        if hashlib.sha256(final_project.read_bytes()).hexdigest() != original_sha256:
+            raise PipelineError(f"existing Orc project changed before replacement: {final_project}")
+        os.replace(temp_path, final_project)
+    finally:
+        temp_path.unlink(missing_ok=True)
+    if hashlib.sha256(final_project.read_bytes()).digest() != stable_sha:
+        raise PipelineError(f"restarted Orc project failed hash verification: {final_project}")
+    print(f"replaced existing Orc project; verified backup: {backup}", flush=True)
+    return backup
+
+
 def _commit_manifest_reference(manifest_path: Path, original_sha: str,
-                               reference: str, run_id: str) -> None:
+                               reference: str, run_id: str, ld: Ld,
+                               *, backup_existing: bool = False) -> Path | None:
     current_bytes = manifest_path.read_bytes()
     desired_bytes = manifest_bytes_with_reference(current_bytes, reference)
     desired_sha = hashlib.sha256(desired_bytes).hexdigest()
     current_sha = hashlib.sha256(current_bytes).hexdigest()
     if current_sha == desired_sha:
-        return
+        return None
     if current_sha != original_sha:
         raise PipelineError(
             f"episode manifest changed during Orc refresh; not overwriting {manifest_path}"
@@ -522,6 +563,8 @@ def _commit_manifest_reference(manifest_path: Path, original_sha: str,
     temp_path = manifest_path.with_name(f".{manifest_path.name}.autoref-{run_id}.tmp")
     if temp_path.exists():
         raise PipelineError(f"refusing to overwrite temporary manifest {temp_path}")
+    backup = (_backup_file(manifest_path, ld, label="reference-restart", run_id=run_id)
+              if backup_existing else None)
     try:
         with temp_path.open("x", encoding="utf-8", newline="\n") as stream:
             stream.write(desired_bytes.decode("utf-8"))
@@ -533,9 +576,13 @@ def _commit_manifest_reference(manifest_path: Path, original_sha: str,
     finally:
         if temp_path.exists():
             temp_path.unlink()
+    if backup:
+        print(f"reference restart manifest backup: {backup}", flush=True)
+    return backup
 
 
 def _write_selection_report(path: Path, body: str, ld: Ld) -> None:
+    path = assert_writable_path(path, ld)
     safe = redact_shared_text(body, ld)
     try:
         with path.open("x", encoding="utf-8", newline="\n") as stream:
@@ -544,16 +591,43 @@ def _write_selection_report(path: Path, body: str, ld: Ld) -> None:
         raise PipelineError(f"refusing to overwrite selection report: {path}") from exc
 
 
+def _report_output_path(value: str | None, probe_root: Path, ld: Ld) -> Path | None:
+    """Validate an optional caller-selected, new report path inside the probe root."""
+    if not value:
+        return None
+    supplied = Path(value).expanduser()
+    if supplied.is_symlink():
+        raise PipelineError(f"selection report path may not be a symlink: {supplied}")
+    path = supplied.resolve(strict=False)
+    probe = probe_root.resolve(strict=False)
+    if path.parent != probe:
+        raise PipelineError(f"selection report must be directly inside the probe folder: {probe}")
+    path = assert_writable_path(path, ld)
+    if path.exists():
+        raise PipelineError(f"refusing to overwrite selection report: {path}")
+    return path
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--episode", required=True)
+    parser.add_argument("--reselect", action="store_true",
+                        help="allow Orc to replace an already declared manifest reference")
+    parser.add_argument("--overwrite-project", action="store_true",
+                        help="after explicit operator restart, back up and replace the existing final Orc project")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="run the refresh loop and report the choice without committing project/manifest")
+    parser.add_argument("--resume", metavar="CHECKPOINT",
+                        help="resume after verifying the saved manifest, captures, Orc tool, and completed passes")
+    parser.add_argument("--report-out",
+                        help="new Markdown report path directly inside this device's probe folder")
+    return parser
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--episode", required=True)
-    ap.add_argument("--reselect", action="store_true",
-                    help="allow Orc to replace an already declared manifest reference")
-    ap.add_argument("--dry-run", action="store_true",
-                    help="run the refresh loop and report the choice without committing project/manifest")
-    ap.add_argument("--resume", metavar="CHECKPOINT",
-                    help="resume after verifying the saved manifest, captures, Orc tool, and completed passes")
-    args = ap.parse_args()
+    configure_console()
+    args = build_parser().parse_args()
 
     ld = Ld()
     ep = load_episode(args.episode, ld)
@@ -574,10 +648,14 @@ def main() -> int:
     if current_reference and current_reference not in captures:
         raise PipelineError(f"manifest reference {current_reference!r} is not in captures {captures}")
     final_project = ep.path("stack_project")
-    if not args.dry_run and final_project.exists() and not args.resume:
+    if args.overwrite_project and (not args.reselect or args.resume or args.dry_run):
+        raise PipelineError("--overwrite-project requires an explicit new --reselect run")
+    existing_project_sha256 = (hashlib.sha256(final_project.read_bytes()).hexdigest()
+                               if final_project.is_file() and not final_project.is_symlink() else None)
+    if not args.dry_run and final_project.exists() and not args.resume and not args.overwrite_project:
         raise PipelineError(
             f"refusing to overwrite existing Orc project {final_project}; "
-            "finish or archive that run before selecting a new reference"
+            "finish or choose an explicit restart with --reselect --overwrite-project"
         )
 
     # Do not spend time mapping/choosing references until the downloaded inputs pass.
@@ -596,6 +674,7 @@ def main() -> int:
     log_root = ld.root("logs")
     probe_root.mkdir(parents=True, exist_ok=True)
     log_root.mkdir(parents=True, exist_ok=True)
+    requested_report_path = _report_output_path(args.report_out, probe_root, ld)
     orc = Path(ld.tool("orc"))
     workflow_version = (BUNDLE / "WORKFLOW_VERSION").read_text(encoding="ascii").strip()
     inputs = capture_input_fingerprint(ep)
@@ -650,7 +729,8 @@ def main() -> int:
         if not selected and current_seed not in captures:
             raise PipelineError(f"checkpoint has no valid next reference seed: {current_seed!r}")
         artifact_run_id = invocation_id  # don't overwrite a partial pass from the interrupted attempt
-        final_report_path = log_root / f"{ep.code}-reference-selection-resume-{invocation_id}.md"
+        final_report_path = (requested_report_path or
+                             log_root / f"{ep.code}-reference-selection-resume-{invocation_id}.md")
     else:
         selection_id = invocation_id
         original_sha = current_manifest_sha
@@ -687,7 +767,8 @@ def main() -> int:
         stable_project = None
         next_pass = 1
         artifact_run_id = selection_id
-        final_report_path = log_root / f"{ep.code}-reference-selection-{selection_id}.md"
+        final_report_path = (requested_report_path or
+                             log_root / f"{ep.code}-reference-selection-{selection_id}.md")
 
     print(f"reference-selection checkpoint: {redact_shared_text(str(checkpoint_path), ld)}", flush=True)
     try:
@@ -772,11 +853,21 @@ def main() -> int:
         status = "DRY RUN - not committed" if args.dry_run else "SELECTED"
         if not args.dry_run:
             if final_project.exists():
-                if (not args.resume or
-                        hashlib.sha256(final_project.read_bytes()).digest() !=
-                        hashlib.sha256(stable_project.read_bytes()).digest()):
+                stable_hash = hashlib.sha256(stable_project.read_bytes()).digest()
+                if args.resume:
+                    if hashlib.sha256(final_project.read_bytes()).digest() != stable_hash:
+                        raise PipelineError(f"refusing to overwrite existing Orc project {final_project}")
+                elif args.overwrite_project:
+                    if existing_project_sha256 is None:
+                        raise PipelineError(f"existing Orc project was not safely fingerprinted: {final_project}")
+                    _replace_existing_project(
+                        final_project, stable_project, ld, run_id=selection_id,
+                        original_sha256=existing_project_sha256)
+                else:
                     raise PipelineError(f"refusing to overwrite existing Orc project {final_project}")
             else:
+                if existing_project_sha256 is not None:
+                    raise PipelineError(f"existing Orc project disappeared during selection: {final_project}")
                 final_project.parent.mkdir(parents=True, exist_ok=True)
                 with final_project.open("xb") as destination, stable_project.open("rb") as source:
                     shutil.copyfileobj(source, destination)
@@ -785,7 +876,9 @@ def main() -> int:
                 if hashlib.sha256(final_project.read_bytes()).digest() != hashlib.sha256(stable_project.read_bytes()).digest():
                     raise PipelineError(f"promoted Orc project copy failed hash verification: {final_project}")
             if selected != original_reference and not manifest_already_committed:
-                _commit_manifest_reference(manifest_path, original_sha, selected, selection_id)
+                _commit_manifest_reference(
+                    manifest_path, original_sha, selected, selection_id, ld,
+                    backup_existing=args.overwrite_project)
 
         summary = _report_summary(ep.code, selection_id, original_reference, decisions,
                                   stable_project if args.dry_run else final_project,

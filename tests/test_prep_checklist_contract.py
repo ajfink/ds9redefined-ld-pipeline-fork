@@ -16,11 +16,8 @@ class PrepChecklistContractTests(unittest.TestCase):
                 self.assertTrue("download manifest verifies" in text or
                                 "download-manifest.csv` verifies" in text)
 
-    def test_v13_queue_retains_nonoperative_boundary(self):
-        text = " ".join((ROOT / "V13-QUEUE.md").read_text(
-            encoding="utf-8").casefold().split())
-        self.assertIn("v13 is released", text)
-        self.assertIn("its entries remain non-operative", text)
+    def test_version_archive_does_not_ship_planning_queues(self):
+        self.assertEqual(list((ROOT / "Versioning").glob("V*-QUEUE.md")), [])
 
     def test_prep_template_records_evidence_and_exact_unblock_gates(self):
         text = (ROOT / "templates" / "episode-prep-checklist.template.md").read_text(

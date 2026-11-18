@@ -15,14 +15,16 @@ import re
 import queue
 import subprocess
 import sys
-import threading
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+SCRIPTS = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPTS.parent))
+sys.path.insert(0, str(SCRIPTS))
 from ldcommon import Ld, PipelineError, assert_writable_path, load_episode, redact_shared_text  # noqa: E402
+from streamutil import configure_console, start_line_reader  # noqa: E402
 
 LOADED_RE = re.compile(r"\btbc_source:\s*Loaded\b", re.IGNORECASE)
 WRITTEN_RE = re.compile(r"Successfully\s+wrote\s+([\d,]+)\s+frames", re.IGNORECASE)
@@ -31,16 +33,6 @@ PAIR_NUMBER = r"\d+(?:,\d{3})*"
 PAIR_RE = re.compile(rf"(?:\bpairs?\s*[:=]\s*({PAIR_NUMBER})|({PAIR_NUMBER})\s+pairs?\b)", re.IGNORECASE)
 ORC_HEARTBEAT_SECONDS = 60
 ORC_STALL_WARNING_SECONDS = 20 * 60
-
-
-def configure_console() -> None:
-    for stream in (sys.stdout, sys.stderr):
-        reconfigure = getattr(stream, "reconfigure", None)
-        if callable(reconfigure):
-            try:
-                reconfigure(errors="replace")
-            except (OSError, ValueError):
-                pass
 
 
 def expected_pair_count(input_count: int) -> int:
@@ -231,6 +223,22 @@ def progress_heartbeat(elapsed_s: float, last_progress_s: float, pid: int,
     return message, idle_s >= ORC_STALL_WARNING_SECONDS
 
 
+def move_existing_master_to_backup(master: Path, run_id: str) -> Path:
+    """Keep a restart target recoverable, then clear its original path for Orc."""
+    if master.is_symlink() or not master.is_file():
+        raise PipelineError(f"existing stack master is missing or unsafe: {master}")
+    original_stat = master.stat()
+    backup = master.with_name(f"{master.name}.bak-restart-{run_id}")
+    if backup.exists() or backup.is_symlink():
+        raise PipelineError(f"refusing to reuse existing stack-master backup: {backup}")
+    current_stat = master.stat()
+    if (current_stat.st_size, current_stat.st_mtime_ns) != (
+            original_stat.st_size, original_stat.st_mtime_ns):
+        raise PipelineError(f"existing stack master changed before restart: {master}")
+    master.replace(backup)
+    return backup
+
+
 def main() -> int:
     configure_console()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -238,6 +246,8 @@ def main() -> int:
     parser.add_argument("--planned-gib", required=True, type=float,
                         help="defensible stack master + scratch peak estimate; preserves configured reserve")
     parser.add_argument("--report-out", help="new JSON report path; defaults to a unique profile log")
+    parser.add_argument("--overwrite-stack", action="store_true",
+                        help="after explicit operator restart, move the existing master to a backup before rendering")
     args = parser.parse_args()
     ld = Ld()
     ep = load_episode(args.episode, ld)
@@ -258,8 +268,13 @@ def main() -> int:
     project_order = project_source_labels(project)
     if project_order != expected_order:
         raise PipelineError(f"Orc project input order {project_order} does not match measured reference order {expected_order}")
+    existing_master_stat = None
     if master.exists():
-        raise PipelineError(f"refusing to overwrite existing stack master: {master}")
+        if not args.overwrite_stack:
+            raise PipelineError(f"refusing to overwrite existing stack master: {master}")
+        if master.is_symlink() or not master.is_file():
+            raise PipelineError(f"existing stack master is not a safe regular file: {master}")
+        existing_master_stat = (master.stat().st_size, master.stat().st_mtime_ns)
     expected_frames = ep.stack_frames
     if expected_frames <= 0:
         raise PipelineError("measured stack.frames must be positive before rendering")
@@ -271,6 +286,14 @@ def main() -> int:
         raise PipelineError(f"refusing to overwrite stack render report: {report_path}")
 
     check_space(ld, args.planned_gib)
+    overwritten_master_backup = None
+    if existing_master_stat is not None:
+        current_stat = master.stat()
+        if (current_stat.st_size, current_stat.st_mtime_ns) != existing_master_stat:
+            raise PipelineError(f"existing stack master changed before restart: {master}")
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        overwritten_master_backup = move_existing_master_to_backup(master, stamp)
+        print(f"moved existing stack master to backup: {overwritten_master_backup}", flush=True)
     orc = ld.tool("orc")
     command = [str(orc), str(project), "--process"]
     started = datetime.now(timezone.utc).isoformat()
@@ -284,17 +307,7 @@ def main() -> int:
     except OSError as exc:
         raise PipelineError(f"could not start Orc render: {exc}") from exc
     assert proc.stdout is not None
-    output_lines: queue.Queue[str | None] = queue.Queue()
-
-    def read_output() -> None:
-        try:
-            for child_line in proc.stdout:
-                output_lines.put(child_line)
-        finally:
-            output_lines.put(None)
-
-    reader = threading.Thread(target=read_output, name="orc-stack-render-output", daemon=True)
-    reader.start()
+    output_lines, reader = start_line_reader(proc.stdout, name="orc-stack-render-output")
     started_monotonic = time.monotonic()
     last_progress = started_monotonic
     last_master = (master.stat().st_size, master.stat().st_mtime_ns) if master.exists() else (0, 0)
@@ -339,6 +352,8 @@ def main() -> int:
         "orc_exit_code": orc_exit,
         "project": str(project),
         "master": str(master),
+        "overwritten_master_backup": (str(overwritten_master_backup)
+                                      if overwritten_master_backup else None),
         "reference_capture": reference,
         "alignment_map": alignment_map,
         "expected_captures": expected_order,

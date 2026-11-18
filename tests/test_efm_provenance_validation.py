@@ -37,6 +37,9 @@ class EfmProvenanceValidationTests(unittest.TestCase):
             metadata = downloads / (tbc.name + ".json")
             metadata.write_text('{"frames":100}\n', encoding="utf-8")
             metadata_md5 = hashlib.md5(metadata.read_bytes()).hexdigest()
+            efm = downloads / "DS9-S01E13-P3.efm"
+            efm.write_bytes(b"raw efm bytes")
+            efm_md5 = hashlib.md5(efm.read_bytes()).hexdigest()
             efm_report_rel = efm_report.relative_to(audio_root).as_posix()
             report = {
                 "schema": "ld-pipeline-efm-capture-provenance-v1", "status": "VERIFIED",
@@ -48,6 +51,12 @@ class EfmProvenanceValidationTests(unittest.TestCase):
                 "source_tbc_json_bytes": metadata.stat().st_size,
                 "source_tbc_json_md5": metadata_md5,
                 "source_tbc_json_fingerprint": {"method": "manifest-md5", "md5": metadata_md5},
+                "source_efm_file": efm.name, "source_efm_bytes": efm.stat().st_size,
+                "source_efm_manifest_md5": efm_md5,
+                "source_efm_fingerprint": {"method": "manifest-md5", "md5": efm_md5},
+                "decoded_efm": {"root": "downloads", "relative_path": efm.name,
+                                "sha256": hashlib.sha256(efm.read_bytes()).hexdigest(),
+                                "size_bytes": efm.stat().st_size},
                 "path_checks": {key: True for key in
                                 ("loaded_tbc", "tbc_metadata", "efm_output", "efm_report", "efm_success")},
                 "wav_relative_path": wav.name, "wav_size_bytes": wav.stat().st_size,
@@ -80,13 +89,22 @@ class EfmProvenanceValidationTests(unittest.TestCase):
             }, downloads=lambda: downloads)
             capture = {"label": "P3", "tbc_file": tbc.name, "tbc_bytes": 100,
                        "tbc_md5": tbc_md5, "json_file": metadata.name,
-                       "json_bytes": metadata.stat().st_size, "json_md5": metadata_md5}
+                       "json_bytes": metadata.stat().st_size, "json_md5": metadata_md5,
+                       "efm_file": efm.name, "efm_bytes": efm.stat().st_size,
+                       "efm_md5": efm_md5}
             ld = SimpleNamespace(root=lambda key: audio_root if key == "audio" else root)
             checks = Checks()
             with patch.dict(os.environ, {"LDP_INSTANCE_ROOT": str(instance)}):
                 validate_efm_capture_provenance(
                     checks, episode, ld, capture, wav)
             self.assertFalse(checks.failed)
+            efm.write_bytes(b"changed raw EFM")
+            changed = Checks()
+            with patch.dict(os.environ, {"LDP_INSTANCE_ROOT": str(instance)}):
+                validate_efm_capture_provenance(
+                    changed, episode, ld, capture, wav)
+            self.assertTrue(any(name == "efm-provenance-source" and status == "FAIL"
+                                for status, name, _detail in changed.rows))
 
     def test_report_bound_to_another_episode_fails(self):
         with tempfile.TemporaryDirectory() as temporary:
