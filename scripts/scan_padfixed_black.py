@@ -23,6 +23,23 @@ BLIP_MAX_S = 0.10          # 1 frame is 0.042 s; allow a little encoder slack
 ALIGN_TOL_S = 1.25 / F24   # +/-1.25 output frames
 
 
+def resolve_video_input(ep, override: str | None = None) -> Path:
+    """Prefer the declared deliverable, then the intermediate padfixed encode.
+
+    Some episode templates call the final mux ``pre_upscale`` rather than
+    ``padfixed``. The explicit ``--encode`` override still wins, but the
+    manifest's deliverable declaration is the correct no-argument default.
+    """
+    if override:
+        return Path(override).expanduser()
+    deliverable_key = ep.data.get("deliverable")
+    if deliverable_key:
+        deliverable = ep.optional_path(str(deliverable_key))
+        if deliverable is not None and deliverable.is_file():
+            return deliverable
+    return ep.path("padfixed")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--episode", required=True)
@@ -33,7 +50,7 @@ def main() -> int:
     ld = Ld()
     ep = load_episode(args.episode, ld)
     probe = ld.probe()
-    video = Path(args.encode) if args.encode else ep.path("padfixed")
+    video = resolve_video_input(ep, args.encode)
     repair_file = probe / f"{ep.code}-pad-repair-frames.txt"
     if not video.exists():
         raise PipelineError(f"missing deliverable: {video} - run encode+remux first")

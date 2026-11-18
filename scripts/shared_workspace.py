@@ -10,6 +10,7 @@ local roots. It never edits ACLs.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -28,6 +29,8 @@ IMAGE_RE = re.compile(r"^DVD-(\d{2})-(\d{2})-(\d{2})\.(\d{3})-f(\d{8})\.png$", r
 SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9._-]+$")
 DEVICE_ID_RE = re.compile(r"^[0-9A-F]{8}$")
 REFERENCE_EXTENSIONS = {".md", ".txt", ".json", ".csv", ".tsv", ".log"}
+SYNC_SUBDIRECTORIES = ("manifest", "references", "cut-pad-images")
+SYNC_LOG_EXTENSIONS = REFERENCE_EXTENSIONS
 LOGGING_GUIDE = """# Episode workspace logs
 
 Keep diagnostic evidence here for this device-instance and episode. This folder is
@@ -47,6 +50,11 @@ invocation. Time between invocations is excluded. For a manual stage, use
 `python scripts/stage_clock.py start --profile <profile> --episode <code> --stage <name>`;
 pause before waiting for a human gate input, resume after the answer, then stop at stage
 completion. Its JSON record separates active time, human wait, and wall time.
+
+If an episode is in the device-local fallback, keep working there until shared access
+returns. Then use `shared_workspace.py sync-local` to copy missing manifest/reference/
+cut-PAD files without overwriting conflicts. Logs require explicit review and
+`--confirm-no-secrets`; configured-path redaction is not a token scrubber.
 
 Never put passwords, auth headers, or access tokens in command lines or logs. Shared-mode
 redaction handles configured machine-local paths, not arbitrary secrets. Preserve failed
@@ -368,6 +376,17 @@ def ensure_workspace_dirs(root: Path) -> None:
     for name in ("manifest", "logs", "references", "cut-pad-images"):
         (root / name).mkdir(parents=True, exist_ok=True)
     ensure_logging_guide(root / "logs")
+    # Existing folders may have become read-only after a share reconnect or ACL
+    # change. Probe only inside this device's episode logs folder so ensure can
+    # fall back locally before a later manifest/log write fails mid-stage.
+    probe = root / "logs" / f".workspace-write-probe-{os.getpid()}-{secrets.token_hex(4)}"
+    try:
+        with probe.open("x", encoding="ascii", newline="\n") as stream:
+            stream.write("probe\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+    finally:
+        probe.unlink(missing_ok=True)
 
 
 def workspace_storage_mode(root: Path, profile: dict, metadata: dict) -> str:
@@ -414,7 +433,15 @@ def initialize_workspace(profile_path: Path, profile: dict, episode: str,
             "--instance-root instead of creating a duplicate")
     if warning and "workspaces for this device/episode" in warning:
         raise LockError(warning + "; use 'ensure' with an explicit --instance-root")
-    return create_workspace(profile_path, profile, code, series=chosen)
+    try:
+        return create_workspace(profile_path, profile, code, series=chosen)
+    except (LockError, OSError) as exc:
+        # A shared-folder write denial is not permission to write elsewhere in
+        # the release tree. Continue only in the explicit local fallback.
+        fallback = create_local_fallback(profile_path, profile, code, series=chosen)
+        fallback["warning"] = (f"shared device workspace unavailable ({exc}); "
+                               f"using local fallback {fallback['instance_root']}")
+        return fallback
 
 
 def _shell_exports(profile_path: Path, root: Path, mode: str) -> dict[str, str]:
@@ -524,12 +551,8 @@ def create_workspace(profile_path: Path, profile: dict, episode: str,
     shared = profile.get("shared") or {}
     devices = workspace_release_root(profile) / "devices"
     if not devices.is_dir():
-        try:
-            # The only permitted source-tree child is devices/. If the ACL does
-            # not allow creating this one directory, use the local fallback.
-            devices.mkdir()
-        except OSError as exc:
-            raise LockError(f"could not create README-folder devices directory {devices}: {exc}") from exc
+        raise LockError(f"README-folder devices/ is not provisioned: {devices}; "
+                        "use the device-local fallback and sync it later")
     device = safe_component(str(shared.get("device_name") or profile.get("machine") or "device"))
     instance_id = stable_device_instance_id(profile, device, devices)
     instance_name = f"{device}-{instance_id}"
@@ -582,7 +605,8 @@ def create_workspace(profile_path: Path, profile: dict, episode: str,
         "instance_id": instance_id,
         "profile_name": profile_path.name,
         "release_root": ".",
-        "instance_relative_path": episode_root.resolve().relative_to(ROOT.resolve()).as_posix(),
+        "instance_relative_path": episode_root.resolve().relative_to(
+            workspace_release_root(profile)).as_posix(),
         "write_scope": "this machine's episode workspace only",
         "environment": {
             "LDP_INSTANCE_ROOT": ".",
@@ -636,14 +660,18 @@ def resolve_instance_workspace(profile_path: Path, profile: dict, episode: str,
     preferred_id = existing_device_instance_id(profile, device)
     candidates = []
     if devices.is_dir():
-        for root in devices.glob(f"{device}-*/episodes/{folder}"):
-            suffix = root.parents[1].name[len(device) + 1:]
-            if preferred_id and suffix != preferred_id:
-                continue
-            try:
-                candidates.append(validate_instance(str(root), profile_path, profile, identity))
-            except (LockError, OSError, json.JSONDecodeError):
-                continue
+        try:
+            for root in devices.glob(f"{device}-*/episodes/{folder}"):
+                suffix = root.parents[1].name[len(device) + 1:]
+                if preferred_id and suffix != preferred_id:
+                    continue
+                try:
+                    candidates.append(validate_instance(str(root), profile_path, profile, identity))
+                except (LockError, OSError, json.JSONDecodeError):
+                    continue
+        except OSError as exc:
+            notes.append(f"README-folder devices/ could not be enumerated ({exc})")
+            candidates = []
     if len(candidates) == 1 and not requested_root:
         root = candidates[0]
         try:
@@ -727,7 +755,8 @@ def validate_instance(root_value: str, profile_path: Path, profile: dict,
             raise LockError("instance root must have form devices/<device-instance>/episodes/<identity-folder>")
         if (not relative.parts[0].startswith(device + "-") or
                 metadata.get("release_root") != "." or
-                metadata.get("instance_relative_path") != root.relative_to(ROOT.resolve()).as_posix() or
+                metadata.get("instance_relative_path") != root.relative_to(
+                    workspace_release_root(profile)).as_posix() or
                 relative.parts[0].rsplit("-", 1)[-1] != metadata.get("instance_id")):
             raise LockError("workspace metadata does not match this README-folder release/device")
         if metadata.get("machine") != profile.get("machine"):
@@ -784,6 +813,129 @@ def publish_reference(source: Path, instance: Path, name: str | None,
         json.dump(record, f, indent=2)
         f.write("\n")
     return destination
+
+
+def _sync_payload(source: Path, redactions: list[tuple[str, str]]) -> bytes:
+    payload = source.read_bytes()
+    if source.suffix.casefold() in SYNC_LOG_EXTENSIONS:
+        try:
+            text = payload.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise LockError(f"refusing to sync non-UTF-8 text evidence: {source}") from exc
+        payload = redact_shared_text(text, redactions).encode("utf-8")
+    return payload
+
+
+def sync_local_workspace(profile_path: Path, profile: dict, episode: str,
+                         local_instance_root: str | Path, *,
+                         target_release_root: str | Path | None = None,
+                         include_logs: bool = False,
+                         confirm_no_secrets: bool = False) -> dict:
+    """Copy device-local fallback evidence into the shared device workspace.
+
+    This is intentionally no-overwrite. Identical files are skipped; name conflicts
+    remain in the local workspace and are reported for manual reconciliation. The
+    shared ``workspace.json`` is not copied because it describes a different storage
+    mode and release-relative location.
+    """
+    chosen, code, identity, _folder = parse_episode_identity(episode)
+    local = validate_instance(str(local_instance_root), profile_path, profile, identity)
+    local_meta = json.loads((local / "workspace.json").read_text(encoding="utf-8"))
+    if local_meta.get("storage_mode") not in ("local-fallback", "shared-release", "readme-workspace"):
+        raise LockError(f"sync-local source has an unsupported workspace mode: {local}")
+    if include_logs and not confirm_no_secrets:
+        raise LockError("--include-logs requires --confirm-no-secrets after reviewing the logs")
+
+    source_release = workspace_release_root(profile)
+    target_root = Path(target_release_root).expanduser().resolve() if target_release_root else source_release
+    source_version_file = source_release / "WORKFLOW_VERSION"
+    target_version_file = target_root / "WORKFLOW_VERSION"
+    if not target_root.is_dir() or not (target_root / "devices").is_dir():
+        raise LockError(f"target release must already have a provisioned devices/ folder: {target_root}")
+    if not source_version_file.is_file() or not target_version_file.is_file():
+        raise LockError("source and target releases must both have a readable WORKFLOW_VERSION marker")
+    source_version = source_version_file.read_text(encoding="ascii").strip()
+    target_version = target_version_file.read_text(encoding="ascii").strip()
+    if source_version != target_version:
+        raise LockError(
+            f"source/target workflow versions differ ({source_version} vs {target_version}); "
+            "reconcile the release before syncing episode evidence")
+
+    target_profile = copy.deepcopy(profile)
+    target_profile.setdefault("shared", {})["release_root"] = str(target_root)
+    target_meta = create_workspace(profile_path, target_profile, code, series=chosen)
+    target = Path(target_meta["instance_root"]).resolve()
+    if target == local:
+        raise LockError("local fallback and shared workspace resolve to the same path")
+    if target_meta.get("storage_mode") == "local-fallback":
+        raise LockError("shared workspace is unavailable; local evidence was left in place")
+
+    subdirectories = (*SYNC_SUBDIRECTORIES, *(("logs",) if include_logs else ()))
+    redactions = shared_redactions(profile_path, target_profile)
+    copied: list[str] = []
+    identical: list[str] = []
+    conflicts: list[str] = []
+    for subdirectory in subdirectories:
+        source_root = local / subdirectory
+        target_root = target / subdirectory
+        if not source_root.exists():
+            continue
+        if source_root.is_symlink() or not source_root.is_dir():
+            raise LockError(f"refusing unsafe local sync source: {source_root}")
+        target_root.mkdir(parents=True, exist_ok=True)
+        if target_root.is_symlink():
+            raise LockError(f"refusing symlink shared sync target: {target_root}")
+        for source in sorted(source_root.rglob("*")):
+            relative = source.relative_to(source_root)
+            if source.is_symlink():
+                raise LockError(f"refusing symlink in local fallback tree: {source}")
+            if source.is_dir():
+                continue
+            if not source.is_file():
+                raise LockError(f"refusing non-regular local sync source: {source}")
+            destination = target_root / relative
+            current = target_root
+            for component in relative.parent.parts:
+                current = current / component
+                if current.is_symlink():
+                    raise LockError(f"refusing symlink in shared sync destination path: {current}")
+                current.mkdir(exist_ok=True)
+            payload = _sync_payload(source, redactions)
+            relname = f"{subdirectory}/{relative.as_posix()}"
+            if destination.exists():
+                if destination.is_symlink() or not destination.is_file():
+                    raise LockError(f"refusing unsafe shared sync destination: {destination}")
+                if destination.read_bytes() == payload:
+                    identical.append(relname)
+                else:
+                    conflicts.append(relname)
+                continue
+            created = False
+            try:
+                with destination.open("xb") as stream:
+                    created = True
+                    stream.write(payload)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                if destination.read_bytes() != payload:
+                    raise LockError(f"shared sync verification failed: {destination}")
+                copied.append(relname)
+            except Exception:
+                if created:
+                    destination.unlink(missing_ok=True)
+                raise
+    return {
+        "identity": identity,
+        "local_instance_root": str(local),
+        "shared_instance_root": str(target),
+        "target_release_root": str(target_root),
+        "copied": copied,
+        "identical": identical,
+        "conflicts": conflicts,
+        "logs_included": include_logs,
+        "logs_redacted_for_configured_paths": include_logs,
+        "manifest_overwrite": False,
+    }
 
 
 def publish_cut_pad(source: Path, instance: Path, output_frame: int,
@@ -874,6 +1026,18 @@ def main() -> int:
     cfg.add_argument("--source", required=True, help="existing device-local profile to copy")
     cfg.add_argument("--output", required=True, help="new profile path outside the shared release; no overwrite")
     cfg.add_argument("--device-name", help="sanitized device label stored in the profile")
+    sync = sub.add_parser("sync-local", help="no-overwrite sync of local-fallback episode evidence into devices/")
+    sync.add_argument("--profile", required=True)
+    sync.add_argument("--episode", required=True)
+    sync.add_argument("--local-instance-root", required=True,
+                      help="exact local-fallback episode root reported by ensure")
+    sync.add_argument("--target-release-root",
+                      help="shared release tree to sync to (defaults to the profile's release_root)")
+    sync.add_argument("--series", choices=("DS9", "VOY"))
+    sync.add_argument("--include-logs", action="store_true",
+                      help="also copy local logs after reviewing them for secrets")
+    sync.add_argument("--confirm-no-secrets", action="store_true",
+                      help="required with --include-logs; path redaction does not remove arbitrary secrets")
     args = ap.parse_args()
     try:
         if args.command == "configure-profile":
@@ -889,6 +1053,19 @@ def main() -> int:
             if not result:
                 raise LockError(warning or "could not prepare episode workspace")
             print(json.dumps({"workspace": result, "warning": warning}, indent=2))
+            return 0
+        if args.command == "sync-local":
+            report = sync_local_workspace(
+                profile_path, profile, args.episode, args.local_instance_root,
+                target_release_root=args.target_release_root,
+                include_logs=args.include_logs,
+                confirm_no_secrets=args.confirm_no_secrets)
+            print(json.dumps(report, indent=2, ensure_ascii=False))
+            if report["conflicts"]:
+                print("SYNC INCOMPLETE: conflicting shared files were preserved; reconcile them manually.",
+                      file=sys.stderr)
+                return 1
+            print("SYNC COMPLETE: source files were preserved; no shared file was overwritten.")
             return 0
         if args.command == "init":
             result = initialize_workspace(profile_path, profile, args.episode,

@@ -174,12 +174,26 @@ still only with a verified timestamped filename, source-DVD hash, exact output-P
 and `--confirm-mapping`. It stays inside this workspace; only an authorized maintainer may
 later promote it into curated `Cut Pad Images/`.
 
-**ACL policy for any shared README folder:** the release root and all source files are
-read/execute only. `devices/` is the only writable subtree; each device may create its own
-instance folder and modify only that folder and descendants, never sibling device folders.
-An administrator must enforce this in the OS/share ACL. The workflow does not change ACLs;
-the doctor still blocks processing if the release root itself appears writable. Workspace
-setup/fallback is separate from that ACL readiness gate.
+**Shared-folder write policy:** application guards allow bundle writes only to this device's
+`devices/<device-instance>/episodes/<identity>/` workspace; release-root and peer-device
+targets remain rejected. The doctor reports process-level release-root writability as an
+advisory, not a processing gate or ACL audit. If the device workspace is unavailable, continue
+in the isolated device-local fallback; do not write around the path guard.
+
+After shared access returns, resync a reviewed local fallback without overwriting shared
+files:
+
+```powershell
+python scripts\shared_workspace.py sync-local --profile $profilePath `
+  --episode $identity --local-instance-root $fallbackRoot
+```
+
+This copies missing manifest/reference/cut-PAD evidence and reports conflicts for manual
+review. Logs are excluded by default; after reviewing them for secrets, add
+`--include-logs --confirm-no-secrets`. When working from a local source-bundle copy after a
+share-mount failure, add `--target-release-root <shared-release-root>`; source and target
+`WORKFLOW_VERSION` must match. `workspace.json` is not copied, and a different shared file
+is never overwritten.
 
 **Keep debugging evidence useful:** preserve each unique stage `.log` and `.json` report,
 exact command/arguments, workflow version, gate outcomes, full tool output, exit codes, Orc
@@ -203,6 +217,8 @@ profile and the three user inputs (do not copy another episode's values):
 ```powershell
 $profile = Get-Content .\machine.json -Raw | ConvertFrom-Json
 $ep = '<derive and verify from Archive/DVD>'
+$series = '<verified DS9 or VOY identity>'
+$identity = "$series`:$ep"
 $title = '<verified title>'
 $url = '<user-provided Archive item URL>'
 $source = '<the user-provided download destination; if omitted, derive it in section 2>'
@@ -216,8 +232,12 @@ $fp = $profile.tools.ffprobe
 - Per-episode measurements and file references: local `episodes\<code>.json`, or
   `<instance-root>\manifest\<code>.json` in shared-release mode.
 - Bundle stage scripts: `scripts\`; Orc project template: `templates\stack_template.orcprj`.
-- Final gate: `python scripts\qc_report.py --episode <code>`; require exit 0 and inspect
-  `roots.probe\<code>-qc-report.md`.
+- Final gate: `python scripts\qc_report.py --episode <identity>`; require exit 0 and inspect
+  the unique `roots.probe\<code>-qc-report-<run-id>.md`.
+- In shared-workspace mode, QC also writes a unique `<code>-qc-closeout-<run-id>.md` to
+  this device's episode `logs/`. It links the detailed report by SHA-256 and snapshots which
+  critical source/retime files were present at QC time. Keep this closeout alongside the
+  per-stage logs; a later authorized cleanup may make a fresh source-hash QC rerun impossible.
 - The detailed E01/E04/E05 figures below are historical regression evidence only. Never
   copy their frame counts, trim values, audio rates/skips, alignment maps, or retime steps.
 
@@ -404,14 +424,28 @@ Confirm the title/capture list and run `python scripts\validate_episode.py --epi
     checkpoints only completed passes; if interrupted, resume with
     `python scripts\select_stack_reference.py --episode <code> --resume <logs/checkpoint.json>`.
     The checkpoint verifies the workflow/manifest/profile, capture inputs, Orc executable, and
-    completed project/log hashes. Preserve the checkpoint and partial logs; do not restart with
-    a different input set or add a harness timeout to a long background refresh.
+     completed project/log hashes. Preserve the checkpoint and partial logs; do not restart with
+     a different input set or add a harness timeout to a long background refresh.
 2. Graph: one `tbc_source` and `frame_map` per capture → `source_align` → `stacker Weighted` → `video_sink`. Keep the measured reference/input order. Sink baseline: `mov-prores`, `prores_profile=hq`, `decoder_type=ntsc3d`, `adapt_threshold=0.1`, `chroma_weight=2.0`, `ntsc_phase_comp=true`, display aspect 4:3. Do not add unmeasured crops or post-stack filters.
-3. Before the render, estimate the peak ProRes and scratch-space demand and run
-   `python scripts\check_space_budget.py --stage stack-render --planned-gib <estimate>`.
-   Preserve `limits.min_free_gb` after the planned writes; do not reuse another episode's
-   output size as a default. Render the manifest project with the profile-resolved Orc CLI:
-   `orc-cli <project> --process` (resolve `<project>` and executable from the profile/manifest).
+3. Before the render, estimate the peak ProRes and scratch-space demand from this episode.
+   Run the allowlisted supervised stage (the estimate is required and is not reusable):
+
+   ```powershell
+   python scripts\run_stage.py --episode $identity --stage stack-render --execute `
+     --planned-gib <measured-peak-gib> --space-root prores
+   ```
+
+   The stage runs doctor/input/space gates, refuses an existing stack master, puts a distinct
+   stage log and Orc `--log-file` under this device's episode `logs/`, and starts the process
+   in a killable process group. It uses file-based Orc logging, not `Tee` on an Orc-owned log.
+   Shared mode defaults the child working directory to the local home folder; if invoking a
+   direct helper, use an explicit local `-WorkingDirectory`, not the SMB release folder. The
+   no-progress watchdog is 20 minutes based on observed run cadence. It records evidence and
+   stops only the launched process tree; if termination is not confirmed, do not relaunch over
+   outputs—inspect the PID/output and escalate. Preserve `limits.min_free_gb`; if the shared
+   device workspace is unavailable, let `ensure` use the local fallback rather than writing
+   elsewhere in the release tree.
+
    **Render from the local fast volume**: historical runs measured ~39 fps locally versus
    ~4.5 fps on an SMB share. In the first 60–90 seconds check one “Loaded” line per input,
    expected processing frame range, and StackerStage reports with the actual input count on
@@ -438,7 +472,14 @@ evidence lookup, or clip run. A historical cross-machine test is recorded in
 `M5 Mac LaserDisc Project Updates Log.md`, §8, as informational background only. This
 assumption does not measure this episode's cadence.
 
-Generate a full-side TFM log from the native 29.97 master: `TFM(order=-1, pp=0, chroma=true, slow=2)`. Add a motion trace for the native-30p gate, then run `scripts\build_map.ps1 -Episode <code>` and read the full summary and `VERDICT`. Measure cadence; do not infer it from `idet` or motion alone. For uniform 3:2 use `TDecimate(mode=1, cycle=5, cycleR=1)` → exactly 24000/1001. If measured interlaced inserts need repair, use only the generated targeted QTGMC map; `FPSDivisor=2` is mandatory for 1:1 replacement. Keep output 10-bit and progressive; do not globally deinterlace, denoise, interpolate, or RIFE. Targeted single-frame `PAD_1` repair is the sole exception; follow §6's PAD-frame procedure, preserve total frame count, and never alter cadence/timing.
+Generate a full-side TFM log from the native 29.97 master: `TFM(order=-1, pp=0, chroma=true, slow=2)`. Set `$tfmSessionLog` to the complete log captured from its FFmpeg invocation (for example, `tfm-log-<episode>-session.log`). Verify it using that **FFmpeg session log**, not the TFM decision log:
+
+```powershell
+python scripts\run_stage.py --episode $identity --stage verify-tfm-run --execute `
+  --script-arg=--session-log --script-arg=$tfmSessionLog
+```
+
+This checks the FFmpeg exit code and final `frame=` count against measured `stack.frames`; the decision log itself is checked for existence/size only. A failure is a STOP, not a reason to infer success from a large TFM log. Add a motion trace for the native-30p gate, then run `scripts\build_map.ps1 -Episode <code>` and read the full summary and `VERDICT`. Measure cadence; do not infer it from `idet` or motion alone. For uniform 3:2 use `TDecimate(mode=1, cycle=5, cycleR=1)` → exactly 24000/1001. If measured interlaced inserts need repair, use only the generated targeted QTGMC map; `FPSDivisor=2` is mandatory for 1:1 replacement. Keep output 10-bit and progressive; do not globally deinterlace, denoise, interpolate, or RIFE. Targeted single-frame `PAD_1` repair is the sole exception; follow §6's PAD-frame procedure, preserve total frame count, and never alter cadence/timing.
 
 **One frame domain for log and encode:** run the TFM log on the audio-aligned clip (`.Trim(pad,0)`, pad = the audio capture's measured alignment offset). The bundled `build_map.ps1 -Episode <code>` uses the same `audio.pad_frames`, measured output `video.head_trim` / `video.tail_trim`, TFM log, and motion trace from the manifest. The motion probe must run on a trim-only AviSynth script (a script that still contains TFM would re-run TFM and overwrite the log); its output is N-1 values (`tblend` drops frame 0), which the map builder pads automatically. It refuses to overwrite existing artifacts unless explicitly forced.
 
@@ -469,9 +510,19 @@ if ($LASTEXITCODE -ne 0) { throw 'EFM output path check failed; preserve existin
 $efmDir = Split-Path -Parent $efmPlan.output_wav
 New-Item -ItemType Directory -Path $efmDir -Force | Out-Null
 $efmOut = $efmPlan.output_wav
-& $orc --source "tbc_source=input_path='$source\$capture.tbc':efm_path='$source\$capture.efm'" `
-  --sink "EFMSink=output_path='$efmOut':decode_mode=audio:report=true"
+Push-Location -LiteralPath $HOME
+try {
+  & $orc --source "tbc_source=input_path='$source\$capture.tbc':efm_path='$source\$capture.efm'" `
+    --sink "EFMSink=output_path='$efmOut':decode_mode=audio:report=true"
+  $efmExit = $LASTEXITCODE
+} finally { Pop-Location }
+if ($efmExit -ne 0) { throw "EFMSink failed with exit $efmExit" }
 ```
+
+In shared/SMB mode, keep the shell's working directory on a local volume; the source and
+output arguments above are resolved absolute paths. Each OpenCode shell call is a new
+process, so direct helpers need the `LDP_*` exports from `shared_workspace.py ensure` again.
+Use `run_stage.py` when a matching allowlisted stage exists.
 
 Decode each capture to `roots.work/audio/<episode>/<capture>-efm.wav`; the matching report
 is `<capture>-efm.wav.txt`. Never use a shared flat `audio/<capture>` destination across
@@ -481,7 +532,16 @@ or report paths rather than overwriting a prior decode.
 If needed, unpack `.efm.7z` first. Keep the report and original WAV. Never assume an archive `.pcm` is valid: Emissary’s uploader `L1.pcm` disagreed with fresh EFMSink audio and was not safe to use.
 
 When several captures include raw EFM, decode each candidate and compare reports before
-choosing the WAV used for correction. Record post-C2 loss, concealment, uncorrectable and
+choosing the WAV used for correction. Run the input-gated comparison through the stage runner:
+
+```powershell
+python scripts\run_stage.py --episode $identity --stage efm-report-table --execute
+```
+
+It rejects missing/extra capture labels and an EFMSink `Output file` outside the active
+episode's EFM folder. A missing/mismatched path is a STOP; do not use archived logs copied
+from another episode. `efm_report_table.py --dir` is unbound and is not selection evidence.
+Record post-C2 loss, concealment, uncorrectable and
 missing sections, out-of-order sections, and Q-timecode continuity. Select from measured
 report evidence; do not select solely from capture label or the summary word `POOR` (that
 label can be triggered by missing sections even when data-loss percentages are small).
@@ -645,6 +705,21 @@ updates only the reviewed `ld_black`/`dvd_silence` candidate intervals; `off_bef
 and adjudicate both content edges with `measure_break_edges.py`; unresolved edges stay blocked.
 
 For candidate break windows in the manifest, run `python scripts\measure_break_edges.py --episode <identity>`. It reports long-window content offsets, DP medians, score/runner-up margins, and differences from any recorded offsets. Before/after content windows are clipped clear of adjacent recorded black intervals. If one side is clipped or too low-texture, the report preserves any valid opposite-side evidence as `partial-window`/`partial-measurement`, but the command remains nonzero and the break remains unmeasured. The helper does not decide which edge wins, whether a music-through black is merged, or edit the manifest. Resolve disagreements using independent methods below; only then record `off_before`/`off_after`.
+
+The retime validator requires `merged_music_through` to be an array of interval objects (not
+label strings), and each non-merged break to contain measured `dvd_silence`, `ld_black`,
+offsets, and step before retime. `gap_s` is retained as an optional adjudication annotation;
+if present, the validator checks it against the measured values. Its formula is
+`step = off_after - off_before` (frames) and
+`gap_s = (dvd_silence_end - dvd_silence_start) - step / (30000/1001)`.
+The generator recomputes the schedule from source intervals/offsets; never use `gap_s` to
+replace those inputs.
+
+Before retime generation, `validate_episode --stage retime` also verifies that the measured
+`video.delta_s` anchor lies within the sampled master-frame range in `align_npy`. If it does
+not, rerun `measure_dvd_alignment.py --first-master-frame <measured-frame-before-delta>` using
+the head survey and episode evidence. Do not blindly start at frame 0: unpaired front matter
+can poison the alignment fit. No path is extrapolated to make the gate pass.
 
 Emissary-only regression map:
 

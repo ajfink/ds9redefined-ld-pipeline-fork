@@ -44,7 +44,8 @@ sys.path.insert(0, str(ROOT))
 
 from dependency_lock import (LockError, redact_shared_text, shared_redactions)  # noqa: E402
 from ldcommon import device_workspace_enabled  # noqa: E402
-from run_stage import STAGES, load_profile  # noqa: E402
+from process_utils import safe_console_write  # noqa: E402
+from run_stage import STAGES, load_profile, safe_working_directory  # noqa: E402
 from shared_workspace import resolve_instance_workspace  # noqa: E402
 
 PLAN_SCHEMA = "ld-pipeline-workflow-plan-v1"
@@ -575,7 +576,7 @@ def _stop_child_tree(proc: subprocess.Popen) -> None:
 
 def _run_child(command: list[str], env: dict[str, str], log,
                redactions: list[tuple[str, str]], state: dict,
-               state_path: Path) -> int:
+               state_path: Path, cwd: Path) -> int:
     safe_command = redact_shared_text(_display(command), redactions)
     log.write(f"\n[{utc_now()}] COMMAND: {safe_command}\n")
     log.flush()
@@ -583,7 +584,7 @@ def _run_child(command: list[str], env: dict[str, str], log,
     try:
         options = {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT,
                    "text": True, "encoding": "utf-8", "errors": "replace",
-                   "bufsize": 1, "env": env}
+                   "bufsize": 1, "env": env, "cwd": cwd}
         if os.name == "nt":
             options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
@@ -622,8 +623,7 @@ def _run_child(command: list[str], env: dict[str, str], log,
             safe_line = redact_shared_text(line, redactions)
             log.write(safe_line)
             log.flush()
-            sys.stdout.write(safe_line)
-            sys.stdout.flush()
+            safe_console_write(safe_line)
             last_line = line.rstrip("\r\n")
             line_count += 1
             if line_count % 25 == 0:
@@ -650,6 +650,8 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool) -> int:
     plan, raw = load_plan(plan_path)
     plan_path = plan_path.resolve()
     profile_path, profile = load_profile(plan["profile"])
+    child_cwd = safe_working_directory(
+        profile, device_workspace_enabled(profile), None)
     profile_digest = _profile_digest(profile_path)
     logs, instance_root, shell_exports, workspace_warning = workflow_logs(
         profile_path, profile, plan, create_workspace=execute)
@@ -727,6 +729,7 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool) -> int:
             save_state(state_path, state, redactions)
 
         env = os.environ.copy()
+        env.setdefault("PYTHONIOENCODING", "utf-8")
         env["LDP_PROFILE"] = str(profile_path)
         env["LDP_SERIES"] = plan["series"]
         env["LDP_EPISODE"] = plan["episode"]
@@ -771,7 +774,8 @@ def run_plan(plan_path: Path, *, execute: bool, resume: bool) -> int:
                     started = time.monotonic()
                     command = _command(plan, step, profile_path, instance_root)
                     try:
-                        rc = _run_child(command, env, log, redactions, state, state_path)
+                        rc = _run_child(command, env, log, redactions, state, state_path,
+                                        cwd=child_cwd)
                     except KeyboardInterrupt:
                         saved["status"] = "INTERRUPTED"
                         saved["finished_utc"] = utc_now()

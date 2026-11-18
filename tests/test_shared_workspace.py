@@ -19,7 +19,8 @@ import shared_workspace  # noqa: E402
 from ldcommon import (PipelineError, assert_writable_path, episode_manifest_path,
                       shared_instance_root)  # noqa: E402
 from shared_workspace import (LockError, configure_shared_profile,
-                              initialize_workspace, resolve_instance_workspace)  # noqa: E402
+                              initialize_workspace, resolve_instance_workspace,
+                              sync_local_workspace)  # noqa: E402
 
 
 class SharedWorkspaceTests(unittest.TestCase):
@@ -88,6 +89,210 @@ class SharedWorkspaceTests(unittest.TestCase):
                 self.assertEqual(episode_manifest_path("S01E09", SimpleNamespace(
                     profile=profile, profile_path=profile_path)),
                     validated / "manifest" / "S01E09.json")
+
+    def test_shared_devices_folder_is_never_created_at_release_root(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bundle = root / "ld-pipeline"
+            bundle.mkdir()
+            (bundle / "WORKFLOW_VERSION").write_text("16\n", encoding="ascii")
+            profile_path = root / "profile.json"
+            profile_path.write_text("{}\n", encoding="utf-8")
+            local_logs = root / "local" / "logs"
+            profile = {"machine": "DEVICE-P", "roots": {"logs": str(local_logs)},
+                       "shared": {"enabled": True, "release_root": str(bundle),
+                                  "device_name": "DEVICE-P"}}
+            with patch.object(shared_workspace, "ROOT", bundle):
+                result, warning = resolve_instance_workspace(profile_path, profile, "S01E09")
+            self.assertEqual(result["storage_mode"], "local-fallback")
+            self.assertFalse((bundle / "devices").exists())
+            self.assertIn("devices/", warning)
+
+    def test_unenumerable_shared_devices_tree_falls_back_locally(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bundle = root / "ld-pipeline"
+            devices = bundle / "devices"
+            devices.mkdir(parents=True)
+            (bundle / "WORKFLOW_VERSION").write_text("16\n", encoding="ascii")
+            profile_path = root / "profile.json"
+            profile_path.write_text("{}\n", encoding="utf-8")
+            local_logs = root / "local" / "logs"
+            profile = {"machine": "DEVICE-ENUM", "roots": {"logs": str(local_logs)},
+                       "shared": {"enabled": True, "release_root": str(bundle),
+                                  "device_name": "DEVICE-ENUM"}}
+            original_glob = Path.glob
+
+            def deny_devices_glob(path, pattern):
+                if path == devices:
+                    raise OSError("simulated SMB EINVAL during directory enumeration")
+                return original_glob(path, pattern)
+
+            with patch.object(shared_workspace, "ROOT", bundle), \
+                    patch.object(Path, "glob", deny_devices_glob):
+                result, warning = resolve_instance_workspace(profile_path, profile, "S01E09")
+            self.assertEqual(result["storage_mode"], "local-fallback")
+            self.assertIn("could not be enumerated", warning)
+            self.assertFalse(list(devices.iterdir()))
+
+    def test_unwritable_existing_device_workspace_falls_back_without_peer_or_root_writes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bundle = root / "ld-pipeline"
+            devices = bundle / "devices"
+            devices.mkdir(parents=True)
+            (bundle / "WORKFLOW_VERSION").write_text("16\n", encoding="ascii")
+            profile_path = root / "profile.json"
+            profile_path.write_text("{}\n", encoding="utf-8")
+            local_logs = root / "local" / "logs"
+            profile = {"machine": "DEVICE-RO", "roots": {"logs": str(local_logs)},
+                       "shared": {"enabled": True, "release_root": str(bundle),
+                                  "device_name": "DEVICE-RO"}}
+            with patch.object(shared_workspace, "ROOT", bundle):
+                shared_meta = shared_workspace.create_workspace(
+                    profile_path, profile, "S01E09")
+                shared_root = Path(shared_meta["instance_root"])
+            original_open = Path.open
+
+            def deny_shared_probe(path, *args, **kwargs):
+                if path.parent == shared_root / "logs" and path.name.startswith(".workspace-write-probe-"):
+                    raise PermissionError("simulated per-device ACL denial")
+                return original_open(path, *args, **kwargs)
+
+            with patch.object(shared_workspace, "ROOT", bundle), \
+                    patch.object(Path, "open", deny_shared_probe):
+                result, warning = resolve_instance_workspace(
+                    profile_path, profile, "S01E09", create=True)
+            self.assertEqual(result["storage_mode"], "local-fallback")
+            self.assertNotEqual(Path(result["instance_root"]), shared_root)
+            self.assertIn("not writable", warning)
+            self.assertTrue(shared_root.is_dir())
+            self.assertEqual({path.name for path in bundle.iterdir()},
+                             {"devices", "WORKFLOW_VERSION"})
+            self.assertEqual(len(list(devices.iterdir())), 1)
+
+    def test_local_fallback_can_resync_device_evidence_without_overwrite(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bundle = root / "ld-pipeline"
+            (bundle / "devices").mkdir(parents=True)
+            (bundle / "WORKFLOW_VERSION").write_text("16\n", encoding="ascii")
+            profile_path = root / "profile.json"
+            profile_path.write_text("{}\n", encoding="utf-8")
+            local_logs = root / "local" / "logs"
+            profile = {"machine": "DEVICE-SYNC", "roots": {"logs": str(local_logs)},
+                       "shared": {"enabled": True, "release_root": str(bundle),
+                                  "device_name": "DEVICE-SYNC"}}
+            with patch.object(shared_workspace, "ROOT", bundle):
+                local_meta = shared_workspace.create_local_fallback(
+                    profile_path, profile, "DS9:S01E09")
+                local = Path(local_meta["instance_root"])
+                manifest = local / "manifest" / "S01E09.json"
+                manifest.write_text('{"episode":"S01E09"}\n', encoding="utf-8")
+                reference = local / "references" / "measurement.md"
+                reference.write_text("measured evidence\n", encoding="utf-8")
+                local_log = local / "logs" / "stage.log"
+                local_log.write_text(f"profile={profile_path}\n", encoding="utf-8")
+                with patch.object(shared_workspace, "ROOT", bundle):
+                    result = sync_local_workspace(
+                        profile_path, profile, "S01E09", local,
+                        include_logs=True, confirm_no_secrets=True)
+            target = Path(result["shared_instance_root"])
+            self.assertEqual(set(result["copied"]),
+                             {"manifest/S01E09.json", "references/measurement.md", "logs/stage.log"})
+            self.assertEqual((target / "manifest" / "S01E09.json").read_text(encoding="utf-8"),
+                             manifest.read_text(encoding="utf-8"))
+            self.assertIn("<device-local-profile>",
+                          (target / "logs" / "stage.log").read_text(encoding="utf-8"))
+            target_meta = json.loads((target / "workspace.json").read_text(encoding="utf-8"))
+            self.assertEqual(target_meta["storage_mode"], "shared-release")
+            self.assertFalse((target / "workspace.json").is_relative_to(local))
+            rerun = sync_local_workspace(
+                profile_path, profile, "S01E09", local,
+                include_logs=True, confirm_no_secrets=True)
+            self.assertEqual(rerun["copied"], [])
+            self.assertGreaterEqual(len(rerun["identical"]), 3)
+
+    def test_local_sync_preserves_and_reports_conflicting_shared_manifest(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bundle = root / "ld-pipeline"
+            (bundle / "devices").mkdir(parents=True)
+            (bundle / "WORKFLOW_VERSION").write_text("16\n", encoding="ascii")
+            profile_path = root / "profile.json"
+            profile_path.write_text("{}\n", encoding="utf-8")
+            profile = {"machine": "DEVICE-CONFLICT",
+                       "roots": {"logs": str(root / "local" / "logs")},
+                       "shared": {"enabled": True, "release_root": str(bundle),
+                                  "device_name": "DEVICE-CONFLICT"}}
+            with patch.object(shared_workspace, "ROOT", bundle):
+                local_meta = shared_workspace.create_local_fallback(
+                    profile_path, profile, "S01E09")
+                local = Path(local_meta["instance_root"])
+                source = local / "manifest" / "S01E09.json"
+                source.write_text('{"episode":"S01E09","local":true}\n', encoding="utf-8")
+                target_meta = shared_workspace.create_workspace(profile_path, profile, "S01E09")
+                target = Path(target_meta["instance_root"])
+                shared_manifest = target / "manifest" / "S01E09.json"
+                shared_manifest.write_text('{"episode":"S01E09","shared":true}\n', encoding="utf-8")
+                result = sync_local_workspace(profile_path, profile, "S01E09", local)
+            self.assertEqual(result["conflicts"], ["manifest/S01E09.json"])
+            self.assertEqual(shared_manifest.read_text(encoding="utf-8"),
+                             '{"episode":"S01E09","shared":true}\n')
+            self.assertEqual(source.read_text(encoding="utf-8"),
+                             '{"episode":"S01E09","local":true}\n')
+
+    def test_local_copy_can_resync_to_explicit_shared_release_of_same_version(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            local_bundle = root / "local-copy"
+            shared_bundle = root / "shared" / "ld-pipeline"
+            local_bundle.mkdir(parents=True)
+            (local_bundle / "devices").mkdir()
+            shared_bundle.mkdir(parents=True)
+            (shared_bundle / "devices").mkdir()
+            for bundle in (local_bundle, shared_bundle):
+                (bundle / "WORKFLOW_VERSION").write_text("16\n", encoding="ascii")
+            profile_path = root / "profile.json"
+            profile_path.write_text("{}\n", encoding="utf-8")
+            profile = {"machine": "DEVICE-COPY", "roots": {"logs": str(root / "local" / "logs")},
+                       "shared": {"enabled": True, "release_root": str(local_bundle),
+                                  "device_name": "DEVICE-COPY"}}
+            with patch.object(shared_workspace, "ROOT", local_bundle):
+                local_meta = shared_workspace.create_workspace(
+                    profile_path, profile, "S01E09")
+                local = Path(local_meta["instance_root"])
+                (local / "manifest" / "S01E09.json").write_text(
+                    '{"episode":"S01E09","source":"local-copy"}\n', encoding="utf-8")
+                result = sync_local_workspace(
+                    profile_path, profile, "S01E09", local,
+                    target_release_root=shared_bundle)
+            target = Path(result["shared_instance_root"])
+            self.assertTrue(target.is_relative_to(shared_bundle / "devices"))
+            self.assertEqual(json.loads((target / "manifest" / "S01E09.json").read_text(
+                encoding="utf-8"))["source"], "local-copy")
+
+    def test_local_sync_refuses_release_version_mismatch(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source_bundle = root / "source"
+            target_bundle = root / "target"
+            for bundle, version in ((source_bundle, "16"), (target_bundle, "15")):
+                (bundle / "devices").mkdir(parents=True)
+                (bundle / "WORKFLOW_VERSION").write_text(version + "\n", encoding="ascii")
+            profile_path = root / "profile.json"
+            profile_path.write_text("{}\n", encoding="utf-8")
+            profile = {"machine": "DEVICE-MISMATCH",
+                       "roots": {"logs": str(root / "local" / "logs")},
+                       "shared": {"enabled": True, "release_root": str(source_bundle),
+                                  "device_name": "DEVICE-MISMATCH"}}
+            with patch.object(shared_workspace, "ROOT", source_bundle):
+                local_meta = shared_workspace.create_local_fallback(
+                    profile_path, profile, "S01E09")
+                with self.assertRaisesRegex(LockError, "versions differ"):
+                    sync_local_workspace(profile_path, profile, "S01E09",
+                                         local_meta["instance_root"],
+                                         target_release_root=target_bundle)
 
     def test_legacy_shared_workspace_mode_is_inferred_without_rewriting_provenance(self):
         with tempfile.TemporaryDirectory() as temp:

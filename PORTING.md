@@ -101,16 +101,15 @@ plus `shared.release_root` to this copy's bundle:
 }
 ```
 
-A release/share administrator makes the README folder and all release files read/execute
-only. `devices/` is the sole writable child (pre-provision it or allow creation of that
-exact directory). A device may create its own instance folder and modify only that folder
-and descendants, not the parent `devices/` contents or another device's folder. V7 does
-**not** change ACLs.
+A release/share administrator may enforce read/execute on the README folder and release
+files, with `devices/` pre-provisioned and each device allowed to modify only its own
+`devices/<device-instance>/` folder. The workflow never changes ACLs and its application
+guards reject writes to the release root or peer-device folders.
 Create a no-overwrite local profile with
 `python scripts/shared_workspace.py configure-profile --source <local-profile> --output
 <new-local-profile>` when needed; both profiles stay outside the README folder. The doctor
-checks whether this process appears able to write the release root; this is not an ACL
-audit. Shared-mode processing remains blocked if root writes are available.
+reports process-level release-root writability as an **advisory** only; it is not an ACL
+audit or processing gate. The application write-path guard remains mandatory.
 
 At episode start, device-instance workspace creation is a **required setup instruction,
 but not a workflow gate**. Prefer `ensure`:
@@ -123,11 +122,25 @@ The expected path is `<README-folder>/devices/<device>-<instance-id>/episodes/<c
 with separate `manifest/`, `logs/`, `references/`, and `cut-pad-images/` subfolders. `ensure`
 reuses one unambiguous device/episode workspace or creates it under this README's folder.
 `run_stage.py` invokes this setup automatically if `--instance-root` is omitted. If the
-README-folder `devices/` path is missing/inaccessible, it warns and falls back to the
+README-folder device workspace is missing/inaccessible, it warns and falls back to the
 machine profile's local `roots.logs` or `roots.work`; this keeps manifests/logs isolated
 without writing elsewhere in the README folder. Fallback data is not shared with peers.
 Use the returned `LDP_INSTANCE_ROOT` to resume; use a different explicit root for a
 separate concurrent instance.
+
+After shared access returns, resync a reviewed local fallback without overwriting files:
+
+```text
+python scripts/shared_workspace.py sync-local --profile <local-machine.json> \
+  --episode <code> --local-instance-root <path-reported-by-ensure>
+```
+
+This copies missing manifest/reference/cut-PAD evidence and reports conflicts for manual
+review. Logs are excluded by default; only after reviewing them for secrets, add
+`--include-logs --confirm-no-secrets`. When working from a local source-bundle copy after a
+share-mount failure, add `--target-release-root <shared-release-root>`; both bundles must
+have the same `WORKFLOW_VERSION`. `workspace.json` is never copied, and conflicting shared
+files are never overwritten.
 
 In shared mode, manifests/backups go to this instance's `manifest/`, workflow logs to its
 `logs/`, and its references/cut-PAD inbox stay within the same instance. Curated release

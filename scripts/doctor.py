@@ -178,6 +178,18 @@ def linux_preflight(profile: dict, profile_file: Path, interpreter: str,
             "episode": episode, "profile": str(profile_file)}
 
 
+def shared_workspace_ready(shared_report: dict) -> bool:
+    """ACL writability is advisory; only an isolated writable destination gates readiness.
+
+    Bundle writes are restricted by application path guards. If the per-device
+    workspace cannot be created or written, shared_workspace falls back to the
+    device-local roots and can be synced later.
+    """
+    if shared_report.get("enabled") is not True:
+        return True
+    return shared_report.get("instance_ready") is True
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--profile", help="machine profile; defaults to LDP_PROFILE or bundle machine.json")
@@ -252,12 +264,14 @@ def main() -> int:
                 "device_write_scope": (str(devices / "<device-instance>") if devices.is_dir()
                                        else "unavailable; device-local fallback is used"),
                 "release_root_acl_warning": (
-                    "the current process appears able to write the release root; configure the "
-                    "share ACL read-only for the release tree and writable only under this device's devices/<device-instance>/ folder"
+                    "ADVISORY: this process can write the release root. Workflow path guards "
+                    "limit bundle writes to this device's episode folder; if that workspace is "
+                    "unavailable, use the device-local fallback and sync later."
                     if os.access(release, os.W_OK) else
                     "release-root write access is not reported for this process"),
                 "release_root_writable_for_process": os.access(release, os.W_OK),
-                "application_write_scope": "episode manifest, stage logs, references, and cut-PAD images are redirected into this unique instance folder",
+                "release_root_acl_is_gate": False,
+                "application_write_scope": "only this device's episode manifest, logs, references, and cut-PAD images are written under devices/; failed workspace writes use device-local fallback",
             })
             if instance is None:
                 shared_report["setup_note"] = "machine-level diagnostic only; run_stage will create the README-folder workspace or fall back to device-local roots without blocking the episode"
@@ -282,9 +296,7 @@ def main() -> int:
             "macos": "macOS arm64 end-to-end workflow demonstrated on M5 (S01E10); fresh-device setup is not independently certified",
             "linux": "UNTESTED: x86_64 dependency/capability candidate only; do not process a delivery",
         }[target_os]
-        shared_ready = (shared_report.get("enabled") is not True or
-                        (shared_report.get("instance_ready") is True and
-                         shared_report.get("release_root_writable_for_process") is not True))
+        shared_ready = shared_workspace_ready(shared_report)
         ready = bool(platform_report.get("ok") and lock_report.get("ok") and
                      profile_os == target_os and target_os != "linux" and shared_ready)
         report = {

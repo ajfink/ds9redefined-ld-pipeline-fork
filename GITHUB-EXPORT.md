@@ -1,7 +1,7 @@
 # GitHub source-only export
 
 This public repository contains workflow source, documentation, tests, and portable
-templates, V15 doctor/stage/workflow, measurement, timing, Archive catalog, and retime-candidate tools, and platform Python locks. It intentionally does
+templates, V16 doctor/stage/workflow, measurement, timing, Archive catalog, retime-candidate, provenance, and validation tools, and platform Python locks. It intentionally does
 **not** contain:
 
 - `machine.json` or machine-specific profiles;

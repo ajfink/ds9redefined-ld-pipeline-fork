@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from ldcommon import (BUNDLE, Ld, PipelineError, assert_writable_path,
                       episode_manifest_path, load_episode,
                       redact_shared_text)  # noqa: E402
+from process_utils import process_group_options, safe_console_write, terminate_process_tree  # noqa: E402
 
 MIN_CAPTURES = 2
 MAX_CAPTURES = 6
@@ -160,10 +161,17 @@ def _run_and_log(command: list[str], log_path: Path) -> subprocess.CompletedProc
         log.write(f"Command: {safe_command}\n--- merged stdout/stderr ---\n")
         log.flush()
         try:
-            child = subprocess.Popen(
-                command, cwd=str(BUNDLE), stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT, text=True, encoding="utf-8",
-                errors="replace", bufsize=1)
+            options = {
+                "cwd": str(Path.home().resolve()),
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.STDOUT,
+                "text": True,
+                "encoding": "utf-8",
+                "errors": "replace",
+                "bufsize": 1,
+            }
+            options.update(process_group_options())
+            child = subprocess.Popen(command, **options)
         except OSError as exc:
             log.write(f"Could not run command: {exc}\nExit code: 127\n")
             log.flush()
@@ -190,7 +198,7 @@ def _run_and_log(command: list[str], log_path: Path) -> subprocess.CompletedProc
                                  f"last output: {last_output}\n")
                     log.write(redact_shared_text(heartbeat, ld))
                     log.flush()
-                    print(heartbeat, end="", flush=True)
+                    safe_console_write(heartbeat)
                     continue
                 if line is None:
                     break
@@ -199,17 +207,13 @@ def _run_and_log(command: list[str], log_path: Path) -> subprocess.CompletedProc
                 safe_line = redact_shared_text(line, ld)
                 log.write(safe_line)
                 log.flush()
-                print(safe_line, end="", flush=True)
+                safe_console_write(safe_line)
             returncode = child.wait()
             reader.join()
         except KeyboardInterrupt:
-            child.terminate()
-            try:
-                child.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                child.kill()
-                child.wait()
-            log.write("\nINTERRUPTED by operator; partial Orc output is preserved above.\n")
+            terminated = terminate_process_tree(child)
+            log.write("\nINTERRUPTED by operator; partial Orc output is preserved above.\n"
+                      f"process_tree_termination_confirmed={terminated}\n")
             log.flush()
             reader.join(timeout=10)
             raise

@@ -110,6 +110,7 @@ class SelectStackReferenceTests(unittest.TestCase):
         class FakeProcess:
             def __init__(self, command, **kwargs):
                 self.command = command
+                captured_cwds.append(kwargs.get("cwd"))
                 self.stdout = SlowLines()
                 self.returncode = 0
 
@@ -118,6 +119,7 @@ class SelectStackReferenceTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp:
             log = Path(temp) / "orc.log"
+            captured_cwds = []
             fake_ld = SimpleNamespace(profile={"shared": {"enabled": False}},
                                       profile_path=Path(temp) / "machine.json")
             captured = io.StringIO()
@@ -130,6 +132,7 @@ class SelectStackReferenceTests(unittest.TestCase):
             self.assertIn("source_alignment 10%", result.stdout)
             self.assertIn("source_alignment 10%", log.read_text(encoding="utf-8"))
             self.assertIn("[heartbeat]", captured.getvalue())
+            self.assertEqual(Path(captured_cwds[0]), Path.home().resolve())
 
     def test_checkpoint_roundtrip_and_identity_changes_fail_closed(self):
         with tempfile.TemporaryDirectory() as temp:

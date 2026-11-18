@@ -1,9 +1,9 @@
 # DS9 LaserDisc OpenCode Operator Pack
 
-**Workflow version: 15** — check `WORKFLOW_VERSION` and follow the core-change/device-log
-rules in `WORKFLOW_VERSIONING.md` before editing or syncing workflow files. The W working tree
-is synchronized separately; its Git metadata remains behind because of pre-existing local
-changes and is not reset or rebased as part of this release.
+**Authoring candidate: Version 16 (not yet published).** `WORKFLOW_VERSION` is 16 in this
+worktree; V15 remains the published source until V16 is accepted and released. Follow the
+core-change/device-log rules in `WORKFLOW_VERSIONING.md`. W has not been synced for V16;
+preserve its stale Git metadata and unrelated local changes.
 
 **Design goal:** make the workflow clear and reliable enough for capable free or low-cost
 models to run with its bounded steps, explicit ACTION/VERIFY/STOP gates, and deterministic
@@ -604,8 +604,12 @@ permission.
 | `scripts/preflight_mac.py` | Mac profile/tool/root/VapourSynth capability check (`--episode` and `--json` supported); checks workflow version and does not prove full workflow readiness |
 | `scripts/doctor.py` | Unified read-only profile/dependency/platform report; Linux x86_64 remains explicitly not episode-ready |
 | `scripts/bootstrap_deps.py` / `dependencies/` | Direct Python version locks for Windows x64, Mac arm64, and candidate Linux x86_64; check-only by default, `--install` is explicit |
-| `scripts/run_stage.py` | Allowlisted stage dispatcher; dry-run plan by default, explicit `--execute`, series-aware stage identity, downloader-specific checks for early download, and full gates before other writes |
+| `scripts/run_stage.py` | Allowlisted stage dispatcher; dry-run plan by default, explicit `--execute`, device-local subprocess cwd, workspace fallback, and supervised/space-gated `stack-render` |
 | `scripts/run_workflow.py` | Ordered JSON-plan orchestration; series-scoped status/log/locks/resume, input/output fingerprints, and conservative resume |
+| `scripts/shared_workspace.py sync-local` | No-overwrite resync of local-fallback or local-copy episode evidence into a matching shared device workspace; conflicts remain for manual review |
+| `scripts/efm_report_table.py` | Report-only EFM comparison; `--episode` now validates EFMSink output path and capture inventory before its table can support selection |
+| `scripts/validate_tfm_run.py` | Verifies TFM decision-log presence against FFmpeg session-log exit/frame stats; never infers decoded progress from the decision log |
+| `scripts/process_utils.py` | UTF-8-safe console streaming and scoped process-group termination for supervised stage subprocesses |
 | `scripts/measure_ld_black.py`, `scripts/prepare_retime_breaks.py`, `scripts/record_retime_breaks.py` | Threshold-sensitivity report, ambiguous-safe DVD/LD pairing report, and explicit backed-up recording of reviewed intervals; offsets remain unmeasured until edge adjudication |
 | `scripts/retime_break_candidates.py` | Pure pairing/record-validation helpers used by the report and recorder; no manifest write on report path |
 | `CONFIGURE HERE FIRST.json` | Sanitized no-DVD intake-plan template; choose DS9 or VOY in the editable `series` value |
@@ -622,6 +626,7 @@ permission.
 | `V13-RELEASE.md` | Fail-closed break edges, cut-PAD policy/provenance, stable workspaces, Orc resume, and bounded extraction |
 | `V14-RELEASE.md` | Section 31 Archive tree, natural resolver, and series-aware VOY workflow release record |
 | `V15-RELEASE.md` | Changelog source boundary, fail-closed break candidate intake, and retime output verification improvements |
+| `V16-RELEASE.md` | Advisory ACL policy, local workspace resync, provenance/schema checks, alignment coverage, and stage-supervision improvements |
 | `V9-QUEUE.md` | Historical V9 device-log review and inherited carry-overs; planning only |
 | `V10-QUEUE.md` | Historical V10 scope and implementation record; planning only |
 | `V11-QUEUE.md` | Historical V11 record and dependency-policy proposal; planning only |
@@ -629,12 +634,13 @@ permission.
 | `V13-QUEUE.md` | V13 implementation/evidence record and held episode findings; non-operative |
 | `V14-QUEUE.md` | Archive catalog/resolver scope and coverage limitations; planning only |
 | `V15-QUEUE.md` | V15 implementation record and acceptance evidence; planning only, never live instructions |
+| `V16-QUEUE.md` | V16 implementation scope and validation record; historical planning, never live instructions |
 | `changelog.txt` | Short release history; retrospective V1–V5 notes and accepted V6 changes |
 | `Cut Pad Images/<episode>/` | Curated single-frame DVD cut-PAD repair stills, named by verified DVD timestamp/frame; not a DVD reference substitute |
 | `scripts/download_archive.ps1` | Metadata-verified, resumable source download; checks profile curl (>=7.71.0), and ListOnly prints inventory, integrity metadata, aggregate bytes, and projected free space |
 | `scripts/check_space_budget.py` | Projected per-stage free-space gate that preserves the configured reserve |
 | `scripts/init_episode.py` | Verified Archive/download + optional DVD -> draft manifest; `--no-dvd` records explicit approval, and macOS gets `.vpy` script paths |
-| `scripts/validate_episode.py` | Stage-specific manifest/artifact prerequisites; optional expensive source MD5 recheck |
+| `scripts/validate_episode.py` | Stage-specific manifest/artifact prerequisites; retime object/step/gap and sampled delta-anchor validation; optional source MD5 recheck |
 | `scripts/select_stack_reference.py` | Streamed Orc refresh loop with heartbeat and verified completed-pass resume; selects/stabilizes a reference and never renders |
 | `scripts/resolve_archive_episode.py` | Resolve a natural series/season/episode request to one standalone Archive item; no transfer is started |
 | `scripts/build_archive_catalog.py` / `scripts/archive_catalog.py` | Build/read the metadata-only Section 31 item/file tree and resolve aliases; `--force` is required to replace the snapshot |
@@ -662,12 +668,12 @@ permission.
 | `scripts/pad_audit.py` / `fullres_check.py` | Detect map-matched PADs in the source-derived post-IVTC `.avs`/`.vpy` and confirm them at full raster |
 | `scripts/rife_padframes.py` / `build_padfix_avs.py` | Generate replacements only for confirmed PADs and wrap the source-derived AVS without changing frame count |
 | `scripts/encode_padfixed.ps1` / `remux_padfixed.ps1` | Former second-pass encoder is retired; remux stream-copies tracks with packet-identity checks |
-| `scripts/scan_padfixed_black.py` / `verify_pad_identities.py` | PAD-black and replacement identity gates |
+| `scripts/scan_padfixed_black.py` / `verify_pad_identities.py` | Full-decode PAD-black and replacement identity gates; black scan follows the manifest deliverable |
 | `scripts/av_check_output.py` / `scripts/ld_only_sync_check.py` / `sync_check.py` | DVD-referenced absolute A/V, no-DVD exact timeline/sample-budget validation, and between-track drift checks |
 | `scripts/qc_report.py` | Final delivery report; skipped/unverified required checks fail closed |
 | `scripts/regen_plain_text.py` | Rebuild the ASCII companion from the main Markdown runbook |
 
-### V14 entry points (authoring candidate)
+### V16 entry points (authoring candidate)
 
 ```text
 python scripts/bootstrap_deps.py --print --json
@@ -675,6 +681,7 @@ python scripts/doctor.py --json [--episode S01E07]
 python scripts/run_stage.py --list
 python scripts/run_stage.py --episode S01E07 --stage encode-final        # plan only
 python scripts/run_stage.py --episode S01E07 --stage encode-final --execute
+python scripts/run_stage.py --episode S01E07 --stage stack-render --execute --planned-gib <estimate>
 python scripts/generate_runbooks.py --check
 ```
 
@@ -685,6 +692,8 @@ the full doctor so the transfer can start early. Every other write-capable stage
 `--execute`, a doctor pass, and its declared manifest gates. It never runs arbitrary shell
 text, performs cleanup, or replaces helper-level refusal/QC checks. Linux x86_64 can check its candidate dependency lock but
 production stage execution is blocked until the complete Linux workflow is validated.
+In shared mode, its subprocesses run from a device-local cwd by default; release-root ACL
+writability is informational, while per-device path guards remain enforced.
 
 ### V9 ordered workflow orchestration (retained in V10)
 
@@ -806,12 +815,24 @@ configured local source folder; manifests, logs, references, and cut-PAD images 
 episode's workspace when available, otherwise to its local fallback.
 
 The device should alter only its own `devices/<device>-<stable-id>/` subtree. Do not edit
-release files or another device's folder. For shared-drive ACLs, the administrator should
-grant read/execute on the README/release tree and make `devices/` its sole writable child
-(pre-provision it or allow creation of that exact directory). Grant each device Modify
-only to its own instance subtree. The workflow does not change ACLs. Application
-guards reject release-root and peer-instance writes; the doctor still blocks processing if
-the release root itself appears writable.
+release files or another device's folder. The administrator may restrict the share ACL, but
+the workflow does not require an ACL change: the doctor reports release-root writability as
+an advisory, while application path guards continue to reject release-root and peer-device
+writes. If the device subtree cannot be created or written, `shared_workspace.py ensure`
+uses an isolated device-local fallback; do not write around the guard.
+
+After access returns, sync reviewed fallback evidence without overwriting shared files:
+
+```powershell
+python scripts/shared_workspace.py sync-local --profile $profilePath `
+  --episode $identity --local-instance-root $fallbackRoot
+```
+
+This syncs missing manifests, references, and cut-PAD artifacts; conflicts stay untouched
+for manual reconciliation. Logs are excluded by default. After reviewing local logs for
+secrets, opt in with `--include-logs --confirm-no-secrets`. A local source-bundle copy can
+sync to the shared release with `--target-release-root <shared-release-root>` when both
+copies have the same `WORKFLOW_VERSION`.
 
 Logs are intended as bugfix evidence, not just summaries: keep the unique stage `.log` and
 JSON report, exact commands, workflow version, gate outcomes, complete tool stdout/stderr,
@@ -823,9 +844,9 @@ do not scrub arbitrary secrets. `run_stage.py` records active duration and gate/
 breakdowns per invocation; time between invocations is excluded. For manual stages, use
 `scripts/stage_clock.py` and pause it while waiting for a human gate response.
 
-**ACL status for W:** no ACL changes were made. The current inherited root ACL still grants
-the connected LenovoFlex account Full Control, so the W release root is not OS-enforced
-read-only and processing remains doctor-blocked until an administrator restricts it.
+**W shared-folder note:** the inherited ACL is not treated as a workflow gate. Preserve
+W's stale Git metadata and unrelated local changes; use guarded file-level sync or a
+separate, reviewed local copy when the share is unavailable.
 
 The example manifests (`S01E01`, `S01E04`, `S01E05`) and `reference-runs/` are
 **measured historical regression data only**. They help interpret expected file

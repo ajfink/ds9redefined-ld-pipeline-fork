@@ -72,7 +72,9 @@ def _capture_label(path: Path, text: str) -> str:
 
 def parse_report(path: Path) -> dict:
     text = path.read_text(encoding="utf-8", errors="replace")
-    out: dict = {"file": path.name, "capture": _capture_label(path, text)}
+    out: dict = {"file": path.name, "capture": _capture_label(path, text),
+                 "output_file": _field(text, "Output file"),
+                 "report_file": _field(text, "Report file")}
 
     for key, label in (
         ("assessment", "Overall assessment"),
@@ -149,7 +151,58 @@ def parse_report(path: Path) -> dict:
     return out
 
 
-def collect(directory: Path) -> list[dict]:
+def validate_report_identity(rows: list[dict], episode: str,
+                             expected_labels: set[str],
+                             output_directory: Path) -> None:
+    """Fail closed if an EFMSink report was copied from another episode/capture.
+
+    Orc's report records its output WAV. V15+ episode-scoped EFM outputs live under
+    ``roots.audio/<episode>/<capture>-efm.wav``; checking that provenance prevents a
+    same-label report copied from a different episode from being used as selection
+    evidence.
+    """
+    expected_dir = output_directory.expanduser().resolve()
+    labels = [str(row.get("capture") or "") for row in rows]
+    if any(not label for label in labels):
+        raise PipelineError(f"{episode}: an EFMSink report has no parseable capture label")
+    if len(labels) != len(set(labels)):
+        raise PipelineError(f"{episode}: duplicate EFMSink report capture labels: {labels}")
+    unexpected = set(labels) - expected_labels
+    missing = expected_labels - set(labels)
+    if unexpected or missing:
+        raise PipelineError(
+            f"{episode}: EFMSink report inventory mismatch; missing={sorted(missing)}, "
+            f"unexpected={sorted(unexpected)}")
+
+    for row in rows:
+        label = row["capture"]
+        output_value = row.get("output_file")
+        if not output_value:
+            raise PipelineError(f"{episode}:{label}: EFMSink report lacks its Output file provenance")
+        output = Path(str(output_value).strip().strip('"')).expanduser()
+        if not output.is_absolute():
+            raise PipelineError(f"{episode}:{label}: EFMSink Output file provenance is not absolute")
+        try:
+            resolved_output = output.resolve(strict=False)
+            resolved_output.relative_to(expected_dir)
+        except (OSError, ValueError) as exc:
+            raise PipelineError(
+                f"{episode}:{label}: EFMSink output belongs outside its episode folder: {output_value}") from exc
+        expected_name = f"{label}-efm.wav"
+        if resolved_output.parent != expected_dir or resolved_output.name.casefold() != expected_name.casefold():
+            raise PipelineError(
+                f"{episode}:{label}: expected output {expected_dir / expected_name}, "
+                f"report says {output_value}")
+        report_value = row.get("report_file")
+        if report_value:
+            report_path = Path(str(report_value).strip().strip('"')).expanduser().resolve(strict=False)
+            if report_path != Path(str(resolved_output) + ".txt"):
+                raise PipelineError(
+                    f"{episode}:{label}: EFMSink Report file does not match its output WAV: {report_value}")
+
+
+def collect(directory: Path, *, episode: str | None = None,
+            expected_labels: set[str] | None = None) -> list[dict]:
     # Prefer the decoder's canonical <wav>.txt outputs when present; otherwise
     # accept the preserved per-device log copies named *-efm-report-<capture>.txt.
     files = sorted(directory.glob("*-efm.wav.txt"))
@@ -157,7 +210,12 @@ def collect(directory: Path) -> list[dict]:
         files = sorted(directory.glob("*-efm-report-*.txt"))
     if not files:
         raise PipelineError(f"no EFMSink reports matching canonical or archived names in {directory}")
-    return [parse_report(f) for f in files]
+    rows = [parse_report(f) for f in files]
+    if episode is not None:
+        if expected_labels is None:
+            raise PipelineError("episode identity validation requires the manifest capture inventory")
+        validate_report_identity(rows, episode, expected_labels, directory)
+    return rows
 
 
 def render(rows: list[dict]) -> str:
@@ -201,17 +259,31 @@ def main() -> int:
     ap.add_argument("--dir", help="directory holding *-efm.wav.txt (overrides --episode)")
     args = ap.parse_args()
 
+    ep = None
+    expected_labels = None
     if args.dir:
         directory = Path(args.dir)
     elif args.episode:
         ld = Ld()
-        load_episode(args.episode, ld)
-        directory = ld.root("audio") / args.episode
+        ep = load_episode(args.episode, ld)
+        directory = ld.root("audio") / ep.code
+        expected_labels = {
+            str(capture.get("label"))
+            for capture in (ep.data.get("captures") or [])
+            if capture.get("efm_file")
+        }
+        if not expected_labels:
+            expected_labels = {str(capture.get("label")) for capture in (ep.data.get("captures") or [])}
     else:
         raise PipelineError("pass --episode <code> or --dir <path>")
 
-    rows = collect(directory)
+    rows = collect(directory, episode=ep.code if ep else None,
+                   expected_labels=expected_labels)
     print(f"EFMSink reports in {directory}: {len(rows)}")
+    if ep:
+        print(f"Identity verified: {ep.identity}; output files are episode/capture scoped.")
+    else:
+        print("WARNING: --dir mode has no manifest identity check; do not use it alone to select a capture.")
     print()
     print(render(rows))
     print()

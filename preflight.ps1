@@ -304,7 +304,8 @@ foreach ($leaf in 'download_archive.ps1', 'init_episode.py', 'validate_episode.p
     'extract_video_descriptors.py', 'measure_dvd_alignment.py', 'measure_break_edges.py', 'measure_audio_rate.py',
     'build_map.ps1', 'encode_episode.ps1', 'build_stack_project.py', 'retime_dvd_assets.py',
     'check_space_budget.py', 'stage_clock.py', 'run_workflow.py',
-    'measure_pad_audio.py', 'measure_ld_black.py', 'efm_paths.py') {
+    'measure_pad_audio.py', 'measure_ld_black.py', 'efm_paths.py', 'efm_report_table.py',
+    'validate_tfm_run.py', 'process_utils.py', 'shared_workspace.py') {
     $scriptPath = Join-Path $here "scripts\$leaf"
     if (Test-Path -LiteralPath $scriptPath) { Add-Result "bundle-script:$leaf" 'PASS' $scriptPath }
     else { Add-Result "bundle-script:$leaf" 'FAIL' "required workflow script missing: $scriptPath" }

@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from efm_report_table import collect, parse_report, render  # noqa: E402
+from efm_report_table import collect, parse_report, render, validate_report_identity  # noqa: E402
 from ldcommon import PipelineError  # noqa: E402
 
 
@@ -92,6 +92,51 @@ class EfmReportTableTests(unittest.TestCase):
                 "Samples decoded : 244,593,888")
             report.write_text(text, encoding="utf-8")
             self.assertEqual(parse_report(report)["capture"], "P1")
+
+    def test_episode_mode_rejects_cross_episode_efm_report_with_same_capture_label(self):
+        with tempfile.TemporaryDirectory() as temp:
+            audio_root = Path(temp)
+            episode_dir = audio_root / "S01E11"
+            episode_dir.mkdir()
+            report_path = episode_dir / "L1-efm.wav.txt"
+            wrong_output = audio_root / "S01E10" / "L1-efm.wav"
+            report_path.write_text(
+                SYNTHETIC_REPORT.replace(
+                    "Samples decoded : 244,593,888",
+                    f"Output file : {wrong_output}\n"
+                    f"Report file : {wrong_output}.txt\n"
+                    "Samples decoded : 244,593,888"),
+                encoding="utf-8")
+            with self.assertRaisesRegex(PipelineError, "belongs outside its episode folder"):
+                collect(episode_dir, episode="S01E11", expected_labels={"L1"})
+
+    def test_episode_mode_requires_complete_unique_manifest_capture_inventory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            episode_dir = Path(temp) / "S01E11"
+            episode_dir.mkdir()
+            for label in ("L1", "P1"):
+                output = episode_dir / f"{label}-efm.wav"
+                report_path = episode_dir / f"{label}-efm.wav.txt"
+                report_path.write_text(
+                    SYNTHETIC_REPORT.replace(
+                        "Samples decoded : 244,593,888",
+                        f"Output file : {output}\nReport file : {output}.txt\n"
+                        "Samples decoded : 244,593,888"),
+                    encoding="utf-8")
+            rows = collect(episode_dir, episode="S01E11", expected_labels={"L1", "P1"})
+            self.assertEqual([row["capture"] for row in rows], ["L1", "P1"])
+            with self.assertRaisesRegex(PipelineError, "inventory mismatch"):
+                collect(episode_dir, episode="S01E11", expected_labels={"L1", "P1", "M1"})
+
+    def test_episode_mode_requires_output_provenance(self):
+        with tempfile.TemporaryDirectory() as temp:
+            episode_dir = Path(temp) / "S01E11"
+            episode_dir.mkdir()
+            report_path = episode_dir / "L1-efm.wav.txt"
+            report_path.write_text(SYNTHETIC_REPORT, encoding="utf-8")
+            row = parse_report(report_path)
+            with self.assertRaisesRegex(PipelineError, "lacks its Output file provenance"):
+                validate_report_identity([row], "S01E11", {"L1"}, episode_dir)
 
     def test_prefers_canonical_reports_when_archived_copies_are_also_present(self):
         with tempfile.TemporaryDirectory() as temp:

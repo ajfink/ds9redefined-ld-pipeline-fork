@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import math
 import re
 import sys
 from pathlib import Path
@@ -65,6 +66,123 @@ def nonnull(data: dict, section: str, key: str) -> bool:
     return isinstance(data.get(section), dict) and data[section].get(key) is not None
 
 
+FPS = 30000.0 / 1001.0
+
+
+def _valid_interval(value) -> bool:
+    if not isinstance(value, list) or len(value) != 2:
+        return False
+    if any(isinstance(item, bool) or not isinstance(item, (int, float)) or
+           not math.isfinite(float(item)) for item in value):
+        return False
+    return float(value[0]) >= 0 and float(value[1]) > float(value[0])
+
+
+def retime_schema_issues(retime, *, require_adjudicated: bool = False) -> list[str]:
+    """Check the record shapes consumed by audio/retime/QC helpers.
+
+    Candidate intake is allowed to leave offsets, step, and gap null. The
+    retime stage separately requires them to be measured and internally
+    consistent before it can produce assets.
+    """
+    if retime is None:
+        return []
+    if not isinstance(retime, dict):
+        return ["retime must be an object"]
+    issues: list[str] = []
+    breaks = retime.get("breaks", [])
+    merged_rows = retime.get("merged_music_through", [])
+    if breaks is None:
+        breaks = []
+    if merged_rows is None:
+        merged_rows = []
+    if not isinstance(breaks, list):
+        issues.append("retime.breaks must be an array of objects")
+        breaks = []
+    if not isinstance(merged_rows, list):
+        issues.append("retime.merged_music_through must be an array of interval objects")
+        merged_rows = []
+
+    seen_labels: set[str] = set()
+    for section, rows in (("breaks", breaks), ("merged_music_through", merged_rows)):
+        for index, row in enumerate(rows, 1):
+            where = f"retime.{section}[{index}]"
+            if not isinstance(row, dict):
+                issues.append(f"{where} must be an object (not a label/string)")
+                continue
+            label = row.get("label")
+            if not isinstance(label, str) or not label.strip():
+                issues.append(f"{where}.label must be a non-empty string")
+            elif label in seen_labels:
+                issues.append(f"duplicate retime label {label!r}")
+            else:
+                seen_labels.add(label)
+            if not _valid_interval(row.get("ld_black")):
+                issues.append(f"{where}.ld_black must be [finite_start, finite_end] with end > start")
+            if section == "merged_music_through":
+                if "dvd_silence" in row and row.get("dvd_silence") is not None:
+                    issues.append(f"{where} must not claim a DVD silence interval")
+                step = row.get("step")
+                if step is not None and (isinstance(step, bool) or
+                                         not isinstance(step, (int, float)) or
+                                         not math.isfinite(float(step))):
+                    issues.append(f"{where}.step must be finite or null")
+                continue
+
+            dvd_silence = row.get("dvd_silence")
+            is_legacy_merged = row.get("merged") is True and dvd_silence is None
+            if dvd_silence is not None and not _valid_interval(dvd_silence):
+                issues.append(f"{where}.dvd_silence must be [finite_start, finite_end] with end > start")
+            if not is_legacy_merged and dvd_silence is None:
+                issues.append(f"{where}.dvd_silence is required; record music-through intervals under merged_music_through")
+
+            for key in ("off_before", "off_after", "step", "gap_s"):
+                value = row.get(key)
+                if value is not None and (isinstance(value, bool) or
+                                          not isinstance(value, (int, float)) or
+                                          not math.isfinite(float(value))):
+                    issues.append(f"{where}.{key} must be finite or null")
+            if not require_adjudicated or is_legacy_merged:
+                continue
+            if any(row.get(key) is None for key in ("off_before", "off_after", "step")):
+                issues.append(f"{where} needs measured offsets and step before retime")
+                continue
+            if not _valid_interval(dvd_silence):
+                continue
+            numeric_fields = [row.get(key) for key in ("off_before", "off_after", "step", "gap_s")]
+            if any(isinstance(value, bool) or not isinstance(value, (int, float)) or
+                   not math.isfinite(float(value)) for value in numeric_fields):
+                continue
+            expected_step = float(row["off_after"]) - float(row["off_before"])
+            if abs(float(row["step"]) - expected_step) > 0.5:
+                issues.append(f"{where}.step disagrees with off_after - off_before")
+            expected_gap = ((float(dvd_silence[1]) - float(dvd_silence[0])) -
+                            expected_step / FPS)
+            if row.get("gap_s") is not None and abs(float(row["gap_s"]) - expected_gap) > 0.01:
+                issues.append(f"{where}.gap_s disagrees with DVD silence duration and measured step")
+    return issues
+
+
+def alignment_coverage(alignment, master_time_s: float) -> tuple[bool, str]:
+    """Check a measured alignment array covers a requested master-time anchor."""
+    import numpy as np
+    values = np.asarray(alignment)
+    if values.ndim != 2 or values.shape[1] < 2 or not len(values):
+        return False, f"alignment must be a non-empty Nx2 array; got {values.shape}"
+    frames = values[:, 0].astype(np.float64)
+    offsets = values[:, 1].astype(np.float64)
+    if (not np.isfinite(frames).all() or not np.isfinite(offsets).all() or
+            np.any(np.diff(frames) <= 0)):
+        return False, "alignment master frames must be finite/increasing and offsets finite"
+    start_s, end_s = float(frames[0] / FPS), float(frames[-1] / FPS)
+    if not math.isfinite(master_time_s) or not start_s <= master_time_s <= end_s:
+        return False, (f"requested master time {master_time_s:.3f}s is outside sampled range "
+                       f"{start_s:.3f}..{end_s:.3f}s; rerun measure_dvd_alignment with "
+                       "a reviewed --first-master-frame that covers the measured delta anchor "
+                       "without including unmatched front matter")
+    return True, f"sampled master range={start_s:.3f}..{end_s:.3f}s covers anchor={master_time_s:.3f}s"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--episode", required=True)
@@ -81,6 +199,10 @@ def main() -> int:
               f"manifest series says {d.get('series', 'DS9')!r}, requested {ep.series}")
     c.require(d.get("identity", ep.identity) == ep.identity, "episode-identity",
               f"manifest identity says {d.get('identity', ep.identity)!r}, requested {ep.identity}")
+    retime_issues = retime_schema_issues(
+        d.get("retime"), require_adjudicated=(args.stage == "retime"))
+    c.require(not retime_issues, "retime-schema",
+              "valid" if not retime_issues else "; ".join(retime_issues))
     archive_item = str(d.get("archive_item", ""))
     item_series = re.match(r"^(DS9|VOY|TNG)-", archive_item, re.IGNORECASE)
     item_episode = re.search(r"S\d{2}E\d{2}", archive_item, re.IGNORECASE)
@@ -219,7 +341,17 @@ def main() -> int:
             c.add("SKIP", "retime", "no DVD was supplied and the deliverable is LD-only")
         else:
             c.file(resolve(ep, "dvd"), "dvd-reference")
-            c.file(resolve(ep, "align_npy"), "dvd-LD-alignment-path")
+            align_path = resolve(ep, "align_npy")
+            c.file(align_path, "dvd-LD-alignment-path")
+            if align_path and align_path.is_file() and nonnull(d, "video", "delta_s"):
+                try:
+                    import numpy as np
+                    alignment = np.load(align_path)
+                    covered, detail = alignment_coverage(alignment, float(d["video"]["delta_s"]))
+                    c.require(covered, "retime-alignment-anchor-coverage", detail)
+                except (OSError, ValueError, TypeError) as exc:
+                    c.require(False, "retime-alignment-anchor-coverage",
+                              f"cannot validate alignment anchor coverage: {exc}")
             c.file(resolve(ep, "srt_source"), "English-source-SRT")
             r = d.get("retime", {})
             for key in ("breaks", "tail_off", "head_sil_end", "tail_sil_start"):

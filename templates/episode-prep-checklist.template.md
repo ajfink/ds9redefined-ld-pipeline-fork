@@ -9,6 +9,7 @@
 | Episode / verified title | `<SxxExx> / <title>` |
 | Workflow version | `<WORKFLOW_VERSION>` |
 | Device / workspace | `<device name> / <instance_root>` |
+| Workspace storage mode | `shared-release / local-fallback` |
 | Archive item | `<verified identifier>` |
 | Download-manifest status | `pending / verified (time, row count, total bytes)` |
 | Matching DVD | `path or NONE` |
@@ -44,3 +45,11 @@
 - Unresolved prep items and their exact owner/blocker: `<list>`.
 - This checklist records status only; measurements and approvals belong in their prescribed
   reports and the active episode manifest after their gates pass.
+
+## Delivery closeout (fill only after final QC)
+
+- Detailed QC report: `<path>`; SHA-256: `<digest>`; result: `<pass/warn/skip/fail counts>`.
+- Device QC closeout: `<episode logs>/<code>-qc-closeout-<run-id>.md`.
+- Critical source retention at QC time: `<present/missing for DVD, selected EFM/WAVs, retimed tracks/SRT>`.
+- If this run used `local-fallback`, shared sync status: `pending / complete / conflict`; record
+  the `shared_workspace.py sync-local` report and leave any conflicts untouched for manual review.

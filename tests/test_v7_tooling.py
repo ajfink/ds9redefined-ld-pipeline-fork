@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -16,6 +17,7 @@ from dependency_lock import LockError, read_lock, target_for, version_relation  
 from doctor import parse_windows_preflight  # noqa: E402
 from generate_runbooks import OUTPUTS, generated_text  # noqa: E402
 from run_stage import (STAGES, make_action, requires_doctor, validate_command,
+                       safe_working_directory, stack_render_inputs,
                        write_stage_report)  # noqa: E402
 
 
@@ -169,6 +171,77 @@ class StageRunnerTests(unittest.TestCase):
         self.assertEqual(STAGES["record-retime-breaks"]["gate"], "inputs")
         self.assertTrue(requires_doctor("prepare-retime-breaks"))
         self.assertTrue(requires_doctor("record-retime-breaks"))
+
+    def test_stack_render_is_space_gated_doctor_gated_and_resolves_manifest_paths(self):
+        self.assertTrue(STAGES["stack-render"]["write"])
+        self.assertEqual(STAGES["stack-render"]["gate"], "inputs")
+        self.assertTrue(requires_doctor("stack-render"))
+        planned = make_action("stack-render", "S01E15",
+                              {"tools": {"orc": "orc-cli"}}, [], None)
+        self.assertEqual(planned, ["orc-cli", "<manifest stack_project>", "--process"])
+        with self.assertRaisesRegex(LockError, "no arbitrary Orc arguments"):
+            make_action("stack-render", "S01E15", {"tools": {"orc": "orc-cli"}},
+                        ["--sink", "unsafe"], None)
+        self.assertEqual(STAGES["efm-report-table"]["gate"], "inputs")
+        self.assertFalse(STAGES["efm-report-table"]["write"])
+        self.assertTrue(requires_doctor("verify-tfm-run"))
+        self.assertEqual(STAGES["verify-tfm-run"]["gate"], "stack")
+        profile = {"os": "windows", "python": {"interpreter": sys.executable}}
+        efm = make_action("efm-report-table", "S01E18", profile, [], None)
+        self.assertTrue(efm[1].endswith("efm_report_table.py"))
+        tfm = make_action("verify-tfm-run", "S01E18", profile,
+                          ["--session-log", "session.log"], None)
+        self.assertTrue(tfm[1].endswith("validate_tfm_run.py"))
+        self.assertIn("--session-log", tfm)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            project = root / "stack.orcprj"
+            master = root / "stack-master.mov"
+            project.write_text("project", encoding="utf-8")
+            master.write_text("not-yet-rendered", encoding="utf-8")
+            class FakeLd:
+                def __init__(self, _profile): pass
+                def tool(self, name):
+                    self_name = name
+                    if self_name != "orc":
+                        raise AssertionError(self_name)
+                    return root / "orc-cli"
+            ep = type("Ep", (), {
+                "identity": "DS9:S01E15",
+                "data": {"reference": "M1"},
+                "path": lambda self, key: {"stack_project": project,
+                                           "stack_master": master}[key],
+            })()
+            env = {"LDP_PROFILE": str(root / "machine.json"),
+                   "LDP_INSTANCE_ROOT": str(root / "devices" / "DEVICE-A1B2C3D4" /
+                                             "episodes" / "S01E15"),
+                   "LDP_INSTANCE_MODE": "shared-release",
+                   "LDP_SERIES": "DS9", "LDP_EPISODE": "S01E15",
+                   "LDP_IDENTITY": "DS9:S01E15"}
+            prior_instance = os.environ.get("LDP_INSTANCE_ROOT")
+            with patch("run_stage.Ld", FakeLd), \
+                    patch("run_stage.load_episode", return_value=ep):
+                command, resolved_project, resolved_master = stack_render_inputs(
+                    root / "machine.json", "S01E15", "DS9",
+                    Path(env["LDP_INSTANCE_ROOT"]), env)
+            self.assertEqual(command, [str(root / "orc-cli"), str(project), "--process"])
+            self.assertEqual(resolved_project, project)
+            self.assertEqual(resolved_master, master)
+            self.assertEqual(os.environ.get("LDP_INSTANCE_ROOT"), prior_instance)
+
+    def test_shared_subprocess_cwd_defaults_local_and_rejects_release_root(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            release = root / "release"
+            work = root / "local" / "work"
+            release.mkdir()
+            work.mkdir(parents=True)
+            profile = {"shared": {"enabled": True, "release_root": str(release)},
+                       "roots": {"work": str(work)}}
+            self.assertEqual(safe_working_directory(profile, True, None), Path.home().resolve())
+            self.assertEqual(safe_working_directory(profile, True, str(work)), work.resolve())
+            with self.assertRaisesRegex(LockError, "outside the README/release tree"):
+                safe_working_directory(profile, True, str(release))
 
 
 class RunbookGeneratorTests(unittest.TestCase):
