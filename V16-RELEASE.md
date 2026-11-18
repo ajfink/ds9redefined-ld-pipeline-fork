@@ -1,9 +1,9 @@
-# Workflow Version 16 — authoring candidate
+# Workflow Version 16 — release record
 
-**Candidate transition: Version 15 -> Version 16.** This candidate strengthens per-device
+**Transition: Version 15 -> Version 16.** This release strengthens per-device
 workspace resilience, retime/EFM evidence provenance, long-stage supervision, and episode
 closeout. It does not relax measurement, approval, or QC requirements. No episode media was
-processed for implementation or candidate validation.
+processed for implementation or release validation.
 
 ## Implemented
 
@@ -33,7 +33,7 @@ processed for implementation or candidate validation.
 
 ## Validation
 
-- Full unit suite: **261 passed, 7 skipped** (268 tests).
+- Full unit suite: **261 passed, 7 skipped** (268 tests) on Z and W.
 - `compileall` and imports with warnings treated as errors passed. Generated runbooks are
   current; regenerated plain-text output matches byte-for-byte. All 8 PowerShell files parsed.
   `git diff --check` and trailing-whitespace checks passed (Git emitted only LF/CRLF
@@ -47,5 +47,7 @@ processed for implementation or candidate validation.
   application's device-subtree path guards.
 - Local resync never overwrites a different shared file. Manifest conflicts require manual
   reconciliation; logs are not synced unless explicitly reviewed and confirmed.
-- W's stale Git metadata and unrelated dirty/untracked files are preserved. V16 is not
-  committed, pushed, or synced to W.
+- Published to GitHub `main` as commit `4aeea60` (the app-version branch was not touched).
+- The V16 commit patch applied cleanly to W's working files and W's full suite passed.
+  W's stale V7-based Git history and unrelated dirty/untracked files were preserved; no
+  reset, rebase, or W commit was performed.

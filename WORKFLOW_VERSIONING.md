@@ -1,9 +1,8 @@
 # Workflow versioning
 
-**Published workflow version: 15.** The Z authoring worktree has a Version 16 candidate
-(`WORKFLOW_VERSION=16`) that is not committed or published. V15 remains the production
-authority until V16 is accepted and released. W's stale V7-based Git metadata and unrelated
-local changes must be preserved; do not reset/rebase that checkout as part of V16.
+**Published workflow version: 16.** V16 is on GitHub `main` at `4aeea60`. The W working files
+were updated from the V16 release patch; its stale V7-based Git metadata and unrelated local
+changes were preserved. Do not reset/rebase or overwrite W's other local work.
 
 ## What requires a version change
 
@@ -38,8 +37,8 @@ device identity, work-ahead checklist instructions, Orc checkpointing, and valid
 not a live instruction source. `V14-RELEASE.md` records the released V14 scope and validation.
 `V15-QUEUE.md` preserves the changelog boundary and retime/break-candidate design record; it is
 historical and non-operative. `V15-RELEASE.md` records the implemented V15 contract and evidence.
-`V16-QUEUE.md` records the candidate's scope and acceptance checks; it is historical and
-non-operative. `V16-RELEASE.md` records the V16 candidate, validation, and unsynced status.
+`V16-QUEUE.md` records the scope and acceptance checks; it is historical and non-operative.
+`V16-RELEASE.md` records the V16 release, validation, and W working-file sync boundary.
 `V12-RELEASE.md` records the optional LD/DVD comparator. `V11-RELEASE.md`,
 `V10-RELEASE.md`, `V9-RELEASE.md`, `V8-RELEASE.md`, and `V7-RELEASE.md` preserve earlier release records. The historical V6 queue was retired and removed in the shared-release follow-up;
 its former proposals are not workflow instructions or permission to bypass an accepted gate.
@@ -70,7 +69,7 @@ live instruction sources.
 | 13 | `LENOVO-LEGION-5`, 2026-11-16; from Version 12 | Made empty break-edge windows fail closed; added cut-PAD DVD-still policy/provenance; stabilized per-machine workspace identity; accepted PEP 440 target-or-newer direct-package checks; isolated macOS OpenCV QC environment; added act-cut A/V window splitting, Orc progress/checkpoint resume, bounded exact-frame extraction, EFM/fade helper tests, and a transfer-time prep checklist. | **165 passed, 7 skipped**; Python compilation, warning-as-error imports, generated-runbook checks, and diff checks passed. W S01E09's local act-cut patch has real QC evidence, but the Z port is synthetic-only. No S01E12 break adjudication or real-media run is claimed; no new Mac VapourSynth runtime validation or Linux support claim. See `V13-RELEASE.md`, `V13-QUEUE.md`, and the authoring-device workflow log. |
 | 14 | `LENOVO-LEGION-5`, 2026-11-16; from Version 13 | Added a metadata-only tree of Section 31 Archive uploads and natural-language resolver, plus canonical `SERIES:SxxExx` identity throughout VOY manifests, workspaces, artifact roots, Python/PowerShell stages, workflow state, locks, logs, and resume. Bare legacy identities remain DS9; DS9 paths/plans are unchanged. TNG combined-item-only remains blocked. | **188 passed, 7 skipped** (195 tests); compilation/imports, generated docs, diff checks, PowerShell parser checks, and mock same-code/resume tests passed. Catalog metadata only; no media downloaded. W source files synchronized, while its existing Git metadata/local changes were preserved. See `V14-QUEUE.md` and `V14-RELEASE.md`. |
 | 15 | `LENOVO-LEGION-5`, 2026-11-16; from Version 14 | Made changelogs retrospective-only for live jobs; pinned each retime segment after `atempo`; made the generated-output silence threshold explicit; preserved valid before/after edge evidence independently; added report-only DVD/LD break pairing and an explicit review/hash-confirmed, backed-up/atomic recorder that leaves offsets null. Added prepare/record stages and regressions. | **224 passed, 7 skipped** (231 tests); compileall, warnings-as-errors V15 imports, generated docs/plain-text, all 7 PowerShell parsers, and diff checks passed. Real-media validation on S01E12's existing media: retime output-gap verification **17/17 PASS** (3 FAIL before the fix) and `validate --stage retime` 35/0; no download/encode/remux ran for release validation. See `V15-QUEUE.md` and `V15-RELEASE.md`. |
-| 16 | `LENOVO-LEGION-5`, 2026-11-18; authoring candidate from Version 15 | Made process-level release-root ACL status advisory while retaining device-subtree application guards; added no-overwrite local-fallback/local-copy resync; bound EFM comparison reports to the active episode/capture; enforced retime object/gap/step and alignment-anchor validation; made PAD scans follow the manifest deliverable; added session-log TFM verification, device QC closeout snapshots, local subprocess cwd, Unicode-safe output, and a supervised space-gated Orc render stage. | **261 passed, 7 skipped** (268 tests); compile/import with warnings as errors, generated runbooks/plain-text, all 8 PowerShell parsers, and diff checks passed. No episode media run for V16 candidate validation. Not committed or synced to W/GitHub. See `V16-QUEUE.md` and `V16-RELEASE.md`. |
+| 16 | `LENOVO-LEGION-5`, 2026-11-17; from Version 15 | Made process-level release-root ACL status advisory while retaining device-subtree application guards; added no-overwrite local-fallback/local-copy resync; bound EFM comparison reports to the active episode/capture; enforced retime object/gap/step and alignment-anchor validation; made PAD scans follow the manifest deliverable; added session-log TFM verification, device QC closeout snapshots, local subprocess cwd, Unicode-safe output, and a supervised space-gated Orc render stage. | **261 passed, 7 skipped** (268 tests) on Z and W; compile/import with warnings as errors, generated runbooks/plain-text, all 8 PowerShell parsers, and diff checks passed. No episode media processed. Published to GitHub `main` at `4aeea60`; V16 patch applied to W working files without changing its Git history. See `V16-QUEUE.md` and `V16-RELEASE.md`. |
 
 Version records are in `W:\ld-pipeline-execution-log.md`: Version 1 section 16, Version 2 section 17,
 Version 3 sections 18-19, Version 4 section 21, Version 5 sections 22-23, Version 6 section 27, Version 7 sections 28-31,

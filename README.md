@@ -1,9 +1,8 @@
 # DS9 LaserDisc OpenCode Operator Pack
 
-**Authoring candidate: Version 16 (not yet published).** `WORKFLOW_VERSION` is 16 in this
-worktree; V15 remains the published source until V16 is accepted and released. Follow the
-core-change/device-log rules in `WORKFLOW_VERSIONING.md`. W has not been synced for V16;
-preserve its stale Git metadata and unrelated local changes.
+**Workflow version: 16** — released on GitHub `main` as `4aeea60`. The W working files were
+updated to V16 without changing its stale Git history or overwriting unrelated local changes.
+Follow the core-change/device-log rules in `WORKFLOW_VERSIONING.md`.
 
 **Design goal:** make the workflow clear and reliable enough for capable free or low-cost
 models to run with its bounded steps, explicit ACTION/VERIFY/STOP gates, and deterministic

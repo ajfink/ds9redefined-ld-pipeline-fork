@@ -215,3 +215,16 @@ FROM Version 14 -> Version 15
   verification **17/17 PASS** (3 FAIL before the fix) and `validate --stage retime` 35/0; no
   download/encode/remux ran for release validation. See `V15-RELEASE.md` and the
   authoring-device V15 change record.
+
+Version 16 (2026-11-17)
+FROM Version 15 -> Version 16
+- Made release-root writability advisory while retaining device-subtree application guards;
+  added local fallback and no-overwrite resync with explicit review for logs.
+- Bound EFM comparisons to active episode/capture evidence; strengthened retime schema,
+  measured gap/step, and alignment-anchor validation; resolved PAD scans from the manifest.
+- Added FFmpeg-session-based TFM verification, per-run QC closeouts, SMB-safe subprocess
+  working directories, Unicode-safe child output, and supervised space-gated Orc rendering.
+- Validation: **261 passed, 7 skipped** (268 tests) on Z and W; compilation/import, generated
+  documents, PowerShell parsing, and diff checks passed. No media processed. Published to
+  GitHub `main` at `4aeea60`; W working files updated while preserving its Git history and
+  unrelated dirty files. See `V16-RELEASE.md`.
