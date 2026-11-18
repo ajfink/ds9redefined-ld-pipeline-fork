@@ -1,11 +1,11 @@
 # Workflow versioning
 
-**Published workflow version: 16** on GitHub `main` (`4aeea60`, publication record `83c9646`);
-the Z authoring worktree now carries **Version 17**, the accepted fix for the V16
+**Published workflow version: 17.** V17 is on GitHub `main` at `1328ebb`; it fixes the V16
 `doctor.py --instance-root` defect reported by `MAC-OPENCODE-4DD0B985` (S01E16 device log
-section 30). Publish/sync status is recorded in `V17-RELEASE.md`. The W working files were
-updated from the V16 release patch; its stale V7-based Git metadata and unrelated local
-changes were preserved. Do not reset/rebase or overwrite W's other local work.
+section 30), superseding the V16 publication (`4aeea60`, publication record `83c9646`). The W
+working files were updated from the V16 and V17 release patches; its stale V7-based Git
+metadata and unrelated local changes were preserved. Do not reset/rebase or overwrite W's
+other local work.
 
 ## What requires a version change
 

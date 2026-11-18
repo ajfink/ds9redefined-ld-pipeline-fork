@@ -67,5 +67,8 @@ Independent validation in this release:
 
 ## Publication
 
-Pending. V17 is authored and validated in the Z authoring worktree; GitHub `main` still points
-at the V16 publication (`83c9646`) until this record is updated on publish.
+- Published to GitHub `main` as commit `1328ebb` (the app-version branch was not touched).
+- The V17 commit patch applied cleanly to W's working files. W then passed the full suite
+  (**265 passed, 7 skipped**, 272 tests) with `WORKFLOW_VERSION=17` and current generated
+  runbooks. W's stale V7-based Git history and unrelated dirty/untracked files were preserved;
+  no reset, rebase, or W commit was performed.
