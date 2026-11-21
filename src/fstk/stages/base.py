@@ -30,7 +30,7 @@ from typing import Any, ClassVar
 
 from fstk.config.profile import Profile
 from fstk.core.errors import GateError, ManifestError, WorkflowError
-from fstk.core.hashing import SCOPE_FULL, Fingerprint
+from fstk.core.hashing import SCOPE_FULL, SCOPE_HEAD_TAIL, Fingerprint
 from fstk.core.identity import EpisodeId
 from fstk.manifest.model import Manifest
 from fstk.manifest.registry import field_def
@@ -215,6 +215,8 @@ class StepPlan:
     data: dict[str, Any] = field(default_factory=dict)
     #: Fingerprint scope per input (large captures use head-tail)
     input_scope: dict[str, str] = field(default_factory=dict)
+    #: Per-output fingerprint scope; outputs not listed use head+tail when ≥ LARGE_OUTPUT_BYTES.
+    output_scope: dict[str, str] = field(default_factory=dict)
 
     def describe(self) -> str:
         lines = [f"{self.stage}: {self.summary}".rstrip(": ")]
@@ -303,6 +305,18 @@ class Stage:
         bad_src = [k for k in output.sources_update if k not in self.writes_sources]
         if bad_src:
             raise ManifestError(f"stage {self.id} proposed undeclared sources key(s) {bad_src}")
+
+
+#: Stage outputs at least this large (stack masters, encodes) are fingerprinted by size + first and
+#: last 8 MiB instead of a full hash, so resuming a job does not re-read tens of GB (owner decision
+#: 2026-11-21). Inputs already worked this way where stages asked for it.
+LARGE_OUTPUT_BYTES = 1024 ** 3
+
+
+def output_scope_for(path: Path, explicit: dict[str, str]) -> str:
+    if str(path) in explicit:
+        return explicit[str(path)]
+    return SCOPE_HEAD_TAIL if Path(path).stat().st_size >= LARGE_OUTPUT_BYTES else SCOPE_FULL
 
 
 def fingerprint_paths(paths: Iterable[Path], scopes: dict[str, str] | None = None) -> list[dict]:

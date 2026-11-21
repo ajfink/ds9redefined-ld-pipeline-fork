@@ -4,6 +4,33 @@ Newest session first. Format and rules: see `AGENTS.md` → "Logging".
 
 ---
 
+## 2026-11-21 — Session 3 (Claude; owner reviewing the session-2 report)
+
+**Owner decisions on the review's questions** (verbatim intent; these override older notes):
+- **Quality first, everywhere.** Accepted v38 values are not assumed ideal; where fstk can
+  determine a better value automatically it does (no-DVD rate, EFM decode, Orc version).
+- **What "done" means:** the final LaserDisc video with time-aligned LD stereo (always the default
+  stereo track), plus time-aligned DVD 5.1 and DVD subtitles when a DVD exists. Without a DVD:
+  the final video with time-aligned LD audio.
+- **Human reviews:** the A/V time-alignment check across several 15-second chunks is a human
+  check. **EFM choice is automatic** — when no capture wins on every measure, fstk picks the
+  least-bad one by a declared rule. **Encode needs no review** (x265 Main 10, CRF 14, grain tune).
+- **DVD picture alignment:** automate as much as possible.
+- **Porting order** accepted: alignment → DVD audio rate (centre-referenced origin) → retime →
+  PAD audit/repair; import S01E12/17/18/20 once alignment exists; per-capture EFM; head+tail
+  output fingerprints; H.264 proxy only as a fallback. Validation data: S01E20 and S01E19
+  (captures and DVD rips on the owner's drives).
+- Space ledger lives beside the machine profile; catalog refreshes when older than 30 days;
+  v38 frozen now (`docs/v38-reference.md`); `Z:\FromStunToKill` is a git repo.
+
+### Checkpoints
+- **S3-CP1 — quick decisions.** Ledger beside the profile (old `data_root` ledger migrated once);
+  stage outputs ≥ 1 GiB fingerprinted head+tail (`stages.base.output_scope_for`); v38 freeze
+  recorded (`docs/v38-reference.md`, AGENTS rules 1–2); inventory statuses refreshed for the
+  session-2 ports. 277 tests.
+
+---
+
 ## 2026-11-21 — Session 2 (Claude; owner present at start, then away)
 
 **Goal:** apply the owner-approved recommendations for findings 0001/0002; build the episode

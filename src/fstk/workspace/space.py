@@ -87,7 +87,16 @@ class SpaceLedger:
 
     @classmethod
     def for_profile(cls, profile) -> SpaceLedger:
-        return cls(profile.data_root / LEDGER_NAME, reserve_gib=profile.limits.min_free_gb)
+        """The ledger lives beside the machine profile (machine-local, never on a share).
+
+        An older ledger under ``data_root`` is moved there once, reservations intact.
+        """
+        path = (profile.path.parent if profile.path else profile.data_root) / LEDGER_NAME
+        old = profile.data_root / LEDGER_NAME
+        if profile.path and old.is_file() and not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(old, path)
+        return cls(path, reserve_gib=profile.limits.min_free_gb)
 
     # ------------------------------------------------------------------ locking / IO
     @contextmanager

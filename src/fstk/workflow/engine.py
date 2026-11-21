@@ -42,7 +42,7 @@ from fstk.core.identity import EpisodeId
 from fstk.core.timeutil import utc_now_iso
 from fstk.evidence.approvals import ApprovalBook
 from fstk.manifest.store import ManifestStore
-from fstk.stages.base import RESOURCES, StageContext, StepOutput, StepPlan, get_stage
+from fstk.stages.base import RESOURCES, StageContext, StepOutput, StepPlan, get_stage, output_scope_for
 from fstk.workspace.space import SpaceLedger
 
 PLAN_SCHEMA = "fstk-workflow-plan-v1"
@@ -334,7 +334,8 @@ class Engine:
                 st.update(status="failed", finished_utc=utc_now_iso(), issues=issues)
                 self._emit("step-failed", step=sid, issues=issues)
                 return
-            outputs = [Fingerprint.of(p).to_dict() for p in plan.outputs if Path(p).is_file()]
+            outputs = [Fingerprint.of(p, scope=output_scope_for(Path(p), plan.output_scope)).to_dict()
+                       for p in plan.outputs if Path(p).is_file()]
             missing = [str(p) for p in plan.outputs if not Path(p).is_file()]
             if missing:
                 st.update(status="failed", finished_utc=utc_now_iso(),

@@ -11,10 +11,15 @@ replacing or improving components (including Orc) is allowed.
 
 ## Hard rules
 
-1. **v38 is read-only reference.** `Z:\fromstuntokill-v15-app` (a git worktree of `Z:\ld-pipeline`)
-   is still being developed by the owner. Never modify, commit to, or attach either. Take code and
-   behaviour from it; a snapshot lives in the gitignored `.fstk-local/v38src.tar`.
-2. **The owner makes all commits.** Agents write files; they do not run `git commit`/`push`.
+1. **v38 is a frozen, read-only reference** (owner decision 2026-11-21). The reference is commit
+   `035ecc6` on branch `fromstuntokill-v15-app` of `Z:\ld-pipeline` (worktree
+   `Z:\fromstuntokill-v15-app`), plus the working-tree snapshot
+   `.fstk-local/v38-now-20261121.tgz` (sha256 `8a010d58…7dac`). See `docs/v38-reference.md`.
+   Never modify, commit to, or attach either tree. Behaviour differences found later are judged
+   against that reference, not against whatever the trees contain now.
+2. **Commits.** `Z:\FromStunToKill` is a git repo (branch `main`, no remote). Agents commit there
+   after each verified sync, with the session trailers; they never push, rewrite history, or
+   commit anywhere else.
 3. **Measured, not assumed.** Unknown values stay unset. Never default, never copy another
    episode's numbers, never infer a convention the runbook does not define. See the ten
    invariants in `docs/REFACTOR-PLAN.md` §2; each must end up enforced by code + a test.

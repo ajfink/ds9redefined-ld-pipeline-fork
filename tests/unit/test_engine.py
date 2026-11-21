@@ -290,3 +290,22 @@ def test_plan_validation(bad, msg):
 def test_value_set_requires_declared_key():
     with pytest.raises(ManifestError):
         ValueSet("video.nonsense")
+
+
+
+def test_large_outputs_are_fingerprinted_head_tail(tmp_path):
+    from fstk.core.hashing import SCOPE_FULL, SCOPE_HEAD_TAIL, Fingerprint
+    from fstk.stages.base import LARGE_OUTPUT_BYTES, output_scope_for
+    big = tmp_path / "master.mkv"
+    with open(big, "wb") as f:  # sparse: costs no disk, reads only head + tail
+        f.write(b"head")
+        f.truncate(LARGE_OUTPUT_BYTES)
+        f.seek(LARGE_OUTPUT_BYTES - 4)
+        f.write(b"tail")
+    small = tmp_path / "report.json"
+    small.write_text("{}")
+    assert output_scope_for(big, {}) == SCOPE_HEAD_TAIL
+    assert output_scope_for(small, {}) == SCOPE_FULL
+    assert output_scope_for(big, {str(big): SCOPE_FULL}) == SCOPE_FULL
+    fp = Fingerprint.of(big, scope=output_scope_for(big, {}))
+    assert fp.scope == SCOPE_HEAD_TAIL and fp.matches()
