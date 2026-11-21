@@ -1,0 +1,734 @@
+{
+  "_readme": [
+    "Per-episode manifest. New manifests persist both series and SxxExx; missing series in legacy manifests means DS9.",
+    "Canonical identity is SERIES:SxxExx. DS9 keeps its historical manifest/workspace paths; VOY is namespaced.",
+    "Scripts read this instead of hard-coding frame counts, durations, skips or paths.",
+    "Rule: if an accessor asks for a value and it is not here, the script fails loudly -",
+    "measure it and record it. Never guess and never copy another episode's number.",
+    "Unknown measurements must remain null/unset. Never use zero as a placeholder for an unknown value.",
+    "files.* uses {root, name} so machine paths stay in machine.json; alternatively",
+    "{path} with an absolute path is accepted for files that are not under a known root.",
+    "roots.downloads optionally overrides the profile's download-folder template."
+  ],
+  "episode": "S01E20",
+  "series": "DS9",
+  "identity": "DS9:S01E20",
+  "title": "In The Hands of the Prophets",
+  "pad_report_label": "S01E20",
+  "record_status": "draft",
+  "format": "one_part",
+  "archive_item": "DS9-S01E20-LaserDisc-Copies",
+  "dvd_reference_available": true,
+  "no_dvd_proceed_approved": false,
+  "cut_pad_images_choice": "not-applicable",
+  "captures": [
+    {
+      "label": "L1",
+      "tbc_file": "DS9-S01E20-In the Hands of the Prophets-L1.tbc",
+      "tbc_bytes": 79683487520,
+      "tbc_md5": "",
+      "json_file": "DS9-S01E20-In the Hands of the Prophets-L1.tbc.json",
+      "json_bytes": 44829989,
+      "json_md5": "",
+      "efm_file": "DS9-S01E20-In the Hands of the Prophets-L1.efm",
+      "efm_bytes": 2475739200,
+      "efm_md5": ""
+    },
+    {
+      "label": "L2",
+      "tbc_file": "DS9-S01E20-In the Hands of the Prophets-L2.tbc",
+      "tbc_bytes": 79676786280,
+      "tbc_md5": "",
+      "json_file": "DS9-S01E20-In the Hands of the Prophets-L2.tbc.json",
+      "json_bytes": 44799992,
+      "json_md5": "",
+      "efm_file": "DS9-S01E20-In the Hands of the Prophets-L2.efm",
+      "efm_bytes": 2476266416,
+      "efm_md5": ""
+    },
+    {
+      "label": "L3",
+      "tbc_file": "DS9-S01E20-In the Hands of the Prophets-L3.tbc",
+      "tbc_bytes": 79676786280,
+      "tbc_md5": "",
+      "json_file": "DS9-S01E20-In the Hands of the Prophets-L3.tbc.json",
+      "json_bytes": 45004101,
+      "json_md5": "",
+      "efm_file": "DS9-S01E20-In the Hands of the Prophets-L3.efm",
+      "efm_bytes": 2476287339,
+      "efm_md5": ""
+    },
+    {
+      "label": "M1",
+      "tbc_file": "DS9-S01E20-In the Hands of the Prophets-M1.tbc",
+      "tbc_bytes": 79681572880,
+      "tbc_md5": "",
+      "json_file": "DS9-S01E20-In the Hands of the Prophets-M1.tbc.json",
+      "json_bytes": 44828878,
+      "json_md5": "",
+      "efm_file": "DS9-S01E20-In the Hands of the Prophets-M1.efm",
+      "efm_bytes": 2476397445,
+      "efm_md5": ""
+    },
+    {
+      "label": "P1",
+      "tbc_file": "DS9-S01E20-In the Hands of the Prophets-P1.tbc",
+      "tbc_bytes": 79585840880,
+      "tbc_md5": "",
+      "json_file": "DS9-S01E20-In the Hands of the Prophets-P1.tbc.json",
+      "json_bytes": 44836562,
+      "json_md5": "",
+      "efm_file": "DS9-S01E20-In the Hands of the Prophets-P1.efm",
+      "efm_bytes": 2473446771,
+      "efm_md5": ""
+    },
+    {
+      "label": "P2",
+      "tbc_file": "DS9-S01E20-In the Hands of the Prophets-P2.tbc",
+      "tbc_bytes": 79585840880,
+      "tbc_md5": "",
+      "json_file": "DS9-S01E20-In the Hands of the Prophets-P2.tbc.json",
+      "json_bytes": 44779668,
+      "json_md5": "",
+      "efm_file": "DS9-S01E20-In the Hands of the Prophets-P2.efm",
+      "efm_bytes": 2473483048,
+      "efm_md5": ""
+    },
+    {
+      "label": "P3",
+      "tbc_file": "DS9-S01E20-In the Hands of the Prophets-P3.tbc",
+      "tbc_bytes": 79655725240,
+      "tbc_md5": "",
+      "json_file": "DS9-S01E20-In the Hands of the Prophets-P3.tbc.json",
+      "json_bytes": 44862739,
+      "json_md5": "",
+      "efm_file": "DS9-S01E20-In the Hands of the Prophets-P3.efm",
+      "efm_bytes": 2475655042,
+      "efm_md5": ""
+    },
+    {
+      "label": "P4",
+      "tbc_file": "DS9-S01E20-In the Hands of the Prophets-P4.tbc",
+      "tbc_bytes": 79655725240,
+      "tbc_md5": "",
+      "json_file": "DS9-S01E20-In the Hands of the Prophets-P4.tbc.json",
+      "json_bytes": 44820130,
+      "json_md5": "",
+      "efm_file": "DS9-S01E20-In the Hands of the Prophets-P4.efm",
+      "efm_bytes": 2476481973,
+      "efm_md5": ""
+    },
+    {
+      "label": "P5",
+      "tbc_file": "DS9-S01E20-In the Hands of the Prophets-P5.tbc",
+      "tbc_bytes": 79698804640,
+      "tbc_md5": "",
+      "json_file": "DS9-S01E20-In the Hands of the Prophets-P5.tbc.json",
+      "json_bytes": 44856365,
+      "json_md5": "",
+      "efm_file": "DS9-S01E20-In the Hands of the Prophets-P5.efm",
+      "efm_bytes": 2476988298,
+      "efm_md5": ""
+    },
+    {
+      "label": "P6",
+      "tbc_file": "DS9-S01E20-In the Hands of the Prophets-P6.tbc",
+      "tbc_bytes": 79698804640,
+      "tbc_md5": "",
+      "json_file": "DS9-S01E20-In the Hands of the Prophets-P6.tbc.json",
+      "json_bytes": 44841309,
+      "json_md5": "",
+      "efm_file": "DS9-S01E20-In the Hands of the Prophets-P6.efm",
+      "efm_bytes": 2476936931,
+      "efm_md5": ""
+    },
+    {
+      "label": "P7",
+      "tbc_file": "DS9-S01E20-In the Hands of the Prophets-P7.tbc",
+      "tbc_bytes": 79697847320,
+      "tbc_md5": "",
+      "json_file": "DS9-S01E20-In the Hands of the Prophets-P7.tbc.json",
+      "json_bytes": 44870807,
+      "json_md5": "",
+      "efm_file": "DS9-S01E20-In the Hands of the Prophets-P7.efm",
+      "efm_bytes": 2476902570,
+      "efm_md5": ""
+    },
+    {
+      "label": "P8",
+      "tbc_file": "DS9-S01E20-In the Hands of the Prophets-P8.tbc",
+      "tbc_bytes": 79698804640,
+      "tbc_md5": "",
+      "json_file": "DS9-S01E20-In the Hands of the Prophets-P8.tbc.json",
+      "json_bytes": 44872616,
+      "json_md5": "",
+      "efm_file": "DS9-S01E20-In the Hands of the Prophets-P8.efm",
+      "efm_bytes": 2476916499,
+      "efm_md5": ""
+    }
+  ],
+  "reference": "P6",
+  "alignment_map": "1+0, 2+16, 3+23, 4+23, 5+18, 6+118, 7+118, 8+45, 9+45, 10+0, 11+1, 12+0",
+  "stack": {
+    "frames": 83335,
+    "duration_s": null,
+    "pressing_groups": [],
+    "fit_trusted": null,
+    "fell_back_to_mean": null,
+    "stack_sigma": null,
+    "best_single_sigma": null
+  },
+  "audio": {
+    "capture": "",
+    "capture_selection": null,
+    "capture_selection_history": [],
+    "efm_provenance_required": true,
+    "efm_provenance": {
+      "L1": [
+        {
+          "report_path": "references/efm-provenance-S01E20-L1-20261120T233955429638Z-da38f2ef.json",
+          "report_sha256": "fdb827dd03c27dd177833c2f593d4095bb9cc5189700de1d88b09f3d38b41a35",
+          "wav_sha256": "23a6eb7e41d8780b5d2b032282ab524ea804d96a5fab57d20af40f1b7370bdf8",
+          "verified_utc": "2026-11-20T23:43:25.903186+00:00"
+        }
+      ]
+    },
+    "pad_frames": null,
+    "skip_s": null,
+    "rate_fit_ppm": null,
+    "rate_fit_stderr_ppm": null,
+    "asetrate": null,
+    "corrected_duration_s": null,
+    "origin_verified_by_duration": null,
+    "rate_method": null,
+    "duration_candidate_rate_hz": null,
+    "intermediate_asetrate_hz": null,
+    "resampler": null,
+    "skip_method": null,
+    "wav0_master_frame": null,
+    "endpoint_residual_frames": null,
+    "endpoint_tolerance_frames": null,
+    "absolute_av_reference_available": null,
+    "dvd_free_approved": null
+  },
+  "video": {
+    "frames": null,
+    "duration_s": null,
+    "head_trim": null,
+    "fade_up_output": null,
+    "tail_trim": null,
+    "trim_review": null,
+    "delta_s": null,
+    "tfm_period5_pct": null,
+    "tfm_unmatched": null,
+    "tfm_combed_count": null,
+    "tfm_combed_spans": [],
+    "inserts": null,
+    "repair_frames": null,
+    "repair_pct": null,
+    "cadence_review": null
+  },
+  "pads": {
+    "map_pads": null,
+    "rendered_isolated": null,
+    "repaired": null,
+    "trimmed_away": null,
+    "inside_break_black": null,
+    "never_rendered": null,
+    "cut_pads": null,
+    "cut_pad_frames": [],
+    "content_blacks_left_alone": []
+  },
+  "retime": {
+    "breaks": [],
+    "tail_off": null,
+    "merged_music_through": [],
+    "srt_cues": null,
+    "max_gap_vs_black_s": null,
+    "head_sil_end": null,
+    "tail_sil_start": null
+  },
+  "files": {
+    "dvd": {
+      "root": "dvd_root",
+      "name": "DS9 S01E20 - In The Hands of the Prophets.mkv"
+    },
+    "stack_project": {
+      "root": "stack",
+      "name": "stack-full-s01e20.orcprj"
+    },
+    "stack_master": {
+      "root": "prores",
+      "name": "S01E20-stack-master.mov"
+    },
+    "tfm_log": {
+      "root": "probe",
+      "name": "full-tfm-log-s01e20.txt"
+    },
+    "motion": {
+      "root": "probe",
+      "name": "motion-s01e20.txt"
+    },
+    "cadence_summary": {
+      "root": "probe",
+      "name": "cadence-summary-s01e20.txt"
+    },
+    "di_map": {
+      "root": "probe",
+      "name": "di-map-s01e20.txt"
+    },
+    "avs_log": {
+      "root": "avs",
+      "name": "S01E20-log.avs"
+    },
+    "avs_trim": {
+      "root": "avs",
+      "name": "S01E20-trim.avs"
+    },
+    "avs_encode": {
+      "root": "avs",
+      "name": "S01E20-encode.avs"
+    },
+    "avs_padfix": {
+      "root": "avs",
+      "name": "S01E20-padfix.avs"
+    },
+    "padfixed_video": {
+      "root": "out",
+      "name": "S01E20-23.976-padfixed-video.mkv"
+    },
+    "padfixed": {
+      "root": "out",
+      "name": "S01E20-23.976-padfixed.mkv"
+    },
+    "pre_upscale": {
+      "root": "out",
+      "name": "S01E20-23.976-pre-upscale.mkv"
+    },
+    "dvd51_source": {
+      "root": "audio",
+      "name": "S01E20-In The Hands of the Prophets-dvd-51-original.ac3"
+    },
+    "ld_synced": {
+      "root": "audio",
+      "name": "S01E20-LD20-synced.flac"
+    },
+    "srt_source": {
+      "root": "subs",
+      "name": "S01E20-dvd-eng-original.srt"
+    },
+    "retime_graph": {
+      "root": "audio",
+      "name": "dvd-51-retimed-s01e20.filter"
+    },
+    "retimed_51": {
+      "root": "audio",
+      "name": "dvd-51-retimed-s01e20.flac"
+    },
+    "retimed_srt": {
+      "root": "subs",
+      "name": "S01E20-dvd-eng-retimed.srt"
+    },
+    "retime_map": {
+      "root": "probe",
+      "name": "dvd-retime-map-s01e20.tsv"
+    },
+    "master_descriptors": {
+      "root": "probe",
+      "name": "desc-master-s01e20.npy"
+    },
+    "dvd_descriptors": {
+      "root": "probe",
+      "name": "desc-dvd-s01e20.npy"
+    },
+    "align_npy": {
+      "root": "probe",
+      "name": "dvd-align-s01e20.npy"
+    },
+    "alignment_report": {
+      "root": "probe",
+      "name": "dvd-align-report-s01e20.tsv"
+    },
+    "break_edge_report": {
+      "root": "probe",
+      "name": "break-edge-measurements-s01e20.tsv"
+    },
+    "audio_rate_report": {
+      "root": "probe",
+      "name": "audio-rate-diagnostic-s01e20.tsv"
+    },
+    "audio_timing_report": {
+      "root": "probe",
+      "name": "S01E20-dvd-free-audio-timing.json"
+    },
+    "edges": {
+      "root": "probe",
+      "name": "adjudicated-edges-s01e20.tsv"
+    }
+  },
+  "qc": {
+    "video_md5": "",
+    "ld_audio_md5": "",
+    "fiveone_md5": "",
+    "srt_md5": "",
+    "av_constant_ms": null,
+    "av_slope_ppm": null,
+    "av_rms_ms": null,
+    "track_offset_ms": null,
+    "pad_aligned_black_hits": null,
+    "identity_own_ncc_min": null,
+    "identity_other_ncc_max": null,
+    "full_decode_errors": null
+  },
+  "deliverable": "pre_upscale",
+  "deliverable_tracks": [
+    "ld"
+  ],
+  "_labels_note": "pad_report_label keys shared reports; set it to this episode code. deliverable is a files.* key naming the actual file QC checks. deliverable_tracks describes its streams. Top-level mux_tracks and ld_audio_source configure remux_padfixed.",
+  "mux_tracks": [
+    "ld"
+  ],
+  "ld_audio_source": "ld_synced",
+  "_mux_note": "mux_tracks controls the LD-only/intermediate remux. ld_audio_source is the files.* key for its uncompressed/FLAC LD audio input. Add 51 and srt only when the measured sources are available.",
+  "archive_item_verified": false,
+  "source_provenance": {
+    "mode": "local-inventory",
+    "archive_verified": false,
+    "verification_method": "local source fingerprint only; Archive origin/authenticity not established",
+    "fingerprint_policy": "balanced",
+    "inventory_created_utc": "2026-11-18T21:03:52.875145+00:00",
+    "inventory": {
+      "schema": "ld-pipeline-local-source-inventory-v1",
+      "created_utc": "2026-11-18T21:03:52.875145+00:00",
+      "episode": "S01E20",
+      "source_mode": "local-inventory",
+      "archive_id_hint": "DS9-S01E20-LaserDisc-Copies",
+      "archive_verified": false,
+      "verification_method": "local SHA-256 file fingerprint; not proof of Archive origin or authenticity",
+      "fingerprint_policy": "balanced",
+      "captures": [
+        {
+          "label": "L1",
+          "files": {
+            "tbc": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-L1.tbc",
+              "size_bytes": 79683487520,
+              "mtime_ns": 1794970374000000000,
+              "sha256": "ddaccae43b009694c8f3e48cdcdba1fc8b53ce01762dc4993b1468710397133f",
+              "hash_scope": "first-last-4MiB"
+            },
+            "json": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-L1.tbc.json",
+              "size_bytes": 44829989,
+              "mtime_ns": 1794970838000000000,
+              "sha256": "8dc9b1eccad31e3e71cd14fcbdcb8df22a383113a6cd18e62463dfea7b30e532",
+              "hash_scope": "first-last-4MiB"
+            },
+            "efm": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-L1.efm",
+              "size_bytes": 2475739200,
+              "mtime_ns": 1794967640000000000,
+              "sha256": "7225078ed90ca640634671d363a036d9ae28c4fc3f14cf1f27f7ea621363e948",
+              "hash_scope": "first-last-4MiB"
+            }
+          }
+        },
+        {
+          "label": "L2",
+          "files": {
+            "tbc": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-L2.tbc",
+              "size_bytes": 79676786280,
+              "mtime_ns": 1794973754000000000,
+              "sha256": "b41260d3e08b989ddf68c5d2ea8f56c146a7f1154d4a8e0c802af3bf17c38210",
+              "hash_scope": "first-last-4MiB"
+            },
+            "json": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-L2.tbc.json",
+              "size_bytes": 44799992,
+              "mtime_ns": 1794974248000000000,
+              "sha256": "9d270a219a7befb246b493789f1c4ad33ea439dcb2a941fa1178d53fc840b926",
+              "hash_scope": "first-last-4MiB"
+            },
+            "efm": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-L2.efm",
+              "size_bytes": 2476266416,
+              "mtime_ns": 1794970924000000000,
+              "sha256": "0ffd5d51482666fd2123f6382035486358c8c6c6332f39744dc85a2907c0c600",
+              "hash_scope": "first-last-4MiB"
+            }
+          }
+        },
+        {
+          "label": "L3",
+          "files": {
+            "tbc": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-L3.tbc",
+              "size_bytes": 79676786280,
+              "mtime_ns": 1794977476000000000,
+              "sha256": "d8e0e0c8d2c93545d5ac8d48140f8507329df1c6d6878ffedb0cbd547668fa62",
+              "hash_scope": "first-last-4MiB"
+            },
+            "json": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-L3.tbc.json",
+              "size_bytes": 45004101,
+              "mtime_ns": 1794978234000000000,
+              "sha256": "39910e7b507a6801d3129b8ce23ebd77cb59f698bef320d9aaa7dff36347209f",
+              "hash_scope": "first-last-4MiB"
+            },
+            "efm": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-L3.efm",
+              "size_bytes": 2476287339,
+              "mtime_ns": 1794974352000000000,
+              "sha256": "efd1a1dff02bcd8bc48893aea0993cc613d13e0db2b2b10cc05695c35718c901",
+              "hash_scope": "first-last-4MiB"
+            }
+          }
+        },
+        {
+          "label": "M1",
+          "files": {
+            "tbc": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-M1.tbc",
+              "size_bytes": 79681572880,
+              "mtime_ns": 1794981608000000000,
+              "sha256": "4b5b0cfa27d22bd16601f3df8db1d723ec02e838a1dee6fd9f8354899c368821",
+              "hash_scope": "first-last-4MiB"
+            },
+            "json": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-M1.tbc.json",
+              "size_bytes": 44828878,
+              "mtime_ns": 1794982382000000000,
+              "sha256": "743e0109488afb0ad0d6922a663f21ca507960ebd6aeed576df00f38a3d9cd0a",
+              "hash_scope": "first-last-4MiB"
+            },
+            "efm": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-M1.efm",
+              "size_bytes": 2476397445,
+              "mtime_ns": 1794978332000000000,
+              "sha256": "3d9106a7c1d1dd31b65560cfd2791636769f17f795442b8d418682718558f161",
+              "hash_scope": "first-last-4MiB"
+            }
+          }
+        },
+        {
+          "label": "P1",
+          "files": {
+            "tbc": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P1.tbc",
+              "size_bytes": 79585840880,
+              "mtime_ns": 1794985340000000000,
+              "sha256": "ca861c3a3b85c5f144e605dccea982369fe439cb2d75fd7e021f180565c1503a",
+              "hash_scope": "first-last-4MiB"
+            },
+            "json": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P1.tbc.json",
+              "size_bytes": 44836562,
+              "mtime_ns": 1794986126000000000,
+              "sha256": "b739f9a348efdaec3acd328e35dfff49f0281708d2f06c89160b1532151eb231",
+              "hash_scope": "first-last-4MiB"
+            },
+            "efm": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P1.efm",
+              "size_bytes": 2473446771,
+              "mtime_ns": 1794982470000000000,
+              "sha256": "d2bb0d43638632bb8faaa3f172c3cc7b5d772038172f82349a9e88df5298e466",
+              "hash_scope": "first-last-4MiB"
+            }
+          }
+        },
+        {
+          "label": "P2",
+          "files": {
+            "tbc": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P2.tbc",
+              "size_bytes": 79585840880,
+              "mtime_ns": 1794989040000000000,
+              "sha256": "9f7822a66b54bf987ec6a61951cd476b66d153c611ef20478c2b974491fd93ee",
+              "hash_scope": "first-last-4MiB"
+            },
+            "json": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P2.tbc.json",
+              "size_bytes": 44779668,
+              "mtime_ns": 1794989844000000000,
+              "sha256": "46684f2e16eb4f52fb2d24fb07e7fdd4558bf2fb647a81e2398ea9ae47115085",
+              "hash_scope": "first-last-4MiB"
+            },
+            "efm": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P2.efm",
+              "size_bytes": 2473483048,
+              "mtime_ns": 1794986218000000000,
+              "sha256": "4dac18fa84861486d5ef75c263d07cbbbf8455f08e01a4eef5090b0ab27ea56f",
+              "hash_scope": "first-last-4MiB"
+            }
+          }
+        },
+        {
+          "label": "P3",
+          "files": {
+            "tbc": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P3.tbc",
+              "size_bytes": 79655725240,
+              "mtime_ns": 1794992840000000000,
+              "sha256": "e538bde88ac36b2281d06b05440bd6c4d54ea537f6f5982b439ed1d6023a29fa",
+              "hash_scope": "first-last-4MiB"
+            },
+            "json": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P3.tbc.json",
+              "size_bytes": 44862739,
+              "mtime_ns": 1794993658000000000,
+              "sha256": "d790382c90045bb9a5a540c31c73eeb43a2bfaaa60f47960b4ef0311229163d2",
+              "hash_scope": "first-last-4MiB"
+            },
+            "efm": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P3.efm",
+              "size_bytes": 2475655042,
+              "mtime_ns": 1794989934000000000,
+              "sha256": "97d0b0115c3b0cf3f735f152215eb95520f671bdb64df1b6ce0103f19cb03c80",
+              "hash_scope": "first-last-4MiB"
+            }
+          }
+        },
+        {
+          "label": "P4",
+          "files": {
+            "tbc": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P4.tbc",
+              "size_bytes": 79655725240,
+              "mtime_ns": 1794996798000000000,
+              "sha256": "9b025619fa7e6d9938a480ea7410c498fb79676cc700420a85cb39a77a975881",
+              "hash_scope": "first-last-4MiB"
+            },
+            "json": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P4.tbc.json",
+              "size_bytes": 44820130,
+              "mtime_ns": 1794997636000000000,
+              "sha256": "618d7f89df0a46236af9e108bb908d9a563f7b317fb52c7466929e9751bfca8c",
+              "hash_scope": "first-last-4MiB"
+            },
+            "efm": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P4.efm",
+              "size_bytes": 2476481973,
+              "mtime_ns": 1794993750000000000,
+              "sha256": "eea61dd0c88d5bda555854dd1db39cbc4c52a77f21b18d811692bb00336d9dfe",
+              "hash_scope": "first-last-4MiB"
+            }
+          }
+        },
+        {
+          "label": "P5",
+          "files": {
+            "tbc": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P5.tbc",
+              "size_bytes": 79698804640,
+              "mtime_ns": 1795000396000000000,
+              "sha256": "b5fafec176b08e859b239d898c308348f8dd5c738c015565185f0da018b98ce6",
+              "hash_scope": "first-last-4MiB"
+            },
+            "json": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P5.tbc.json",
+              "size_bytes": 44856365,
+              "mtime_ns": 1795001136000000000,
+              "sha256": "ae9fa7922550662256663e97db285ef935abe637cb32f3f7a142085611ccdaf9",
+              "hash_scope": "first-last-4MiB"
+            },
+            "efm": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P5.efm",
+              "size_bytes": 2476988298,
+              "mtime_ns": 1794997728000000000,
+              "sha256": "e5800c2b3b45e6332b86f19c1475f99105d49e9d8e8ef1c961a50f8d61a5191f",
+              "hash_scope": "first-last-4MiB"
+            }
+          }
+        },
+        {
+          "label": "P6",
+          "files": {
+            "tbc": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P6.tbc",
+              "size_bytes": 79698804640,
+              "mtime_ns": 1795003236000000000,
+              "sha256": "817654d5a58ecc2d660cc160d9e0793d0faddc6e95b67cc25facf7fa7065fe80",
+              "hash_scope": "first-last-4MiB"
+            },
+            "json": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P6.tbc.json",
+              "size_bytes": 44841309,
+              "mtime_ns": 1795003696000000000,
+              "sha256": "625ac1ed56e7beddf4e27c231cc16afba350deec6cdc46ff4987c4f333e1eae7",
+              "hash_scope": "first-last-4MiB"
+            },
+            "efm": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P6.efm",
+              "size_bytes": 2476936931,
+              "mtime_ns": 1795001200000000000,
+              "sha256": "be950cabd6cac8748454bb81fb393d8fd05286228bc211aa4e154050336bc2d8",
+              "hash_scope": "first-last-4MiB"
+            }
+          }
+        },
+        {
+          "label": "P7",
+          "files": {
+            "tbc": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P7.tbc",
+              "size_bytes": 79697847320,
+              "mtime_ns": 1795005860000000000,
+              "sha256": "307906daf1c3e6d649c3b5e6edf0afda8669026abd045b1bd1b381f666d5b37b",
+              "hash_scope": "first-last-4MiB"
+            },
+            "json": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P7.tbc.json",
+              "size_bytes": 44870807,
+              "mtime_ns": 1795006340000000000,
+              "sha256": "ef22f777ed374b22a48ceea253b7e899feeaae1294465e24c29f382d88b98ce5",
+              "hash_scope": "first-last-4MiB"
+            },
+            "efm": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P7.efm",
+              "size_bytes": 2476902570,
+              "mtime_ns": 1795003760000000000,
+              "sha256": "4fd743f3fe447b21f5da34c077c56290c03df09946b6c461480cd82c8028ae51",
+              "hash_scope": "first-last-4MiB"
+            }
+          }
+        },
+        {
+          "label": "P8",
+          "files": {
+            "tbc": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P8.tbc",
+              "size_bytes": 79698804640,
+              "mtime_ns": 1795029900000000000,
+              "sha256": "e508b0311e012f303f417b1fe288956b4f0fb971be35a8f28362d10345fcc98b",
+              "hash_scope": "first-last-4MiB"
+            },
+            "json": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P8.tbc.json",
+              "size_bytes": 44872616,
+              "mtime_ns": 1795030388000000000,
+              "sha256": "f04142f1e664fe125eb1d45424cbc3801ec9c9fe64a1fa790cfa9ac9f51ed434",
+              "hash_scope": "first-last-4MiB"
+            },
+            "efm": {
+              "name": "DS9-S01E20-In the Hands of the Prophets-P8.efm",
+              "size_bytes": 2476916499,
+              "mtime_ns": 1795006406000000000,
+              "sha256": "5032a86d65ca8a2d702bfd06f27f1ff17fbd711b6bd38779ca20ebaa9a47d8df",
+              "hash_scope": "first-last-4MiB"
+            }
+          }
+        }
+      ],
+      "raw_rf_files": [],
+      "ignored_files": [
+        "SOURCE-ITEM.txt",
+        "download-run-resume.log",
+        "download-run.exit.txt",
+        "download-run.log"
+      ],
+      "selected_name": "DS9-S01E20-LaserDisc-Copies"
+    }
+  },
+  "_init_note": "Local source inventory only; no Archive verification or authenticity claim. The selected source/DVD paths are retained in this device-scoped manifest for validation. Capture files were not modified. All episode measurements remain unmeasured."
+}

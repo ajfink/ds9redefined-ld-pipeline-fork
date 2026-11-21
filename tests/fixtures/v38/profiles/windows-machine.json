@@ -1,0 +1,58 @@
+{
+    "_readme":  "Device-scoped, Git-ignored machine configuration at devices/\u003cdevice\u003e-\u003cid\u003e/local device config/machine.json. It is validated against this machine\u0027s local identity marker and must not be copied to another device.",
+    "machine":  "DEVICE-A",
+    "os":  "windows",
+    "shared":  {
+                   "enabled":  true,
+                   "release_root":  "Z:\\fromstuntokill-v15-app",
+                   "device_name":  "DEVICE-A",
+                   "device_instance_id":  "D02C1DA9"
+               },
+    "tools":  {
+                  "ffmpeg":  "C:\\Users\\operator\\AppData\\Local\\Microsoft\\WinGet\\Links\\ffmpeg.exe",
+                  "ffprobe":  "C:\\Users\\operator\\AppData\\Local\\Microsoft\\WinGet\\Links\\ffprobe.exe",
+                  "orc":  "C:\\Program Files\\Decode-Orc\\bin\\orc-cli.exe",
+                  "rife_engine":  "C:\\Users\\operator\\AppData\\Local\\Flowframes\\FlowframesData\\pkgs\\rife-ncnn\\rife-ncnn-vulkan.exe",
+                  "rife_model_dir":  "C:\\Users\\operator\\AppData\\Local\\Flowframes\\FlowframesData\\pkgs\\rife-ncnn-vs\\rife-v4.26",
+                  "avisynth_plugin_dir":  "\\\\HOST-B\\Swap Folder\\ld-pipeline\\avsplugins",
+                  "avisynth_loader":  "",
+                  "sevenzip":  "C:\\Program Files\\7-Zip\\7z.exe",
+                  "curl":  "C:\\Windows\\system32\\curl.exe"
+              },
+    "roots":  {
+                  "downloads_root":  "X:",
+                  "downloads_template":  "DS9-S01E20-LaserDisc-Copies",
+                  "dvd_root":  "Z:\\Video\\DS9S1D5",
+                  "work":  "Z:\\ld-pipeline-device\\work",
+                  "probe":  "Z:\\ld-pipeline-device\\probe",
+                  "avs":  "Z:\\ld-pipeline-device\\avs",
+                  "audio":  "Z:\\ld-pipeline-device\\audio",
+                  "subs":  "Z:\\ld-pipeline-device\\subs",
+                  "out":  "Z:\\ld-pipeline-device\\out",
+                  "prores":  "Z:\\ld-pipeline-device\\prores",
+                  "stack":  "Z:\\ld-pipeline-device\\stack",
+                  "logs":  "Z:\\ld-pipeline-device\\logs",
+                  "runbook_dir":  "Z:\\fromstuntokill-v15-app",
+                  "archive_share":  "",
+                  "upscale_root":  "Z:\\ld-pipeline-device\\upscale"
+              },
+    "python":  {
+                   "interpreter":  "python",
+                   "require":  [
+                                   "numpy",
+                                   "cv2",
+                                   "PIL"
+                               ]
+               },
+    "limits":  {
+                   "min_free_gb":  40,
+                   "heavy_jobs":  1,
+                   "select_terms_max":  32
+               },
+    "notes":  [
+                  "This ignored profile belongs only to the verified device folder above. Episode manifests and durable workflow logs are stored below its per-episode devices workspace.",
+                  "V38 S01E20 functional test (2026-11-18): media/work roots moved to Z:\\ld-pipeline-device, outside the source checkout.",
+                  "Source captures are read-only on X:\\DS9-S01E20-LaserDisc-Copies (SMB USB HDD); only reads are performed there.",
+                  "min_free_gb lowered 80 -\u003e 40 for this device\u0027s Z: capacity, which holds the ~24 GiB stacked ProRes master."
+              ]
+}

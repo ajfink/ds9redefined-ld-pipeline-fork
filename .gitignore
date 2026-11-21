@@ -1,0 +1,30 @@
+# Local-only material: reference snapshots, scratch, caches
+.fstk-local/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Device data never lives in the code tree (see docs/adr/0001-architecture.md)
+machine*.json
+!src/fstk/templates/machine.example.json
+devices/
+episodes/
+*.orcprj
+!src/fstk/templates/stack_template.orcprj
+*.tbc
+*.efm
+*.efm.7z
+*.wav
+*.flac
+*.mkv
+*.mov
+*.mp4
+*.ac3

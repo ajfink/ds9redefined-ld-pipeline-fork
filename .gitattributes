@@ -1,0 +1,8 @@
+# LF for our own text so Windows, macOS and Linux copies compare equal
+* text=auto eol=lf
+# byte-exact: v38 material, fixtures and templates are hashed or applied as-is
+docs/v38-patches/** -text
+tests/fixtures/** -text
+src/fstk/templates/** -text
+*.png binary
+*.gz binary

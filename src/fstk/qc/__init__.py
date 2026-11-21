@@ -1,0 +1,1 @@
+"""Delivery QC gate logic."""

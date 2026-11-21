@@ -1,0 +1,85 @@
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+
+import pytest
+
+from fstk.config.profile import SCHEMA, Profile
+from fstk.core.identity import EpisodeId
+from fstk.evidence.approvals import ApprovalBook
+from fstk.manifest.model import Manifest
+from fstk.tools.ffmpeg import FFmpeg
+from fstk.workflow.engine import PLAN_SCHEMA, Engine, EpisodeWorkspace
+
+pytestmark = [pytest.mark.media, pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg")]
+EP = EpisodeId.parse("DS9:S01E20")
+
+
+def ff(*args):
+    subprocess.run(["ffmpeg", "-v", "error", *args], check=True)
+
+
+@pytest.fixture
+def env(tmp_path):
+    prof = Profile.from_dict({"schema": SCHEMA, "machine": "T", "os": "linux", "data_root": str(tmp_path / "d"),
+                              "media_root": str(tmp_path / "m"), "limits": {"min_free_gb": 0.001}})
+    out, audio, subs = prof.root("out", EP), prof.root("audio", EP), prof.root("subs", EP)
+    for d in (out, audio, subs):
+        d.mkdir(parents=True)
+    video = out / "S01E20-23.976-padfixed-video.mkv"
+    ff("-f", "lavfi", "-i", "testsrc2=size=160x120:rate=24000/1001", "-frames:v", "48", "-c:v", "libx264", str(video))
+    # Real LD/5.1 tracks are built to the video's sample budget, so -t never cuts them.
+    ff("-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100", "-t", "1.9", "-ac", "2", "-c:a", "flac",
+       str(audio / "S01E20-LD20-synced.flac"))
+    ff("-f", "lavfi", "-i", "sine=frequency=220:sample_rate=48000", "-t", "1.9", "-ac", "6", "-c:a", "ac3",
+       str(audio / "dvd-51-retimed.ac3"))
+    (subs / "retimed.srt").write_text("1\n00:00:00,500 --> 00:00:01,500\nHello.\n")
+    m = Manifest.new(EP, title="t")
+    m.set("video.duration_s", 48 * 1001 / 24000, by="t")
+    m.set("audio.capture", "P2", by="t")
+    m.set("deliverable.mux_tracks", ["ld", "51", "srt"], by="op")
+    m.set("deliverable.ld_audio_source", "ld_synced", by="op")
+    m.set_artifact("padfixed_video", root="out", name=video.name)
+    m.set_artifact("ld_synced", root="audio", name="S01E20-LD20-synced.flac")
+    m.set_artifact("retimed_51", root="audio", name="dvd-51-retimed.ac3")
+    m.set_artifact("retimed_srt", root="subs", name="retimed.srt")
+    ws = EpisodeWorkspace(prof, EP)
+    ws.store.create(m, by="t", reason="setup")
+    return prof, ws, video
+
+
+def run(env, job):
+    prof, ws, _ = env
+    plan = {"schema": PLAN_SCHEMA, "episode": str(EP), "job": job,
+            "steps": [{"id": "mux", "stage": "remux", "params": {}, "after": []}]}
+    return Engine(prof, plan, actor="op", tool_overrides={"ffmpeg": FFmpeg("ffmpeg", "ffprobe")}).run()
+
+
+def test_remux_requires_encode_approval_then_proves_identity(env):
+    prof, ws, video = env
+    state = run(env, "m0")
+    assert state["steps"]["mux"]["status"] == "blocked" and "approval:encode" in state["steps"]["mux"]["issues"][0]
+    ApprovalBook(ws.state_dir / "approvals").record(review="encode", decision="APPROVED", note="encode reviewed",
+                                                    actor="op", evidence=[video])
+    state = run(env, "m1")
+    st = state["steps"]["mux"]
+    assert st["status"] == "awaiting-review", st.get("issues")
+    report = json.loads((prof.root("reports", EP) / "remux.json").read_text())
+    assert report["status"] == "PASS" and all(r["match"] for r in report["identity"])
+    assert [r["stream"] for r in report["identity"]] == ["video", "LD audio", "DVD 5.1"]
+    streams = FFmpeg("ffmpeg", "ffprobe").probe(prof.root("out", EP) / "S01E20-23.976-padfixed.mkv").streams
+    audio = [s.raw for s in streams if s.codec_type == "audio"]
+    assert audio[0]["disposition"]["default"] == 1 and audio[1]["disposition"]["default"] == 0
+
+
+def test_overlong_track_is_caught_by_packet_identity(env):
+    prof, ws, video = env
+    ff("-y", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100", "-t", "3.0", "-ac", "2", "-c:a", "flac",
+       str(prof.root("audio", EP) / "S01E20-LD20-synced.flac"))
+    ApprovalBook(ws.state_dir / "approvals").record(review="encode", decision="APPROVED", note="encode reviewed",
+                                                    actor="op", evidence=[video])
+    st = run(env, "m2")["steps"]["mux"]
+    assert st["status"] == "failed" and any("LD audio packet hash changed" in i for i in st["issues"])
+    assert not (prof.root("out", EP) / "S01E20-23.976-padfixed.mkv").exists()

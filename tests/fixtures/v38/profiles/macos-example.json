@@ -1,0 +1,56 @@
+{
+  "_readme": "macOS Apple-silicon example only. Replace every /Users/YOUR_ACCOUNT path before copying to a device-local machine.json. Never store machine.json in the README/release folder. For device-workspace mode set shared.enabled=true and shared.release_root to the parent folder of the README being followed, then use shared_workspace.py ensure for devices/<device-instance>/episodes/<code>. Workspace creation is required setup but not a gate; the runner uses isolated device-local roots if README-folder devices/ is unavailable.",
+  "machine": "MAC-OPENCODE",
+  "os": "darwin",
+  "shared": {
+    "enabled": false,
+    "release_root": "",
+    "device_name": ""
+  },
+  "tools": {
+    "ffmpeg": "/Users/YOUR_ACCOUNT/tools/ffmpeg/ffmpeg",
+    "ffprobe": "/Users/YOUR_ACCOUNT/tools/ffmpeg/ffprobe",
+    "orc": "/Applications/Decode-Orc.app/Contents/MacOS/orc-cli",
+    "pwsh": "/Users/YOUR_ACCOUNT/tools/pwsh/pwsh",
+    "python": "/Users/YOUR_ACCOUNT/tools/vsenv/bin/python",
+    "vspipe": "/Users/YOUR_ACCOUNT/tools/vsenv/bin/vspipe",
+    "rife_engine": "",
+    "rife_model_dir": "",
+    "sevenzip": ""
+  },
+  "roots": {
+    "downloads_root": "/Volumes/YOUR_FAST_VOLUME",
+    "downloads_template": "DS9 {episode} LaserDisc",
+    "work": "/Users/YOUR_ACCOUNT/work",
+    "probe": "/Users/YOUR_ACCOUNT/work/probe",
+    "avs": "/Users/YOUR_ACCOUNT/work/avs",
+    "audio": "/Users/YOUR_ACCOUNT/work/audio",
+    "subs": "/Users/YOUR_ACCOUNT/work/subs",
+    "out": "/Users/YOUR_ACCOUNT/work/out",
+    "prores": "/Users/YOUR_ACCOUNT/work/prores",
+    "stack": "/Users/YOUR_ACCOUNT/work/stack",
+    "logs": "/Users/YOUR_ACCOUNT/work/logs",
+    "runbook_dir": "/Users/YOUR_ACCOUNT/ld-pipeline",
+    "archive_share": "",
+    "dvd_root": "",
+    "upscale_root": ""
+  },
+  "python": {
+    "interpreter": "/Users/YOUR_ACCOUNT/tools/vsenv/bin/python",
+    "require": [
+      "numpy",
+      "cv2",
+      "PIL",
+      "vapoursynth"
+    ]
+  },
+  "limits": {
+    "min_free_gb": 80,
+    "heavy_jobs": 1,
+    "select_terms_max": 32
+  },
+  "notes": [
+    "Use a local, fast work volume with the configured free-space reserve; do not render large intermediates on SMB.",
+    "The Windows/AviSynth scripts are not the Mac entry point; use the VapourSynth companions documented in PORTING.md."
+  ]
+}

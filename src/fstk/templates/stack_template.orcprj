@@ -1,0 +1,219 @@
+# ORC Project File
+# Version: 2.0
+
+project:
+  name: filtergraph
+  version: 2.0
+  video_format: NTSC
+  source_format: Composite
+  amplitude_unit: 10bit
+dag:
+  nodes:
+    - id: 1
+      stage: tbc_source
+      node_type: SOURCE
+      display_name: TBC Source
+      user_label: TBC Source
+      x: 0
+      y: 0
+      parameters:
+        input_path:
+          type: string
+          value: X:\DS9 S01E01 LaserDisc\DS9-S01E01-Emissary, Part I-M1.tbc
+    - id: 2
+      stage: tbc_source
+      node_type: SOURCE
+      display_name: TBC Source
+      user_label: TBC Source 2
+      x: 200
+      y: 0
+      parameters:
+        input_path:
+          type: string
+          value: X:\DS9 S01E01 LaserDisc\DS9-S01E01-Emissary, Part I-L1.tbc
+    - id: 3
+      stage: tbc_source
+      node_type: SOURCE
+      display_name: TBC Source
+      user_label: TBC Source 3
+      x: 400
+      y: 0
+      parameters:
+        input_path:
+          type: string
+          value: X:\DS9 S01E01 LaserDisc\DS9-S01E01-Emissary, Part I-P1.tbc
+    - id: 4
+      stage: tbc_source
+      node_type: SOURCE
+      display_name: TBC Source
+      user_label: TBC Source 4
+      x: 600
+      y: 0
+      parameters:
+        input_path:
+          type: string
+          value: X:\DS9 S01E01 LaserDisc\DS9-S01E01-Emissary, Part I-P2.tbc
+    - id: 5
+      stage: tbc_source
+      node_type: SOURCE
+      display_name: TBC Source
+      user_label: TBC Source 5
+      x: 800
+      y: 0
+      parameters:
+        input_path:
+          type: string
+          value: X:\DS9 S01E01 LaserDisc\DS9-S01E01-Emissary, Part I-P3.tbc
+    - id: 6
+      stage: tbc_source
+      node_type: SOURCE
+      display_name: TBC Source
+      user_label: TBC Source 6
+      x: 1000
+      y: 0
+      parameters:
+        input_path:
+          type: string
+          value: X:\DS9 S01E01 LaserDisc\DS9-S01E01-Emissary, Part I-P4.tbc
+    - id: 7
+      stage: frame_map
+      node_type: TRANSFORM
+      display_name: Frame Map
+      user_label: Frame Map
+      x: 1200
+      y: 0
+      tool_refresh:
+        tool: field_mapping
+    - id: 8
+      stage: frame_map
+      node_type: TRANSFORM
+      display_name: Frame Map
+      user_label: Frame Map 2
+      x: 1400
+      y: 0
+      tool_refresh:
+        tool: field_mapping
+    - id: 9
+      stage: frame_map
+      node_type: TRANSFORM
+      display_name: Frame Map
+      user_label: Frame Map 3
+      x: 1600
+      y: 0
+      tool_refresh:
+        tool: field_mapping
+    - id: 10
+      stage: frame_map
+      node_type: TRANSFORM
+      display_name: Frame Map
+      user_label: Frame Map 4
+      x: 1800
+      y: 0
+      tool_refresh:
+        tool: field_mapping
+    - id: 11
+      stage: frame_map
+      node_type: TRANSFORM
+      display_name: Frame Map
+      user_label: Frame Map 5
+      x: 2000
+      y: 0
+      tool_refresh:
+        tool: field_mapping
+    - id: 12
+      stage: frame_map
+      node_type: TRANSFORM
+      display_name: Frame Map
+      user_label: Frame Map 6
+      x: 2200
+      y: 0
+      tool_refresh:
+        tool: field_mapping
+    - id: 13
+      stage: source_align
+      node_type: COMPLEX
+      display_name: Source Align
+      user_label: Source Align
+      x: 2400
+      y: 0
+      tool_refresh:
+        tool: source_alignment
+      parameters:
+        alignmentMap:
+          type: string
+          value: 1+0,2+3,3+2,4+24,5+1,6+28
+        alignmentMode:
+          type: string
+          value: pad_for_alignment
+    - id: 14
+      stage: stacker
+      node_type: MERGER
+      display_name: Stacker
+      user_label: Stacker
+      x: 2600
+      y: 0
+      parameters:
+        mode:
+          type: string
+          value: Weighted
+    - id: 15
+      stage: video_sink
+      node_type: SINK
+      display_name: Video Sink
+      user_label: Video Sink
+      x: 2800
+      y: 0
+      parameters:
+        adapt_threshold:
+          type: double
+          value: 0.1
+        chroma_weight:
+          type: double
+          value: 2
+        decoder_type:
+          type: string
+          value: ntsc3d
+        display_aspect_ratio:
+          type: string
+          value: 4:3
+        ffmpeg_format:
+          type: string
+          value: mov-prores
+        ntsc_phase_comp:
+          type: bool
+          value: true
+        output_path:
+          type: string
+          value: Z:\work\prores\S01E01-stack6-master.mov
+        prores_profile:
+          type: string
+          value: hq
+  edges:
+    - from: 1
+      to: 7
+    - from: 2
+      to: 8
+    - from: 3
+      to: 9
+    - from: 4
+      to: 10
+    - from: 5
+      to: 11
+    - from: 6
+      to: 12
+    - from: 7
+      to: 13
+    - from: 8
+      to: 13
+    - from: 9
+      to: 13
+    - from: 10
+      to: 13
+    - from: 11
+      to: 13
+    - from: 12
+      to: 13
+    - from: 13
+      to: 14
+    - from: 14
+      to: 15

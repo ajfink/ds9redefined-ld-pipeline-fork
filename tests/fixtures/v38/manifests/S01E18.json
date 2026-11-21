@@ -1,0 +1,454 @@
+{
+  "_readme": [
+    "Per-episode manifest. New manifests persist both series and SxxExx; missing series in legacy manifests means DS9.",
+    "Canonical identity is SERIES:SxxExx. DS9 keeps its historical manifest/workspace paths; VOY is namespaced.",
+    "Scripts read this instead of hard-coding frame counts, durations, skips or paths.",
+    "Rule: if an accessor asks for a value and it is not here, the script fails loudly -",
+    "measure it and record it. Never guess and never copy another episode's number.",
+    "Unknown measurements must remain null/unset. Never use zero as a placeholder for an unknown value.",
+    "files.* uses {root, name} so machine paths stay in machine.json; alternatively",
+    "{path} with an absolute path is accepted for files that are not under a known root.",
+    "roots.downloads optionally overrides the profile's download-folder template."
+  ],
+  "episode": "S01E18",
+  "series": "DS9",
+  "identity": "DS9:S01E18",
+  "title": "Title not supplied (DS9:S01E18)",
+  "pad_report_label": "S01E18",
+  "record_status": "draft",
+  "format": "one_part",
+  "archive_item": "DS9-S01E18-LaserDisc-Copies",
+  "dvd_reference_available": true,
+  "no_dvd_proceed_approved": false,
+  "cut_pad_images_choice": "not-applicable",
+  "captures": [
+    {
+      "label": "L1",
+      "tbc_file": "DS9-S01E18-Dramatis Personae-L1.tbc",
+      "tbc_bytes": 79506383320,
+      "tbc_md5": "",
+      "json_file": "DS9-S01E18-Dramatis Personae-L1.tbc.json",
+      "json_bytes": 44642030,
+      "json_md5": "",
+      "efm_file": "DS9-S01E18-Dramatis Personae-L1.efm",
+      "efm_bytes": 2469285980,
+      "efm_md5": ""
+    },
+    {
+      "label": "M1",
+      "tbc_file": "DS9-S01E18-Dramatis Personae-M1.tbc",
+      "tbc_bytes": 79501596720,
+      "tbc_md5": "",
+      "json_file": "DS9-S01E18-Dramatis Personae-M1.tbc.json",
+      "json_bytes": 44656711,
+      "json_md5": "",
+      "efm_file": "DS9-S01E18-Dramatis Personae-M1.efm",
+      "efm_bytes": 2469149735,
+      "efm_md5": ""
+    },
+    {
+      "label": "P1",
+      "tbc_file": "DS9-S01E18-Dramatis Personae-P1.tbc",
+      "tbc_bytes": 79447986800,
+      "tbc_md5": "",
+      "json_file": "DS9-S01E18-Dramatis Personae-P1.tbc.json",
+      "json_bytes": 44640491,
+      "json_md5": "",
+      "efm_file": "DS9-S01E18-Dramatis Personae-P1.efm",
+      "efm_bytes": 2467454925,
+      "efm_md5": ""
+    },
+    {
+      "label": "P2",
+      "tbc_file": "DS9-S01E18-Dramatis Personae-P2.tbc",
+      "tbc_bytes": 79483407640,
+      "tbc_md5": "",
+      "json_file": "DS9-S01E18-Dramatis Personae-P2.tbc.json",
+      "json_bytes": 44643100,
+      "json_md5": "",
+      "efm_file": "DS9-S01E18-Dramatis Personae-P2.efm",
+      "efm_bytes": 2468607647,
+      "efm_md5": ""
+    },
+    {
+      "label": "P3",
+      "tbc_file": "DS9-S01E18-Dramatis Personae-P3.tbc",
+      "tbc_bytes": 79478621040,
+      "tbc_md5": "",
+      "json_file": "DS9-S01E18-Dramatis Personae-P3.tbc.json",
+      "json_bytes": 44639162,
+      "json_md5": "",
+      "efm_file": "DS9-S01E18-Dramatis Personae-P3.efm",
+      "efm_bytes": 2468439319,
+      "efm_md5": ""
+    }
+  ],
+  "reference": "L1",
+  "alignment_map": "1+0, 2+5, 3+61, 4+24, 5+29",
+  "stack": {
+    "frames": 83134,
+    "duration_s": null,
+    "pressing_groups": [],
+    "fit_trusted": null,
+    "fell_back_to_mean": null,
+    "stack_sigma": null,
+    "best_single_sigma": null
+  },
+  "audio": {
+    "capture": "",
+    "capture_selection": null,
+    "capture_selection_history": [],
+    "efm_provenance_required": true,
+    "efm_provenance": {},
+    "pad_frames": null,
+    "skip_s": null,
+    "rate_fit_ppm": null,
+    "rate_fit_stderr_ppm": null,
+    "asetrate": null,
+    "corrected_duration_s": null,
+    "origin_verified_by_duration": null,
+    "rate_method": null,
+    "duration_candidate_rate_hz": null,
+    "intermediate_asetrate_hz": null,
+    "resampler": null,
+    "skip_method": null,
+    "wav0_master_frame": null,
+    "endpoint_residual_frames": null,
+    "endpoint_tolerance_frames": null,
+    "absolute_av_reference_available": null,
+    "dvd_free_approved": null
+  },
+  "video": {
+    "frames": null,
+    "duration_s": null,
+    "head_trim": null,
+    "fade_up_output": null,
+    "tail_trim": null,
+    "delta_s": null,
+    "tfm_period5_pct": null,
+    "tfm_unmatched": null,
+    "inserts": null,
+    "repair_frames": null,
+    "repair_pct": null
+  },
+  "pads": {
+    "map_pads": null,
+    "rendered_isolated": null,
+    "repaired": null,
+    "trimmed_away": null,
+    "inside_break_black": null,
+    "never_rendered": null,
+    "cut_pads": null,
+    "cut_pad_frames": [],
+    "content_blacks_left_alone": []
+  },
+  "retime": {
+    "breaks": [],
+    "tail_off": null,
+    "merged_music_through": [],
+    "srt_cues": null,
+    "max_gap_vs_black_s": null,
+    "head_sil_end": null,
+    "tail_sil_start": null
+  },
+  "files": {
+    "dvd": {
+      "path": "Z:\\Video\\DS9S1D5\\Deep Space 9 - S01E18 - Dramatis Personae.mkv"
+    },
+    "stack_project": {
+      "root": "stack",
+      "name": "stack-full-s01e18.orcprj"
+    },
+    "stack_master": {
+      "root": "prores",
+      "name": "S01E18-stack-master.mov"
+    },
+    "tfm_log": {
+      "root": "probe",
+      "name": "full-tfm-log-s01e18.txt"
+    },
+    "motion": {
+      "root": "probe",
+      "name": "motion-s01e18.txt"
+    },
+    "cadence_summary": {
+      "root": "probe",
+      "name": "cadence-summary-s01e18.txt"
+    },
+    "di_map": {
+      "root": "probe",
+      "name": "di-map-s01e18.txt"
+    },
+    "avs_log": {
+      "root": "avs",
+      "name": "S01E18-log.avs"
+    },
+    "avs_trim": {
+      "root": "avs",
+      "name": "S01E18-trim.avs"
+    },
+    "avs_encode": {
+      "root": "avs",
+      "name": "S01E18-encode.avs"
+    },
+    "avs_padfix": {
+      "root": "avs",
+      "name": "S01E18-padfix.avs"
+    },
+    "padfixed_video": {
+      "root": "out",
+      "name": "S01E18-23.976-padfixed-video.mkv"
+    },
+    "padfixed": {
+      "root": "out",
+      "name": "S01E18-23.976-padfixed.mkv"
+    },
+    "pre_upscale": {
+      "root": "out",
+      "name": "S01E18-23.976-pre-upscale.mkv"
+    },
+    "dvd51_source": {
+      "root": "audio",
+      "name": "S01E18-Title not supplied (DS9:S01E18)-dvd-51-original.ac3"
+    },
+    "ld_synced": {
+      "root": "audio",
+      "name": "S01E18-LD20-synced.flac"
+    },
+    "srt_source": {
+      "root": "subs",
+      "name": "S01E18-dvd-eng-original.srt"
+    },
+    "retime_graph": {
+      "root": "audio",
+      "name": "dvd-51-retimed-s01e18.filter"
+    },
+    "retimed_51": {
+      "root": "audio",
+      "name": "dvd-51-retimed-s01e18.flac"
+    },
+    "retimed_srt": {
+      "root": "subs",
+      "name": "S01E18-dvd-eng-retimed.srt"
+    },
+    "retime_map": {
+      "root": "probe",
+      "name": "dvd-retime-map-s01e18.tsv"
+    },
+    "master_descriptors": {
+      "root": "probe",
+      "name": "desc-master-s01e18.npy"
+    },
+    "dvd_descriptors": {
+      "root": "probe",
+      "name": "desc-dvd-s01e18.npy"
+    },
+    "align_npy": {
+      "root": "probe",
+      "name": "dvd-align-s01e18.npy"
+    },
+    "alignment_report": {
+      "root": "probe",
+      "name": "dvd-align-report-s01e18.tsv"
+    },
+    "break_edge_report": {
+      "root": "probe",
+      "name": "break-edge-measurements-s01e18.tsv"
+    },
+    "audio_rate_report": {
+      "root": "probe",
+      "name": "audio-rate-diagnostic-s01e18.tsv"
+    },
+    "audio_timing_report": {
+      "root": "probe",
+      "name": "S01E18-dvd-free-audio-timing.json"
+    },
+    "edges": {
+      "root": "probe",
+      "name": "adjudicated-edges-s01e18.tsv"
+    }
+  },
+  "qc": {
+    "video_md5": "",
+    "ld_audio_md5": "",
+    "fiveone_md5": "",
+    "srt_md5": "",
+    "av_constant_ms": null,
+    "av_slope_ppm": null,
+    "av_rms_ms": null,
+    "track_offset_ms": null,
+    "pad_aligned_black_hits": null,
+    "identity_own_ncc_min": null,
+    "identity_other_ncc_max": null,
+    "full_decode_errors": null
+  },
+  "deliverable": "pre_upscale",
+  "deliverable_tracks": [
+    "ld"
+  ],
+  "_labels_note": "pad_report_label keys shared reports; set it to this episode code. deliverable is a files.* key naming the actual file QC checks. deliverable_tracks describes its streams. Top-level mux_tracks and ld_audio_source configure remux_padfixed.",
+  "mux_tracks": [
+    "ld"
+  ],
+  "ld_audio_source": "ld_synced",
+  "_mux_note": "mux_tracks controls the LD-only/intermediate remux. ld_audio_source is the files.* key for its uncompressed/FLAC LD audio input. Add 51 and srt only when the measured sources are available.",
+  "archive_item_verified": false,
+  "source_provenance": {
+    "mode": "local-inventory",
+    "archive_verified": false,
+    "verification_method": "local source fingerprint only; Archive origin/authenticity not established",
+    "fingerprint_policy": "balanced",
+    "inventory_created_utc": "2026-11-17T21:40:17.145516+00:00",
+    "inventory": {
+      "schema": "ld-pipeline-local-source-inventory-v1",
+      "created_utc": "2026-11-17T21:40:17.145516+00:00",
+      "episode": "S01E18",
+      "source_mode": "local-inventory",
+      "archive_id_hint": "DS9-S01E18-LaserDisc-Copies",
+      "archive_verified": false,
+      "verification_method": "local SHA-256 file fingerprint; not proof of Archive origin or authenticity",
+      "fingerprint_policy": "balanced",
+      "captures": [
+        {
+          "label": "L1",
+          "files": {
+            "tbc": {
+              "name": "DS9-S01E18-Dramatis Personae-L1.tbc",
+              "size_bytes": 79506383320,
+              "mtime_ns": 1794901139614062100,
+              "sha256": "61ea042090b49be979019a0c3bff51252d80f022b042e25ba31cb03e32fe7974",
+              "hash_scope": "first-last-4MiB"
+            },
+            "json": {
+              "name": "DS9-S01E18-Dramatis Personae-L1.tbc.json",
+              "size_bytes": 44642030,
+              "mtime_ns": 1794901303719826700,
+              "sha256": "f56d5c7a8c30dfd72b018c04dacd596fdaba9a30455edc4f23b74cf2ef769163",
+              "hash_scope": "first-last-4MiB"
+            },
+            "efm": {
+              "name": "DS9-S01E18-Dramatis Personae-L1.efm",
+              "size_bytes": 2469285980,
+              "mtime_ns": 1794899416457684600,
+              "sha256": "bc8feaf539c1d04115dacf38faa41475248b38cc552dfba106949346cfc1435f",
+              "hash_scope": "first-last-4MiB"
+            }
+          }
+        },
+        {
+          "label": "M1",
+          "files": {
+            "tbc": {
+              "name": "DS9-S01E18-Dramatis Personae-M1.tbc",
+              "size_bytes": 79501596720,
+              "mtime_ns": 1794902912108554300,
+              "sha256": "24327123d9612abb6b935d3ab846abafcc3d1d28b4b4882ec782e8d88308da27",
+              "hash_scope": "first-last-4MiB"
+            },
+            "json": {
+              "name": "DS9-S01E18-Dramatis Personae-M1.tbc.json",
+              "size_bytes": 44656711,
+              "mtime_ns": 1794903077028825000,
+              "sha256": "1e74fb242fe776d4fd789ab949506c54752410e0922365993c524ae269fe0c8a",
+              "hash_scope": "first-last-4MiB"
+            },
+            "efm": {
+              "name": "DS9-S01E18-Dramatis Personae-M1.efm",
+              "size_bytes": 2469149735,
+              "mtime_ns": 1794901356804266300,
+              "sha256": "deb7aec81e87f9c43ba7b6e2618b7b4db787ec2c8954fa72d21985e81d02828c",
+              "hash_scope": "first-last-4MiB"
+            }
+          }
+        },
+        {
+          "label": "P1",
+          "files": {
+            "tbc": {
+              "name": "DS9-S01E18-Dramatis Personae-P1.tbc",
+              "size_bytes": 79447986800,
+              "mtime_ns": 1794904568188076400,
+              "sha256": "63a2873da9dadd62dc680a7769305b89675759c14805c32151df8ae417c3a6ba",
+              "hash_scope": "first-last-4MiB"
+            },
+            "json": {
+              "name": "DS9-S01E18-Dramatis Personae-P1.tbc.json",
+              "size_bytes": 44640491,
+              "mtime_ns": 1794904730071005100,
+              "sha256": "6d689561c3672852d45868a5b60b7b9bdf51f1a60b55196def6bb5e148710164",
+              "hash_scope": "first-last-4MiB"
+            },
+            "efm": {
+              "name": "DS9-S01E18-Dramatis Personae-P1.efm",
+              "size_bytes": 2467454925,
+              "mtime_ns": 1794903127682770900,
+              "sha256": "438f0227fa51a75136e568167b85c776110d4c623697c19dfd867229934fefb6",
+              "hash_scope": "first-last-4MiB"
+            }
+          }
+        },
+        {
+          "label": "P2",
+          "files": {
+            "tbc": {
+              "name": "DS9-S01E18-Dramatis Personae-P2.tbc",
+              "size_bytes": 79483407640,
+              "mtime_ns": 1794906331627223500,
+              "sha256": "8f65ebe49ff2e8b7cd6a337d727554d7df15b32c2e801044a5f8267481674ef4",
+              "hash_scope": "first-last-4MiB"
+            },
+            "json": {
+              "name": "DS9-S01E18-Dramatis Personae-P2.tbc.json",
+              "size_bytes": 44643100,
+              "mtime_ns": 1794906498442903100,
+              "sha256": "e608c1a0f939dc2f0ed92fb7a0e73a16ea890cadfcaa92dfe33f6845b329c829",
+              "hash_scope": "first-last-4MiB"
+            },
+            "efm": {
+              "name": "DS9-S01E18-Dramatis Personae-P2.efm",
+              "size_bytes": 2468607647,
+              "mtime_ns": 1794904777750550900,
+              "sha256": "6899384a70f925be7b07ae1f3af995d3cab08c508f26e54e9d8aaa87d6415664",
+              "hash_scope": "first-last-4MiB"
+            }
+          }
+        },
+        {
+          "label": "P3",
+          "files": {
+            "tbc": {
+              "name": "DS9-S01E18-Dramatis Personae-P3.tbc",
+              "size_bytes": 79478621040,
+              "mtime_ns": 1794908023854378300,
+              "sha256": "cdf06b50bbc57a8e5e5da38b533a0744d4edd6dd86b901fbcaf50851f942da03",
+              "hash_scope": "first-last-4MiB"
+            },
+            "json": {
+              "name": "DS9-S01E18-Dramatis Personae-P3.tbc.json",
+              "size_bytes": 44639162,
+              "mtime_ns": 1794908199040644500,
+              "sha256": "876c31043a087802c32c5ea779665059d8998864da8a8bc445d3caf1f617b8d1",
+              "hash_scope": "first-last-4MiB"
+            },
+            "efm": {
+              "name": "DS9-S01E18-Dramatis Personae-P3.efm",
+              "size_bytes": 2468439319,
+              "mtime_ns": 1794906572548664200,
+              "sha256": "0e928993b0b95e74da89218db9ebf90f9a3421119253118f355e9185a8bee745",
+              "hash_scope": "first-last-4MiB"
+            }
+          }
+        }
+      ],
+      "raw_rf_files": [],
+      "ignored_files": [
+        "SOURCE-ITEM.txt"
+      ],
+      "selected_name": "DS9 S01E18 LaserDisc"
+    }
+  },
+  "_init_note": "Local source inventory only; no Archive verification or authenticity claim. The selected source/DVD paths are retained in this device-scoped manifest for validation. Capture files were not modified. All episode measurements remain unmeasured.",
+  "roots": {
+    "downloads": "Z:\\DS9 S01E18 LaserDisc"
+  }
+}

@@ -1,0 +1,243 @@
+diff -ruN a/Versioning/PENDING-CORE-CHANGES-2026-11-21.md b/Versioning/PENDING-CORE-CHANGES-2026-11-21.md
+--- a/Versioning/PENDING-CORE-CHANGES-2026-11-21.md	1970-01-01 00:00:00.000000000 +0000
++++ b/Versioning/PENDING-CORE-CHANGES-2026-11-21.md	2026-11-21 17:29:03.928990389 +0000
+@@ -0,0 +1,32 @@
++# Pending core changes (applied 2026-11-21 at the owner's request; version NOT incremented)
++
++Source: findings from the fstk rebuild (`Z:\FromStunToKill\docs\findings\`). These are core
++workflow changes under `WORKFLOW_VERSIONING.md`; `WORKFLOW_VERSION` was deliberately left at 38
++so the owner can fold them into the next increment and record `FROM Version 38 -> Version 39`.
++
++## 1. Window-centre audio-rate origin (fstk finding 0001)
++* **Files:** `scripts/measure_audio_rate.py`, `tests/test_audio_rate_centre_reference.py` (new).
++* **Reason:** each 50 s correlation window was referenced at its start. Correlating a window
++  between clocks differing by r ppm aligns window *centres*, so start-referenced pairs bias the
++  fitted intercept (A/V origin) by ≈ r × 25 s (+21.6 ms at 864 ppm) while the slope is unchanged.
++* **Change (additive, report-only):** the window TSV gains `master_equivalent_centre_time_s`
++  (the matched DVD-audio window centre mapped through the same picture map); the summary JSON
++  (live and `summarize_saved_report`) gains a `centre_referenced` block with OLS/Theil–Sen fits of
++  centre pairs. Older TSVs without the column get a labelled approximation (`exact: false`) via
++  the picture-map slope. Existing fields, columns and their meanings are unchanged; nothing
++  approves or writes `ld_corrected`/`skip_s`.
++* **Validation:** new tests (exact column, approximation path, mask handling); full non-GUI
++  suite in the fstk container: 515 passed, 11 skipped (Tkinter modules not collectable there).
++  No real-media run: no saved audio-rate TSV exists on the device yet.
++
++## 2. Windows map: explicit tail trim (fstk finding 0002)
++* **File:** `scripts/build_map.ps1`.
++* **Reason:** AviSynth `Trim(first, -n)` returns n frames, so `.Trim($TrimStart, -$TrimEnd)` kept
++  only `$TrimEnd` frames whenever `video.tail_trim > 0`. All delivered/worked examples used
++  `tail_trim = 0`, so no shipped output was affected.
++* **Change:** decimated clip is named `dec`; output is `dec.Trim($TrimStart, dec.FrameCount - 1 - $TrimEnd)`;
++  when the manifest has a measured `video.frames`, the generated script also asserts
++  `out.FrameCount == video.frames`.
++* **Validation:** reviewed by inspection only — PowerShell/AviSynth were not available in the
++  container. **Owner: run `build_map.ps1 -Episode <code> -DryRun`, then open the generated .avs
++  once (e.g. in AvsPmod or with ffprobe) on an episode with tail_trim > 0 before relying on it.**
+diff -ruN a/scripts/build_map.ps1 b/scripts/build_map.ps1
+--- a/scripts/build_map.ps1	2026-11-21 17:29:03.923204711 +0000
++++ b/scripts/build_map.ps1	2026-11-21 17:29:03.924932127 +0000
+@@ -347,8 +347,14 @@
+     $seg = ($ranges[$i..$end] -join ' ')
+     $body.Add(('fm  = ReplaceFramesSimple(fm, di, mappings="{0}")' -f $seg))
+ }
+-$avsTrimEnd = if ($TrimEnd -gt 0) { -$TrimEnd } else { 0 }
+-$body.Add("out = fm.TDecimate(mode=1, cycle=5, cycleR=1, chroma=true).Trim($TrimStart, $avsTrimEnd)")
++# AviSynth Trim(first, -n) returns n FRAMES (a negative end is a frame count), so the former
++# .Trim($TrimStart, -$TrimEnd) kept only $TrimEnd frames. Use an explicit last-frame index.
++# (fstk docs/findings/0002-avisynth-negative-trim.md)
++$body.Add("dec = fm.TDecimate(mode=1, cycle=5, cycleR=1, chroma=true)")
++$body.Add("out = dec.Trim($TrimStart, dec.FrameCount - 1 - $TrimEnd)")
++if ($ep -and $null -ne $ep.video.frames) {
++    $body.Add("Assert(out.FrameCount == $([int]$ep.video.frames), `"output frame count differs from measured video.frames`")")
++}
+ $body.Add('out = out.ConvertBits(10)')
+ $body.Add('return out')
+ 
+diff -ruN a/scripts/measure_audio_rate.py b/scripts/measure_audio_rate.py
+--- a/scripts/measure_audio_rate.py	2026-11-21 17:29:03.923238403 +0000
++++ b/scripts/measure_audio_rate.py	2026-11-21 17:29:03.924966198 +0000
+@@ -157,6 +157,25 @@
+     raise PipelineError(f"could not allocate a unique report pair beside {out}")
+ 
+ 
++def centre_referenced_fit(x_start, y_centre, use) -> dict:
++    """Fit window-CENTRE pairs: (WAV window start + WINDOW/2, master-equivalent of matched centre).
++
++    Correlating a 50 s window between clocks that differ by r ppm aligns the windows' centres,
++    so start-referenced pairs carry an intercept (origin) bias of about r*WINDOW/2 while the
++    slope is unchanged (fstk docs/findings/0001-audio-window-reference-bias.md). Report-only,
++    like every fit here: never an approval."""
++    import numpy as np
++    xc = np.asarray(x_start, dtype=np.float64) + WINDOW / 2.0
++    yc = np.asarray(y_centre, dtype=np.float64)
++    slope, intercept = np.polyfit(xc[use], yc[use], 1)
++    r_slope, r_intercept, r_mad, loo = robust_line_fit(xc[use], yc[use])
++    return {"convention": "window-centre pairs", "window_s": WINDOW,
++            "ols": {"slope_master_s_per_wav_s": float(slope), "intercept_s": float(intercept),
++                    "rate_delta_ppm": float((slope - 1.0) * 1e6)},
++            "theil_sen": {"slope_master_s_per_wav_s": float(r_slope), "intercept_s": float(r_intercept),
++                          "rate_delta_ppm": float((r_slope - 1.0) * 1e6), "residual_mad_s": float(r_mad)}}
++
++
+ def summarize_saved_report(path: Path, min_corr: float) -> dict:
+     """Recompute OLS/robust summaries from a saved window TSV; performs no media I/O."""
+     import numpy as np
+@@ -180,6 +199,21 @@
+     ols_se = float(np.sqrt(np.sum(residual ** 2) / dof / np.sum((x[use] - x[use].mean()) ** 2)))
+     robust_slope, robust_intercept, robust_mad, loo = robust_line_fit(x[use], y[use])
+     digest = hashlib.sha256(path.read_bytes()).hexdigest()
++    if "master_equivalent_centre_time_s" in rows[0]:
++        y_centre = np.array([float(r["master_equivalent_centre_time_s"]) for r in rows], dtype=np.float64)
++        centre = centre_referenced_fit(x, y_centre, use)
++        centre["exact"] = True
++    elif all(k in rows[0] for k in ("master_time_s", "dvd_video_time_s")):
++        # Older TSV without the centre column: shift by WINDOW/2 through the picture map's
++        # mean slope (master s per DVD s); labelled approximate.
++        mt = np.array([float(r["master_time_s"]) for r in rows], dtype=np.float64)
++        dv = np.array([float(r["dvd_video_time_s"]) for r in rows], dtype=np.float64)
++        map_slope = float(np.polyfit(dv, mt, 1)[0]) if len(rows) >= 2 else 1.0
++        centre = centre_referenced_fit(x, y + map_slope * WINDOW / 2.0, use)
++        centre["exact"] = False
++        centre["approximation"] = f"centre = start + WINDOW/2 via picture-map slope {map_slope:.9f}"
++    else:
++        centre = None
+     return {
+         "schema": "dvd-picture-audio-rate-summary-v2",
+         "created_utc": datetime.now(timezone.utc).isoformat(),
+@@ -198,6 +232,7 @@
+                       "rate_delta_ppm": float((robust_slope - 1.0) * 1e6), "residual_mad_s": robust_mad,
+                       "leave_one_window_out_rate_ppm_range": [(loo[0] - 1.0) * 1e6, (loo[1] - 1.0) * 1e6],
+                       "candidate_rate_hz": float(44100.0 / robust_slope) if robust_slope > 0 else None},
++        "centre_referenced": centre,
+         "candidate_is_approval": False,
+         "windows": [{"ld_wav_time_s": float(x[i]), "master_equivalent_time_s": float(y[i]),
+                      "corr": float(corr[i]), "search_edge": bool(edge[i]), "used": bool(use[i])}
+@@ -324,7 +359,8 @@
+         # Invert the independently measured picture map. This separates the
+         # LD-audio-vs-master rate from the DVD-audio-vs-picture offset.
+         master_equivalent = float(np.interp(dvd_audio_start,dvd_picture_clock,master_clock))
+-        rows.append((t,wav_start,master,offset,dvd_video,dvd_audio_start,master_equivalent,peak,runner,edge))
++        master_equivalent_centre = float(np.interp(dvd_audio_start+WINDOW/2.0,dvd_picture_clock,master_clock))
++        rows.append((t,wav_start,master,offset,dvd_video,dvd_audio_start,master_equivalent,peak,runner,edge,master_equivalent_centre))
+         print(f"out={t:7.1f}s WAV={wav_start:8.3f}s DVD-video={dvd_video:8.3f}s DVD-audio={dvd_audio_start:8.3f}s master-equivalent={master_equivalent:8.3f}s corr={peak:.3f} runner={runner:.3f} edge={edge}",flush=True)
+ 
+     x=np.array([r[1] for r in rows],dtype=np.float64)
+@@ -347,6 +383,11 @@
+     print(f"ROBUST CHECK (Theil-Sen; not an approval): master-equivalent = {robust_intercept:.6f} + "
+           f"{robust_slope:.9f} * LD-WAV-time; delta={robust_ppm:+.1f} ppm; "
+           f"residual MAD={robust_mad:.4f}s; leave-one-window-out={robust_loo_ppm[0]:+.1f}..{robust_loo_ppm[1]:+.1f} ppm")
++    centre = centre_referenced_fit(x, np.array([r[10] for r in rows], dtype=np.float64), use)
++    centre["exact"] = True
++    print(f"CENTRE-REFERENCED (window centres; not an approval): master-equivalent = "
++          f"{centre['theil_sen']['intercept_s']:.6f} + {centre['theil_sen']['slope_master_s_per_wav_s']:.9f} * LD-WAV-time; "
++          f"origin shift vs start-referenced = {(centre['theil_sen']['intercept_s'] - robust_intercept) * 1000:+.1f} ms")
+     if slope > 0:
+         candidate = 44100.0 / slope
+         print(f"candidate-only sample-rate label: {candidate:.2f} Hz (do not apply unless the primary fade-midpoint fit/origin check independently agrees)")
+@@ -362,7 +403,7 @@
+     out.parent.mkdir(parents=True,exist_ok=True)
+     with out.open("w",newline="",encoding="utf-8") as f:
+         w=csv.writer(f,delimiter="\t")
+-        w.writerow(("out_time_s","ld_wav_time_s","master_time_s","picture_offset_frames","dvd_video_time_s","matched_dvd_audio_time_s","master_equivalent_time_s","corr","runner_up_corr","search_edge"))
++        w.writerow(("out_time_s","ld_wav_time_s","master_time_s","picture_offset_frames","dvd_video_time_s","matched_dvd_audio_time_s","master_equivalent_time_s","corr","runner_up_corr","search_edge","master_equivalent_centre_time_s"))
+         for r in rows:w.writerow([f"{x:.6f}" if isinstance(x,(float,np.floating)) else x for x in r])
+     print(f"report: {out}")
+     summary = {
+@@ -389,10 +430,12 @@
+                       "leave_one_window_out_rate_ppm_range": [float(robust_loo_ppm[0]), float(robust_loo_ppm[1])],
+                       "candidate_rate_hz": float(44100.0 / robust_slope) if robust_slope > 0 else None},
+         "candidate_is_approval": False,
++        "centre_referenced": centre,
+         "window_tsv": str(out),
+         "windows": [{"out_time_s": float(r[0]), "ld_wav_time_s": float(r[1]),
+                      "master_equivalent_time_s": float(r[6]), "corr": float(r[7]),
+-                     "runner_up_corr": float(r[8]), "search_edge": bool(r[9])} for r in rows],
++                     "runner_up_corr": float(r[8]), "search_edge": bool(r[9]),
++                     "master_equivalent_centre_time_s": float(r[10])} for r in rows],
+     }
+     summary_out.parent.mkdir(parents=True, exist_ok=True)
+     summary_out.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+diff -ruN a/tests/test_audio_rate_centre_reference.py b/tests/test_audio_rate_centre_reference.py
+--- a/tests/test_audio_rate_centre_reference.py	1970-01-01 00:00:00.000000000 +0000
++++ b/tests/test_audio_rate_centre_reference.py	2026-11-21 17:29:03.926826836 +0000
+@@ -0,0 +1,79 @@
++"""Centre-referenced audio-rate fits remove the window-start origin bias (fstk finding 0001)."""
++from __future__ import annotations
++
++import csv
++import sys
++import tempfile
++import unittest
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT / "scripts"))
++
++from measure_audio_rate import WINDOW, centre_referenced_fit, summarize_saved_report  # noqa: E402
++
++TRUE_OFFSET = 0.37
++PPM = 864.0
++SLOPE = 1.0 + PPM * 1e-6
++
++
++def _rows(with_centre: bool) -> list[dict]:
++    rows = []
++    for i in range(12):
++        start = 100.0 + 120.0 * i
++        # A start-referenced match lands where the window CENTRES coincide, so the matched
++        # start is shifted by (SLOPE - 1) * WINDOW / 2 from the true mapping of the start.
++        y_start = TRUE_OFFSET + SLOPE * start + (SLOPE - 1.0) * WINDOW / 2.0
++        row = {"out_time_s": start, "ld_wav_time_s": start, "master_time_s": start,
++               "picture_offset_frames": 0, "dvd_video_time_s": start, "matched_dvd_audio_time_s": y_start,
++               "master_equivalent_time_s": y_start, "corr": 0.9, "runner_up_corr": 0.2, "search_edge": False}
++        if with_centre:
++            row["master_equivalent_centre_time_s"] = y_start + WINDOW / 2.0
++        rows.append(row)
++    return rows
++
++
++def _write(rows: list[dict], path: Path) -> None:
++    with path.open("w", newline="", encoding="utf-8") as f:
++        w = csv.DictWriter(f, fieldnames=list(rows[0]), delimiter="\t")
++        w.writeheader()
++        w.writerows(rows)
++
++
++class CentreReferenceTests(unittest.TestCase):
++    def test_start_pairs_are_biased_and_centre_pairs_are_not(self):
++        rows = _rows(with_centre=True)
++        with tempfile.TemporaryDirectory() as tmp:
++            tsv = Path(tmp) / "rate.tsv"
++            _write(rows, tsv)
++            summary = summarize_saved_report(tsv, 0.5)
++        start_intercept = summary["theil_sen"]["intercept_s"]
++        centre = summary["centre_referenced"]
++        self.assertTrue(centre["exact"])
++        self.assertAlmostEqual(start_intercept - TRUE_OFFSET, (SLOPE - 1.0) * WINDOW / 2.0, places=6)
++        self.assertAlmostEqual(centre["theil_sen"]["intercept_s"], TRUE_OFFSET, places=6)
++        self.assertAlmostEqual(centre["theil_sen"]["rate_delta_ppm"], summary["theil_sen"]["rate_delta_ppm"],
++                               places=3)
++
++    def test_older_tsv_uses_labelled_picture_map_approximation(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            tsv = Path(tmp) / "rate.tsv"
++            _write(_rows(with_centre=False), tsv)
++            centre = summarize_saved_report(tsv, 0.5)["centre_referenced"]
++        self.assertFalse(centre["exact"])
++        self.assertIn("picture-map slope", centre["approximation"])
++        self.assertAlmostEqual(centre["theil_sen"]["intercept_s"], TRUE_OFFSET, places=6)
++
++    def test_fit_helper_respects_the_used_mask(self):
++        import numpy as np
++
++        x = np.array([0.0, 100.0, 200.0, 300.0, 400.0])
++        y = x + WINDOW / 2.0 + 1.0
++        y[2] += 50.0  # an outlier excluded by the mask
++        use = np.array([True, True, False, True, True])
++        fit = centre_referenced_fit(x, y, use)
++        self.assertAlmostEqual(fit["ols"]["intercept_s"], 1.0, places=9)
++
++
++if __name__ == "__main__":
++    unittest.main()

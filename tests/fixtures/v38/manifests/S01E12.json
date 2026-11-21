@@ -1,0 +1,450 @@
+{
+  "_readme": [
+    "Per-episode manifest. New manifests persist both series and SxxExx; missing series in legacy manifests means DS9.",
+    "Canonical identity is SERIES:SxxExx. DS9 keeps its historical manifest/workspace paths; VOY is namespaced.",
+    "Scripts read this instead of hard-coding frame counts, durations, skips or paths.",
+    "Rule: if an accessor asks for a value and it is not here, the script fails loudly -",
+    "measure it and record it. Never guess and never copy another episode's number.",
+    "Unknown measurements must remain null/unset. Never use zero as a placeholder for an unknown value.",
+    "files.* uses {root, name} so machine paths stay in machine.json; alternatively",
+    "{path} with an absolute path is accepted for files that are not under a known root.",
+    "roots.downloads optionally overrides the profile's download-folder template."
+  ],
+  "episode": "S01E12",
+  "series": "DS9",
+  "identity": "DS9:S01E12",
+  "title": "Vortex",
+  "pad_report_label": "S01E12",
+  "record_status": "draft",
+  "format": "one_part",
+  "archive_item": "DS9-S01E12-LaserDisc-Copies",
+  "dvd_reference_available": true,
+  "no_dvd_proceed_approved": false,
+  "cut_pad_images_choice": "not-applicable",
+  "captures": [
+    {
+      "label": "L1",
+      "tbc_file": "DS9-S01E12-Vortex-L1.tbc",
+      "tbc_bytes": 79604987280,
+      "tbc_md5": "",
+      "json_file": "DS9-S01E12-Vortex-L1.tbc.json",
+      "json_bytes": 44782208,
+      "json_md5": "",
+      "efm_file": "DS9-S01E12-Vortex-L1.efm",
+      "efm_bytes": 2466467599,
+      "efm_md5": ""
+    },
+    {
+      "label": "M1",
+      "tbc_file": "DS9-S01E12-Vortex-M1.tbc",
+      "tbc_bytes": 79604029960,
+      "tbc_md5": "",
+      "json_file": "DS9-S01E12-Vortex-M1.tbc.json",
+      "json_bytes": 44783806,
+      "json_md5": "",
+      "efm_file": "DS9-S01E12-Vortex-M1.efm",
+      "efm_bytes": 2466489033,
+      "efm_md5": ""
+    },
+    {
+      "label": "P1",
+      "tbc_file": "DS9-S01E12-Vortex-P1.tbc",
+      "tbc_bytes": 79525529720,
+      "tbc_md5": "",
+      "json_file": "DS9-S01E12-Vortex-P1.tbc.json",
+      "json_bytes": 44807273,
+      "json_md5": "",
+      "efm_file": "DS9-S01E12-Vortex-P1.efm",
+      "efm_bytes": 2464249702,
+      "efm_md5": ""
+    },
+    {
+      "label": "P2",
+      "tbc_file": "DS9-S01E12-Vortex-P2.tbc",
+      "tbc_bytes": 79582011600,
+      "tbc_md5": "",
+      "json_file": "DS9-S01E12-Vortex-P2.tbc.json",
+      "json_bytes": 44782994,
+      "json_md5": "",
+      "efm_file": "DS9-S01E12-Vortex-P2.efm",
+      "efm_bytes": 2465838495,
+      "efm_md5": ""
+    },
+    {
+      "label": "P3",
+      "tbc_file": "DS9-S01E12-Vortex-P3.tbc",
+      "tbc_bytes": 79578182320,
+      "tbc_md5": "",
+      "json_file": "DS9-S01E12-Vortex-P3.tbc.json",
+      "json_bytes": 44784946,
+      "json_md5": "",
+      "efm_file": "DS9-S01E12-Vortex-P3.efm",
+      "efm_bytes": 2465880292,
+      "efm_md5": ""
+    }
+  ],
+  "reference": "",
+  "alignment_map": "",
+  "stack": {
+    "frames": null,
+    "duration_s": null,
+    "pressing_groups": [],
+    "fit_trusted": null,
+    "fell_back_to_mean": null,
+    "stack_sigma": null,
+    "best_single_sigma": null
+  },
+  "audio": {
+    "capture": "",
+    "pad_frames": null,
+    "skip_s": null,
+    "rate_fit_ppm": null,
+    "rate_fit_stderr_ppm": null,
+    "asetrate": null,
+    "corrected_duration_s": null,
+    "origin_verified_by_duration": null,
+    "rate_method": null,
+    "duration_candidate_rate_hz": null,
+    "intermediate_asetrate_hz": null,
+    "resampler": null,
+    "skip_method": null,
+    "wav0_master_frame": null,
+    "endpoint_residual_frames": null,
+    "endpoint_tolerance_frames": null,
+    "absolute_av_reference_available": null,
+    "dvd_free_approved": null
+  },
+  "video": {
+    "frames": null,
+    "duration_s": null,
+    "head_trim": null,
+    "fade_up_output": null,
+    "tail_trim": null,
+    "delta_s": null,
+    "tfm_period5_pct": null,
+    "tfm_unmatched": null,
+    "inserts": null,
+    "repair_frames": null,
+    "repair_pct": null
+  },
+  "pads": {
+    "map_pads": null,
+    "rendered_isolated": null,
+    "repaired": null,
+    "trimmed_away": null,
+    "inside_break_black": null,
+    "never_rendered": null,
+    "cut_pads": null,
+    "cut_pad_frames": [],
+    "content_blacks_left_alone": []
+  },
+  "retime": {
+    "breaks": [],
+    "tail_off": null,
+    "merged_music_through": [],
+    "srt_cues": null,
+    "max_gap_vs_black_s": null,
+    "head_sil_end": null,
+    "tail_sil_start": null
+  },
+  "files": {
+    "dvd": {
+      "path": "Z:\\Video\\DS9S1D3\\Deep Space Nine - S01E12 - Vortex.mkv"
+    },
+    "stack_project": {
+      "root": "stack",
+      "name": "stack-full-s01e12.orcprj"
+    },
+    "stack_master": {
+      "root": "prores",
+      "name": "S01E12-stack-master.mov"
+    },
+    "tfm_log": {
+      "root": "probe",
+      "name": "full-tfm-log-s01e12.txt"
+    },
+    "motion": {
+      "root": "probe",
+      "name": "motion-s01e12.txt"
+    },
+    "cadence_summary": {
+      "root": "probe",
+      "name": "cadence-summary-s01e12.txt"
+    },
+    "di_map": {
+      "root": "probe",
+      "name": "di-map-s01e12.txt"
+    },
+    "avs_log": {
+      "root": "avs",
+      "name": "S01E12-log.avs"
+    },
+    "avs_trim": {
+      "root": "avs",
+      "name": "S01E12-trim.avs"
+    },
+    "avs_encode": {
+      "root": "avs",
+      "name": "S01E12-encode.avs"
+    },
+    "avs_padfix": {
+      "root": "avs",
+      "name": "S01E12-padfix.avs"
+    },
+    "padfixed_video": {
+      "root": "out",
+      "name": "S01E12-23.976-padfixed-video.mkv"
+    },
+    "padfixed": {
+      "root": "out",
+      "name": "S01E12-23.976-padfixed.mkv"
+    },
+    "pre_upscale": {
+      "root": "out",
+      "name": "S01E12-23.976-pre-upscale.mkv"
+    },
+    "dvd51_source": {
+      "root": "audio",
+      "name": "S01E12-Vortex-dvd-51-original.ac3"
+    },
+    "ld_synced": {
+      "root": "audio",
+      "name": "S01E12-LD20-synced.flac"
+    },
+    "srt_source": {
+      "root": "subs",
+      "name": "S01E12-dvd-eng-original.srt"
+    },
+    "retime_graph": {
+      "root": "audio",
+      "name": "dvd-51-retimed-s01e12.filter"
+    },
+    "retimed_51": {
+      "root": "audio",
+      "name": "dvd-51-retimed-s01e12.flac"
+    },
+    "retimed_srt": {
+      "root": "subs",
+      "name": "S01E12-dvd-eng-retimed.srt"
+    },
+    "retime_map": {
+      "root": "probe",
+      "name": "dvd-retime-map-s01e12.tsv"
+    },
+    "master_descriptors": {
+      "root": "probe",
+      "name": "desc-master-s01e12.npy"
+    },
+    "dvd_descriptors": {
+      "root": "probe",
+      "name": "desc-dvd-s01e12.npy"
+    },
+    "align_npy": {
+      "root": "probe",
+      "name": "dvd-align-s01e12.npy"
+    },
+    "alignment_report": {
+      "root": "probe",
+      "name": "dvd-align-report-s01e12.tsv"
+    },
+    "break_edge_report": {
+      "root": "probe",
+      "name": "break-edge-measurements-s01e12.tsv"
+    },
+    "audio_rate_report": {
+      "root": "probe",
+      "name": "audio-rate-diagnostic-s01e12.tsv"
+    },
+    "audio_timing_report": {
+      "root": "probe",
+      "name": "S01E12-dvd-free-audio-timing.json"
+    },
+    "edges": {
+      "root": "probe",
+      "name": "adjudicated-edges-s01e12.tsv"
+    }
+  },
+  "qc": {
+    "video_md5": "",
+    "ld_audio_md5": "",
+    "fiveone_md5": "",
+    "srt_md5": "",
+    "av_constant_ms": null,
+    "av_slope_ppm": null,
+    "av_rms_ms": null,
+    "track_offset_ms": null,
+    "pad_aligned_black_hits": null,
+    "identity_own_ncc_min": null,
+    "identity_other_ncc_max": null,
+    "full_decode_errors": null
+  },
+  "deliverable": "pre_upscale",
+  "deliverable_tracks": [
+    "ld"
+  ],
+  "_labels_note": "pad_report_label keys shared reports; set it to this episode code. deliverable is a files.* key naming the actual file QC checks. deliverable_tracks describes its streams. Top-level mux_tracks and ld_audio_source configure remux_padfixed.",
+  "mux_tracks": [
+    "ld"
+  ],
+  "ld_audio_source": "ld_synced",
+  "_mux_note": "mux_tracks controls the LD-only/intermediate remux. ld_audio_source is the files.* key for its uncompressed/FLAC LD audio input. Add 51 and srt only when the measured sources are available.",
+  "archive_item_verified": false,
+  "source_provenance": {
+    "mode": "local-inventory",
+    "archive_verified": false,
+    "verification_method": "local source fingerprint only; Archive origin/authenticity not established",
+    "fingerprint_policy": "balanced",
+    "inventory_created_utc": "2026-11-17T04:37:00.146131+00:00",
+    "inventory": {
+      "schema": "ld-pipeline-local-source-inventory-v1",
+      "created_utc": "2026-11-17T04:37:00.146131+00:00",
+      "episode": "S01E12",
+      "source_mode": "local-inventory",
+      "archive_id_hint": "DS9-S01E12-LaserDisc-Copies",
+      "archive_verified": false,
+      "verification_method": "local SHA-256 file fingerprint; not proof of Archive origin or authenticity",
+      "fingerprint_policy": "balanced",
+      "captures": [
+        {
+          "label": "L1",
+          "files": {
+            "tbc": {
+              "name": "DS9-S01E12-Vortex-L1.tbc",
+              "size_bytes": 79604987280,
+              "mtime_ns": 1794786640951713200,
+              "sha256": "e6b041ef4d82db986f042ea1d8ebc75935f42773ac619c6b91ea7fa1869ee86e",
+              "hash_scope": "first-last-4MiB"
+            },
+            "json": {
+              "name": "DS9-S01E12-Vortex-L1.tbc.json",
+              "size_bytes": 44782208,
+              "mtime_ns": 1794786815491901900,
+              "sha256": "66734b4c8ae1868d8ac605e15318cbea74132091e5e24e2e3a6dbf19ad5e2b17",
+              "hash_scope": "first-last-4MiB"
+            },
+            "efm": {
+              "name": "DS9-S01E12-Vortex-L1.efm",
+              "size_bytes": 2466467599,
+              "mtime_ns": 1794785112651706500,
+              "sha256": "76de8299dc2aa64a4e16b45197edbadc5a802bb9fbb149934af61143abff0079",
+              "hash_scope": "first-last-4MiB"
+            }
+          }
+        },
+        {
+          "label": "M1",
+          "files": {
+            "tbc": {
+              "name": "DS9-S01E12-Vortex-M1.tbc",
+              "size_bytes": 79604029960,
+              "mtime_ns": 1794790418521551900,
+              "sha256": "0b5b819c03b397fb04e165bb5fca9a3e6a7e3bb0a8826acbdb73b50ce556302f",
+              "hash_scope": "first-last-4MiB"
+            },
+            "json": {
+              "name": "DS9-S01E12-Vortex-M1.tbc.json",
+              "size_bytes": 44783806,
+              "mtime_ns": 1794790580713046100,
+              "sha256": "f2a6d3f1a9612cf55726b887464b740eb2d27948690651cc44ca76537c53fb42",
+              "hash_scope": "first-last-4MiB"
+            },
+            "efm": {
+              "name": "DS9-S01E12-Vortex-M1.efm",
+              "size_bytes": 2466489033,
+              "mtime_ns": 1794786870159282100,
+              "sha256": "06e7e8cd10f2ba5e16c6fb967829c3d5bff3a62b683a7845fd00b9fc0bd0e9c8",
+              "hash_scope": "first-last-4MiB"
+            }
+          }
+        },
+        {
+          "label": "P1",
+          "files": {
+            "tbc": {
+              "name": "DS9-S01E12-Vortex-P1.tbc",
+              "size_bytes": 79525529720,
+              "mtime_ns": 1794792261135390700,
+              "sha256": "4dd0dd537c0a0446006790dd8e2dfebdf78fc7f2450736732d5947c6d0025834",
+              "hash_scope": "first-last-4MiB"
+            },
+            "json": {
+              "name": "DS9-S01E12-Vortex-P1.tbc.json",
+              "size_bytes": 44807273,
+              "mtime_ns": 1794792423294398200,
+              "sha256": "91318daddbb25e808cbd448ef2d1ab7b2c452656361275f1ce6eb321311b2045",
+              "hash_scope": "first-last-4MiB"
+            },
+            "efm": {
+              "name": "DS9-S01E12-Vortex-P1.efm",
+              "size_bytes": 2464249702,
+              "mtime_ns": 1794790640586965200,
+              "sha256": "42b8b159076dbb96b50e65f0942e3ae2572b8f9c03828a8e7c0231ebc3767982",
+              "hash_scope": "first-last-4MiB"
+            }
+          }
+        },
+        {
+          "label": "P2",
+          "files": {
+            "tbc": {
+              "name": "DS9-S01E12-Vortex-P2.tbc",
+              "size_bytes": 79582011600,
+              "mtime_ns": 1794793927364330100,
+              "sha256": "9f1daf9039967a55f314c97e877373082398fed5d3b09216514225f38fef5558",
+              "hash_scope": "first-last-4MiB"
+            },
+            "json": {
+              "name": "DS9-S01E12-Vortex-P2.tbc.json",
+              "size_bytes": 44782994,
+              "mtime_ns": 1794794097147576700,
+              "sha256": "d2ff388d98fa9d0fcc6d1d9e11bfdcee708383d8e2d866d7c6215c6b7240da18",
+              "hash_scope": "first-last-4MiB"
+            },
+            "efm": {
+              "name": "DS9-S01E12-Vortex-P2.efm",
+              "size_bytes": 2465838495,
+              "mtime_ns": 1794792474043279900,
+              "sha256": "7f5034c031bbfb6a07534eae2feccdb0dc54d6bb9cc932ff5de6f6b27873821e",
+              "hash_scope": "first-last-4MiB"
+            }
+          }
+        },
+        {
+          "label": "P3",
+          "files": {
+            "tbc": {
+              "name": "DS9-S01E12-Vortex-P3.tbc",
+              "size_bytes": 79578182320,
+              "mtime_ns": 1794795590161475200,
+              "sha256": "60ea1594867619acd43c22d3047831360e21d88b2d571fb4fa99d2a5f62c9c03",
+              "hash_scope": "first-last-4MiB"
+            },
+            "json": {
+              "name": "DS9-S01E12-Vortex-P3.tbc.json",
+              "size_bytes": 44784946,
+              "mtime_ns": 1794795758347205300,
+              "sha256": "d8369c88103476c01b381f3769911f503ee2749b205929b2c7a00e0e34a5c465",
+              "hash_scope": "first-last-4MiB"
+            },
+            "efm": {
+              "name": "DS9-S01E12-Vortex-P3.efm",
+              "size_bytes": 2465880292,
+              "mtime_ns": 1794794154251886900,
+              "sha256": "492d8adf8ed6c6fd01ed51ec4a1e203db80b7a09bd51a0065ba81535bbc62a53",
+              "hash_scope": "first-last-4MiB"
+            }
+          }
+        }
+      ],
+      "raw_rf_files": [],
+      "ignored_files": [
+        "SOURCE-ITEM.txt"
+      ],
+      "selected_name": "DS9 S01E12 LaserDisc"
+    }
+  },
+  "_init_note": "Local source inventory only; no Archive verification or authenticity claim. The selected source/DVD paths are retained in this device-scoped manifest for validation. Capture files were not modified. All episode measurements remain unmeasured.",
+  "roots": {
+    "downloads": "Z:\\DS9 S01E12 LaserDisc"
+  }
+}
