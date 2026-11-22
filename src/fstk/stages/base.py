@@ -244,6 +244,9 @@ class StepOutput:
     data: dict[str, Any] = field(default_factory=dict)
     #: Keys merged into manifest ``sources`` (only for stages declaring ``writes_sources``).
     sources_update: dict[str, Any] = field(default_factory=dict)
+    #: For stages with a ``review``: False means every automatic check passed and the result is
+    #: committed without waiting for a human (e.g. an auto-accepted DVD alignment).
+    needs_review: bool = True
 
     def measure(self, key: str, value: Any, *, evidence: Iterable[Fingerprint | dict] = (),
                 note: str | None = None) -> None:
@@ -262,6 +265,8 @@ class Stage:
     writes_artifacts: ClassVar[tuple[str, ...]] = ()
     resource: ClassVar[str | None] = None
     review: ClassVar[str | None] = None  # review id; None = no human review required
+    #: When the review applies, if not always (shown in the stage reference).
+    review_when: ClassVar[str] = ""
     writes_sources: ClassVar[tuple[str, ...]] = ()  # manifest ``sources`` keys this stage may set
 
     def __init_subclass__(cls, **kw) -> None:

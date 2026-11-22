@@ -171,7 +171,7 @@ def cmd_docs_stages(args) -> int:
         if sid.startswith("t-"):
             continue
         lines += [f"## `{sid}` — {cls.title}", "", (cls.__doc__ or cls.description or "").strip(), "",
-                  f"- resource: {cls.resource or '—'}", f"- human review: {cls.review or '—'}",
+                  f"- resource: {cls.resource or '—'}", f"- human review: {cls.review or '—'}" + (f" ({cls.review_when})" if cls.review_when else ""),
                   f"- requires: {', '.join(r.name for r in cls.requires) or '—'}",
                   f"- writes: {', '.join(cls.writes) or '—'}",
                   f"- artifacts: {', '.join(cls.writes_artifacts) or '—'}", ""]

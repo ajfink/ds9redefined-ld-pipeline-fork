@@ -32,6 +32,16 @@ Pair TBC/JSON/EFM files, derive capture labels, confirm identity, record the inv
 - writes: —
 - artifacts: —
 
+## `dvd-alignment` — DVD picture alignment
+
+Sequential 48×36 descriptors of the stack master and DVD; continuity-constrained alignment with an unmatched state; dense and reverse checks; auto-accepted when every check passes, otherwise held for review.
+
+- resource: compute
+- human review: dvd-alignment (only when an automatic check fails)
+- requires: value:mode.dvd_reference_available==True, artifact:dvd, artifact:stack_master
+- writes: video.dvd_alignment, video.dvd_origin_master_frame
+- artifacts: master_descriptors, dvd_descriptors, align_npy, alignment_report, alignment_summary
+
 ## `dvd-free-audio` — LD audio without a DVD (duration/PAD rate + capture-pad origin)
 
 Operator-chosen no-DVD route: rate from native audio vs stack duration, ±1-frame PAD endpoint check, AudioSkip from capture-pad geometry, exact output sample budget.

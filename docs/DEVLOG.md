@@ -34,6 +34,20 @@ Newest session first. Format and rules: see `AGENTS.md` → "Logging".
   missing sections → interpolated samples → post-C2 → C2 → C1. On real S01E20 data the front is
   M1/P2/P6 and the rule picks **M1** (v38 manual pick was P2). Finding 0004 also proposes
   multi-capture repair using the decoder's flagged regions. 279 tests.
+- **S3-CP3 — DVD picture alignment (`dvd-alignment`, `media/alignment.py`).** Ports v38
+  descriptors + Viterbi alignment, with three changes:
+  - an *unmatched* state, so every master frame is sampled from frame 0 and the DVD origin is
+    measured (v38 skipped the first 100 s);
+  - an exact linear-time Viterbi (distance transform), identical to v38's matrix form (tested);
+  - automatic acceptance. Each segment is confirmed frame by frame, a reverse path must agree,
+    and the stage fails a run that hits a search edge, has short non-jitter segments, or has
+    > 10 s of interior LD-only picture.
+
+  On failure it is held for the `dvd-alignment` review (the engine now supports
+  `StepOutput.needs_review=False`). A wrong DVD blocks. Descriptors of unchanged sources are
+  reused. `tools/validate_v38_alignment.py` compares against v38's approved S01E20 path, but
+  can't run yet: access to `Z:\ld-pipeline-device` and `Z:\Video\DS9S1D5` was refused by the
+  session's safety layer. 287 tests.
 
 ---
 

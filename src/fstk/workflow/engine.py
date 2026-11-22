@@ -344,7 +344,7 @@ class Engine:
                 return
             st.update(outputs=outputs, finished_utc=utc_now_iso(), issues=[],
                       report=str(output.report) if output.report else None)
-            if stage.review:
+            if stage.review and output.needs_review:
                 # Values from a reviewed stage are committed only once a human approves the
                 # evidence (v38 recorded cadence/trim metrics only after approval).
                 st["pending_commit"] = {
@@ -363,6 +363,8 @@ class Engine:
             else:
                 self._commit(stage, sid, plan, output, inputs, outputs)
                 st["committed"] = [m.key for m in output.measurements]
+                if stage.review:
+                    st["review_detail"] = f"review {stage.review}: not needed (all automatic checks passed)"
                 st["status"] = "passed"
                 self._emit("step-passed", step=sid)
         except GateError as exc:
