@@ -111,5 +111,9 @@ def run_doctor(profile=None) -> dict[str, Any]:
             add(f"volume:{label}", "PASS" if Path(value).exists() else "WARN",
                 f"{value}{'' if Path(value).exists() else ' — not mounted (adopted episodes that use it will report missing media)'}")
         _shared_checks(profile, add)
+    from fstk.tools.requirements import check_requirements
+
+    for row in check_requirements(profile):
+        add(row["name"], row["status"], row["detail"])
     ok = not any(c["status"] == "FAIL" for c in checks)
     return {"ok": ok, "platform": f"{platform.system()} {platform.machine()}", "checks": checks}

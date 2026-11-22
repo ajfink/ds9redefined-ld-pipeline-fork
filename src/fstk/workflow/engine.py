@@ -159,6 +159,15 @@ class Engine:
             with contextlib.suppress(Exception):  # observers never break a run
                 self.events({"kind": kind, "utc": utc_now_iso(), "job": self.job, **data})
 
+    def _record_tool_versions(self) -> None:
+        """Trace which tool/library versions this run used; report drift (never blocks a run)."""
+        from fstk.tools.requirements import record_versions
+
+        with contextlib.suppress(Exception):
+            drift = record_versions(self.profile, self.profile.root("reports", self.episode))
+            if drift:
+                self._emit("tool-version-drift", changes=drift)
+
     def _save(self) -> None:
         with self._state_lock:
             atomic_write_json(self.state_path, self.state)
@@ -217,6 +226,7 @@ class Engine:
     def _run_locked(self) -> dict[str, Any]:
         with exclusive_lock(self.lock_path, purpose=f"job:{self.job}"):
             self._load_or_init()
+            self._record_tool_versions()
             plan_copy = self.ws.job_dir(self.job) / "plan.json"
             if not plan_copy.exists():
                 atomic_write_json(plan_copy, self.plan)

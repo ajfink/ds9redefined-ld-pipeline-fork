@@ -668,3 +668,9 @@ without owner input. v38 treated as read-only reference.
 Full no-DVD chain passed on a 100 s real excerpt (4:2:2 10-bit HEVC out). Fixed: PAD payload fps made output variable-rate
 (real bug); QTempGaussMC option spelling is version dependent; smoke auto-approves review gates (labelled) and gained
 `--repair pp2` / `--rife-standin`. Missing on the device VM: `resize2` plugin, RIFE. See `docs/smoke/SMOKE-2026-11-22-S01E20.md`.
+
+## CP17 — 2026-11-22 tool requirements: ranges + probes, not exact pins
+`fstk.tools.requirements`: minimum (FAIL below), tested_up_to (WARN above), capability probes (ffmpeg libx265 + yuv422p10le,
+VapourSynth plugins incl. `resize2`, QTempGaussMC API), pinned drift for Orc / RIFE model / x265. Every engine run writes
+`reports/tool-versions.json` (history extends only on change) and emits `tool-version-drift`. Shown in `fstk doctor`.
+No binaries are vendored (size, GPL redistribution for x265 builds, per-OS builds); a fetch/lock step is still open.
