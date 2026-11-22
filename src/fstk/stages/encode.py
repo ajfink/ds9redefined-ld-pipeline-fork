@@ -27,6 +27,7 @@ from fstk.media.encode import (
     display_aspect,
     final_encode_args,
 )
+from fstk.media.finish import finish_matches_base
 
 from .base import ArtifactExists, SpaceNeed, Stage, StepOutput, StepPlan, ValueSet, register
 
@@ -61,6 +62,11 @@ class EncodeFinal(Stage):
                                                   script.read_text(encoding="utf-8")):
                 raise GateError("padfix_script was built from an older encode script; re-run pad-audit and pad-repair")
             script = fixed
+        if m.artifact("finish_script"):   # measured finishing (crop, concealment, optional chroma denoise)
+            fin = ctx.artifact_path("finish_script", m)
+            if not finish_matches_base(fin.read_text(encoding="utf-8"), script.read_text(encoding="utf-8")):
+                raise GateError("finish_script was built from an older chain; re-run video-quality")
+            script = fin
         master = ctx.artifact_path("stack_master", m)
         report = ctx.root("reports") / "encode-final.json"
         return StepPlan(self.id, params, inputs=[script, master], outputs=[out, report],
@@ -68,6 +74,7 @@ class EncodeFinal(Stage):
                         data={"script": str(script), "master": str(master), "out": str(out), "tmp": str(tmp),
                               "report": str(report), "frames": m.require("video.frames"),
                               "duration": m.require("video.duration_s"), "capture": m.require("audio.capture"),
+                              "locked_dar": m.get("quality.dar"),
                               "chroma": m.get("mode.chroma_output") or DEFAULT_CHROMA,
                               # anything but the recipe's preset is a recorded override (smoke runs only)
                               "preset": str(params.get("preset", DEFAULT_PRESET))})
@@ -79,8 +86,8 @@ class EncodeFinal(Stage):
         if info["frames"] != d["frames"]:
             raise ArtifactError(f"script reports {info['frames']} frames but video.frames={d['frames']}")
         src = ff.probe(Path(d["master"])).only("video")
-        aspect = display_aspect(src.raw.get("sample_aspect_ratio", ""), int(src.raw["width"]),
-                                int(src.raw["height"]))
+        aspect = d.get("locked_dar") or display_aspect(src.raw.get("sample_aspect_ratio", ""), int(src.raw["width"]),
+                                                       int(src.raw["height"]))
         Path(d["tmp"]).parent.mkdir(parents=True, exist_ok=True)
         ctx.report(0.0, f"encoding {d['frames']} frames")
         res = vs.encode(Path(d["script"]), final_encode_args(aspect=aspect, frames=d["frames"],
@@ -98,7 +105,7 @@ class EncodeFinal(Stage):
         issues = check_encoded_stream(stream.raw, probe_frames=ff.count_frames(tmp), decoded_frames=decode.frames,
                                       decode_errors=decode.errors, duration_s=info_out.duration_s,
                                       expected_frames=d["frames"], expected_duration_s=d["duration"],
-                                      expected_raster=(int(src.raw["width"]), int(src.raw["height"])),
+                                      expected_raster=(int(info.get("width", src.raw["width"])), int(info.get("height", src.raw["height"]))),
                                       chroma=d["chroma"])
         if res.returncode not in (0,):
             issues.append(f"encode pipeline exit codes {[s.returncode for s in res.stages]}")

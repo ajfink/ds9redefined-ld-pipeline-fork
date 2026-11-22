@@ -1,6 +1,7 @@
 """Stage implementations. Importing this package registers every built-in stage."""
 from . import (  # noqa: F401
     alignment,
+    audioquality,
     avcorrection,
     cadence,
     dvd,
@@ -8,9 +9,11 @@ from . import (  # noqa: F401
     dvdfree,
     efm,
     encode,
+    epreport,
     intake,
     pads,
     qc,
+    quality,
     remux,
     retime,
     stack,

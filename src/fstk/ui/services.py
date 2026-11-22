@@ -339,6 +339,18 @@ class Services:
         d = self.profile.root("reports", self.workspace(episode).episode)
         return sorted(d.glob("qc-*.json"), reverse=True) if d.is_dir() else []
 
+    def episode_quality(self, episode: str | EpisodeId) -> tuple[str, Path | None]:
+        """Latest per-episode quality report as markdown, plus its contact-sheet image when one exists."""
+        d = self.profile.root("reports", self.workspace(episode).episode)
+        found = sorted(d.glob("episode-quality-*.json")) if d.is_dir() else []
+        if not found:
+            return "", None
+        rep = json.loads(found[-1].read_text(encoding="utf-8"))
+        from fstk.quality.report import render_markdown
+
+        png = Path(rep["contact_sheet"]) if rep.get("contact_sheet") else None
+        return render_markdown(rep), (png if png and png.is_file() else None)
+
     def qc_result(self, path: str | Path) -> dict[str, Any]:
         return json.loads(Path(path).read_text(encoding="utf-8"))
 

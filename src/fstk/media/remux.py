@@ -69,6 +69,14 @@ def check_inventory(streams: list[dict[str, Any]], *, want_51: bool, want_srt: b
     return issues
 
 
+def ld_audio_key(manifest) -> str:
+    """Artifact key of the LD stereo to deliver: the click/gap-repaired file when ``audio-quality`` made one
+    (it only exists when something was actually repaired), else the operator's/stage's chosen source."""
+    if manifest.artifact("ld_audio_finished"):
+        return "ld_audio_finished"
+    return manifest.require("deliverable.ld_audio_source")
+
+
 def tracks_from_settings(mux_tracks: list[str]) -> tuple[bool, bool]:
     if not mux_tracks or mux_tracks[0] != "ld":
         raise ArtifactError("mux_tracks must start with 'ld'")

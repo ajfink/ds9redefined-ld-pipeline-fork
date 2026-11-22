@@ -674,3 +674,19 @@ Full no-DVD chain passed on a 100 s real excerpt (4:2:2 10-bit HEVC out). Fixed:
 VapourSynth plugins incl. `resize2`, QTempGaussMC API), pinned drift for Orc / RIFE model / x265. Every engine run writes
 `reports/tool-versions.json` (history extends only on change) and emits `tool-version-drift`. Shown in `fstk doctor`.
 No binaries are vendored (size, GPL redistribution for x265 builds, per-OS builds); a fetch/lock step is still open.
+
+## CP18 — 2026-11-22 quality layer (video-quality, audio-quality, episode-report)
+Owner list implemented under the rule *grain is paramount, DVD is never a pixel source (only cut-PAD frames, crop/aspect locking)*.
+- `video-quality` (after pad-repair; encode follows): levels vs DVD (black/white/mid) + clipping, active-area crop and SAR/DAR lock,
+  chroma-noise / cross-colour metrics with **metric-gated chroma-only denoise** (luma bit-identical, proved), dropout map with
+  concealment **only from LD neighbour frames** (real pixel patches, integer even MVs, accepted only if ring match ≤ grain-expected
+  cost and patch/ring grain ratio in (0.7, 1.4)), hybrid-cadence plan (advisory; timecodes file when video-origin stretches exist).
+  Output: `finish_script` (stale-guarded) which `encode-final` prefers; `quality.dar` becomes the encode `-aspect`.
+- `audio-quality` (before remux): click/gap detection per channel, **short** defects only filled by least-squares LPC (order 32),
+  longer/ambiguous reported; bit-identical elsewhere (`ld_audio_finished` FLAC only if repaired); channel/phase/LFE/swap checks,
+  R128 loudness + true peak (reported, never normalised), DVD 5.1 lossless-path record, subtitle timing vs speech envelope.
+- `episode-report` (after qc-report): one JSON/markdown report (verdict CLEAN / REVIEW / FAIL), written next to the deliverable
+  (`<name>.quality.md`) and to `reports/`, plus a contact sheet of the worst moments (leftover dropouts, QC intervals, concealed
+  dropouts, audio defects left). Shown in the delivery review dialog as the "Episode quality report" tab.
+- Not done: hybrid *delivery* (59.94p/29.97p segments + Matroska timecodes) — needs mkvmerge and Windows validation; QC gates assume CFR.
+  Encoded-stream colour-tag check (`geometry.check_colour_tags` on the delivered file) is not yet wired into QC.

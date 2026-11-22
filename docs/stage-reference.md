@@ -12,6 +12,16 @@ Live metadata, space gate, resumable size+MD5-verified download of TBC/JSON/EFM 
 - writes: —
 - artifacts: —
 
+## `audio-quality` — Audio quality: clicks/gaps, channels/phase, loudness, DVD 5.1 path, subtitle alignment
+
+Detects clicks and digital gaps in the LD stereo (fills only short, clearly-defective ones by prediction, bit-identical elsewhere), checks channels/phase/layout, measures R128 loudness and true peak without normalising, and verifies subtitle timing against speech.
+
+- resource: compute
+- human review: —
+- requires: value:deliverable.ld_audio_source, value:deliverable.mux_tracks, value:video.duration_s
+- writes: quality.audio_events_found, quality.audio_repaired, quality.ld_lufs, quality.ld_lra, quality.ld_true_peak, quality.fiveone_lufs, quality.subtitle_offset_s
+- artifacts: ld_audio_finished, audio_quality_report
+
 ## `av-correction` — Apply the A/V check's verdicts
 
 Records one A/V review round (per-chunk in sync / audio early / audio late) and solves the next offset/drift correction; the audio, remux and QC steps after it apply the correction.
@@ -118,13 +128,43 @@ Chosen automatically: the unique Pareto-dominant verified decode, otherwise the 
 
 ## `encode-final` — Final x265 encode (video only)
 
-CRF 14 / slow / grain / Main 10 single pass from the measured IVTC script; verified before use.
+CRF 14 / slow / grain 10-bit single pass from the measured IVTC script (4:2:2 by default, keeping the master's chroma); verified before use.
 
 - resource: compute
 - human review: —
 - requires: value:video.frames, value:video.duration_s, value:audio.capture, artifact:encode_script, artifact:stack_master
 - writes: —
 - artifacts: padfixed_video
+
+## `episode-report` — Per-episode quality report and contact sheet
+
+Gathers the quality and QC results into one report next to the deliverable, ranks the worst moments and renders a contact sheet of them. Read-only with respect to the media.
+
+- resource: compute
+- human review: —
+- requires: value:video.frames, value:video.duration_s
+- writes: quality.verdict
+- artifacts: episode_quality_report, episode_contact_sheet
+
+## `pad-audit` — PAD audit (which placeholder frames rendered, and where the cuts are)
+
+One pass of the IVTC chain: blackdetect and 48×36 descriptors; every reference-map PAD is accounted for, proved black over the full raster, and classified as cut or non-cut.
+
+- resource: compute
+- human review: —
+- requires: value:video.frames, value:video.head_trim, value:audio.pad_frames, value:stack.reference, artifact:encode_script, artifact:stack_project
+- writes: pads.map_pads, pads.rendered_isolated, pads.trimmed_away, pads.inside_break_black, pads.never_rendered, pads.cut_pads, pads.cut_pad_frames, pads.content_blacks_left_alone
+- artifacts: pad_audit
+
+## `pad-repair` — PAD repair (RIFE, DVD-borrowed frame on cuts, hold without a DVD)
+
+Replaces every audited PAD: RIFE midpoint when not on a cut; on a cut the correct frame is borrowed from the aligned DVD (registered, colour-matched to the neighbour) or, without a DVD, the previous frame is held. Writes the padfix script encode-final uses.
+
+- resource: compute
+- human review: —
+- requires: value:video.frames, value:video.head_trim, value:audio.pad_frames, artifact:encode_script, artifact:pad_audit
+- writes: pads.repaired
+- artifacts: pad_repair_frames, pad_repair_report, pad_replacements, padfix_script, pad_payload
 
 ## `qc-report` — Delivery QC report
 
@@ -165,6 +205,16 @@ Orc --process with artifact evidence validation; no human review (owner decision
 - requires: value:stack.reference, value:stack.alignment_map, value:stack.frames, artifact:stack_project
 - writes: —
 - artifacts: —
+
+## `video-quality` — Picture quality: measure, conceal dropouts, crop/aspect lock, optional chroma denoise
+
+One sequential pass over the PAD-repaired chain: levels, grain, chroma noise, dropouts, active area. Builds the finishing script (LD-only dropout concealment, locked crop, chroma-only denoise when measured necessary). Never alters luma grain; the DVD is only a measuring reference.
+
+- resource: compute
+- human review: —
+- requires: value:video.frames, artifact:encode_script
+- writes: quality.crop, quality.sar, quality.dar, quality.dropouts_found, quality.dropouts_fixed, quality.chroma_denoise
+- artifacts: finish_script, quality_fixes, quality_video_report
 
 ## `video-trim` — Trims, DELTA and the encode script
 

@@ -299,7 +299,8 @@ class QcReport(Stage):
                               f"{vh} != manifest {rec}" if rec and vh != rec else vh))
             hashes["video"] = vh
             ldh = ff.packet_md5(deliverable, "0:a:0")
-            src = source(m.get("deliverable.ld_audio_source"))
+            ld_key = "ld_audio_finished" if m.artifact("ld_audio_finished") else m.get("deliverable.ld_audio_source")
+            src = source(ld_key)
             src_h = ff.packet_md5(src, "0:a:0") if src else None
             rec = (m.get("qc.ld_audio_md5") or "").lower()
             if src_h and ldh != src_h:

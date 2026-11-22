@@ -14,7 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl, Signal
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor, QFont, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -28,10 +28,12 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSlider,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -359,8 +361,25 @@ class DeliveryReview(QDialog):
         ll.addWidget(QLabel("QC-flagged intervals (double-click to play):"))
         ll.addWidget(self.intervals, 1)
         split = QSplitter(Qt.Orientation.Horizontal)
+        self.quality_text = QPlainTextEdit()
+        self.quality_text.setReadOnly(True)
+        self.contact_image = QLabel("No contact sheet.")
+        self.contact_image.setAlignment(Qt.AlignmentFlag.AlignTop)
+        scroll = QScrollArea()
+        scroll.setWidget(self.contact_image)
+        scroll.setWidgetResizable(True)
+        quality = QWidget()
+        ql = QVBoxLayout(quality)
+        ql.setContentsMargins(0, 0, 0, 0)
+        ql.addWidget(self.quality_text, 2)
+        ql.addWidget(QLabel("Worst moments (contact sheet):"))
+        ql.addWidget(scroll, 3)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self.media, "Playback")
+        self.tabs.addTab(quality, "Episode quality report")
+        self._fill_quality()
         split.addWidget(left)
-        split.addWidget(self.media)
+        split.addWidget(self.tabs)
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 2)
         top = QHBoxLayout()
@@ -387,6 +406,14 @@ class DeliveryReview(QDialog):
             self.summary.setText("No QC report yet: run the qc-report stage first.")
             for b in (self.approve_button, self.rerun_button, self.reject_button):
                 b.setEnabled(False)
+
+    def _fill_quality(self) -> None:
+        text, png = self.services.episode_quality(self.episode)
+        self.quality_text.setPlainText(text or "No episode quality report yet: run the episode-report stage.")
+        if png:
+            self.contact_image.setPixmap(QPixmap(str(png)))
+        else:
+            self.contact_image.setText("No contact sheet.")
 
     # ---------------------------------------------------------------- A/V chunks
     def _fill_chunks(self) -> None:

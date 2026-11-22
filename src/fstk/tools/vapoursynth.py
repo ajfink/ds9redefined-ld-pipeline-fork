@@ -104,6 +104,48 @@ class VapourSynth:
             cmd += ["-e", str(int(last))]
         return [*cmd, str(script), "-"]
 
+    def iter_planes(self, script: Path, first: int | None = None, last: int | None = None, *, cancel=None):
+        """Yield every frame of ``script`` (inclusive range) as ``fstk.quality.frames.Planes``, in the chain's
+        own pixel format (no scaling, no conversion). Streams from vspipe's y4m output one frame at a time,
+        so a whole episode is read without holding it in memory."""
+        import subprocess
+        import tempfile
+
+        from fstk.quality.frames import frame_bytes, split_frames
+
+        formats = {"420p10": "yuv420p10le", "422p10": "yuv422p10le", "420": "yuv420p", "422": "yuv422p"}
+        with tempfile.TemporaryFile() as err:
+            proc = subprocess.Popen(self.serve(script, first, last), stdout=subprocess.PIPE, stderr=err, env=self.env())
+            try:
+                head = (proc.stdout.readline() or b"").decode("ascii", "replace")
+                tags = {t[0]: t[1:] for t in head.split()[1:] if t}
+                if not head.startswith("YUV4MPEG2") or "W" not in tags or "H" not in tags or tags.get("C") not in formats:
+                    raise ToolError(f"unsupported or missing y4m header from {script}: {head.strip()!r}")
+                width, height, pix = int(tags["W"]), int(tags["H"]), formats[tags["C"]]
+                per = frame_bytes(width, height, pix)
+                while True:
+                    line = proc.stdout.readline()
+                    if not line:
+                        break
+                    if not line.startswith(b"FRAME"):
+                        raise ToolError(f"y4m stream out of sync reading {script}")
+                    buf = proc.stdout.read(per)
+                    while len(buf) < per:
+                        more = proc.stdout.read(per - len(buf))
+                        if not more:
+                            raise ToolError(f"truncated frame from {script}")
+                        buf += more
+                    yield split_frames(buf, width, height, pix)[0]
+                    if cancel is not None and cancel.is_set():
+                        return
+                if proc.wait() != 0:
+                    err.seek(0)
+                    raise ToolError(f"vspipe failed reading {script}: {err.read()[-400:].decode('utf-8', 'replace')}")
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                proc.wait()
+
     def scan(self, script: Path, *, width: int = 48, height: int = 36, name: str = "pad-scan",
              cancel=None, blackdetect: str = "blackdetect=d=0:pix_th=0.10:pic_th=0.98") -> ScriptScan:
         """One sequential pass of ``script``: blackdetect events and grey ``width``×``height`` descriptors.

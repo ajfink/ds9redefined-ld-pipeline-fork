@@ -346,6 +346,35 @@ class FFmpeg:
             raise ArtifactError(f"audio decode failed {path} {selector}: {res.describe()}")
         return np.frombuffer(res.stdout or b"", np.int16).astype(np.float32)
 
+    def pcm_f32(self, path: str | Path, selector: str, channels: int, *, start_s: float | None = None,
+                duration_s: float | None = None, sample_rate: int | None = None, cancel=None):
+        """Float32 PCM, shape (samples, channels), channel order as in the file. Input-seek only for fstk's own
+        deliverables (seek-tested by QC)."""
+        import numpy as np
+
+        seek = (["-ss", f"{start_s:.4f}"] if start_s is not None else []) + \
+               (["-t", f"{duration_s:.4f}"] if duration_s is not None else [])
+        rate = ["-ar", str(sample_rate)] if sample_rate else []
+        res = process.run([self.ffmpeg, "-hide_banner", "-nostdin", "-v", "error", *seek, "-i", str(path),
+                           "-map", selector, "-ac", str(channels), *rate, "-f", "f32le", "-"],
+                          capture_stdout=True, log_path=self._log("pcm-f32"), cancel=cancel)
+        if res.returncode != 0:
+            raise ArtifactError(f"audio decode failed {path} {selector}: {res.describe()}")
+        data = np.frombuffer(res.stdout or b"", np.float32)
+        if len(data) % channels:
+            raise ArtifactError(f"decoded audio of {path} is not a whole number of {channels}-channel samples")
+        return data.reshape(-1, channels)
+
+    def ebur128(self, path: str | Path, selector: str = "0:a:0", *, cancel=None) -> str:
+        """Full stderr of ``-af ebur128=peak=true`` (parse the Summary block with ``quality.audio.parse_ebur128``)."""
+        lines: list[str] = []
+        res = process.run([self.ffmpeg, "-hide_banner", "-nostdin", "-nostats", "-i", str(path), "-map", selector,
+                           "-af", "ebur128=peak=true", "-f", "null", "-"],
+                          on_line=lambda stream, line: lines.append(line), log_path=self._log("ebur128"), cancel=cancel)
+        if res.returncode != 0:
+            raise ArtifactError(f"loudness measurement failed for {path}: {res.describe()}")
+        return "\n".join(lines)
+
     def version(self) -> str:
         """First line of ``ffmpeg -version`` (recorded with derived artifacts for traceability)."""
         res = process.run([self.ffmpeg, "-hide_banner", "-version"], capture_stdout=True, log_path=self._log("version"))

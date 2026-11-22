@@ -7,7 +7,7 @@ from pathlib import Path
 from fstk.core.errors import ArtifactError, GateError
 from fstk.core.fsio import atomic_write_json
 from fstk.core.timeutil import utc_now_iso
-from fstk.media.remux import check_inventory, remux_args, tracks_from_settings
+from fstk.media.remux import check_inventory, ld_audio_key, remux_args, tracks_from_settings
 
 from .base import ArtifactExists, Stage, StepOutput, StepPlan, ValueSet, register
 
@@ -27,7 +27,7 @@ class Remux(Stage):
     def plan(self, ctx, params):
         m = ctx.manifest
         want_51, want_srt = tracks_from_settings(m.require("deliverable.mux_tracks"))
-        ld_key = m.require("deliverable.ld_audio_source")
+        ld_key = ld_audio_key(m)
         inputs = {"video": ctx.artifact_path("padfixed_video", m), "ld": ctx.artifact_path(ld_key, m)}
         if want_51:
             inputs["fiveone"] = ctx.artifact_path("retimed_51", m)
