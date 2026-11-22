@@ -276,6 +276,36 @@ class Services:
         atomic_write_json(path, plan)
         return path
 
+    def write_av_rerun_plan(self, episode: str | EpisodeId, *, verdicts: list[dict[str, Any]],
+                            qc_report: str | Path, track: str = "ld") -> Path:
+        """Plan for an A/V-check rerun: av-correction → rebuild the LD audio → remux → QC.
+
+        ``verdicts``: ``[{"t_s": chunk centre, "verdict": "ok"|"early"|"late"}]`` from the delivery
+        review. The rebuilt deliverable is a new version; nothing is overwritten.
+        """
+        from fstk.core.fsio import atomic_write_json
+        from fstk.core.timeutil import utc_stamp
+        from fstk.workflow.engine import PLAN_SCHEMA, validate_plan
+
+        ws = self.workspace(episode)
+        if not any(v.get("verdict") in ("early", "late") for v in verdicts):
+            raise FstkError("mark at least one chunk 'audio too early' or 'audio too late' to rerun")
+        m = ws.store.load()
+        if m.get("mode.dvd_reference_available") is not False:
+            raise FstkError("A/V reruns for DVD episodes need the DVD-referenced LD audio stage, which is not "
+                            "ported yet; only no-DVD episodes can be re-corrected today")
+        job = f"av-rerun-{utc_stamp()[:15].lower()}"
+        steps = [{"id": "av-correction", "stage": "av-correction", "after": [],
+                  "params": {"track": track, "verdicts": verdicts, "qc_report": Path(qc_report).name}},
+                 {"id": "dvd-free-audio", "stage": "dvd-free-audio", "params": {}, "after": ["av-correction"]},
+                 {"id": "remux", "stage": "remux", "params": {}, "after": ["dvd-free-audio"]},
+                 {"id": "qc-report", "stage": "qc-report", "params": {}, "after": ["remux"]}]
+        plan = {"schema": PLAN_SCHEMA, "episode": ws.episode.canonical, "job": job, "steps": steps}
+        validate_plan(plan)
+        path = ws.state_dir / "plans" / f"{job}.plan.json"
+        atomic_write_json(path, plan)
+        return path
+
     # ---------------------------------------------------------------- delivery QC review
     def qc_reports(self, episode: str | EpisodeId) -> list[Path]:
         d = self.profile.root("reports", self.workspace(episode).episode)

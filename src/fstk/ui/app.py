@@ -299,6 +299,7 @@ class MainWindow(QMainWindow):
         if not self.episode:
             return None
         dlg = DeliveryReview(self.services, self.episode, actor=self.actor, parent=self)
+        dlg.plan_ready.connect(self.start_plan)
         dlg.decided.connect(lambda path: (self.append_log(f"delivery decision recorded: {path}"),
                                           self.show_episode(self.episode)))
         dlg.open()

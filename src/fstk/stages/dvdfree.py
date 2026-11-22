@@ -40,7 +40,14 @@ from fstk.media.audio_timing import (
     summarize_timing,
     wav_info,
 )
-from fstk.qc.dvdfree import RATE_METHOD, REPORT_SCHEMA, exact_audio_samples, expected_skip
+from fstk.qc.dvdfree import (
+    RATE_METHOD,
+    REPORT_SCHEMA,
+    corrected_skip,
+    exact_audio_samples,
+    expected_skip,
+    ld_correction,
+)
 from fstk.tools.orc_project import reference_map_ranges, source_id_for_capture
 
 from .base import ArtifactExists, Custom, SpaceNeed, Stage, StepOutput, StepPlan, ValueIs, ValueSet, register
@@ -103,8 +110,10 @@ class DvdFreeAudio(Stage):
         rate = timing["duration_candidate_effective_rate_hz"]
         if not BASE_RATE * 0.98 <= rate <= BASE_RATE * 1.02:
             raise GateError(f"duration rate {rate:.3f} Hz is outside the 2 % sanity range")
-        rate_2x = round(INTERMEDIATE_FACTOR * rate)
-        skip = expected_skip(m.require("video.delta_s"), pad_frames)
+        offset_ms, drift_ppm = ld_correction({"audio.av_correction": m.get("audio.av_correction")})
+        # a reviewer-driven correction delays the audio by offset + drift·t: stretch by (1 + drift)
+        rate_2x = round(INTERMEDIATE_FACTOR * rate / (1.0 + drift_ppm * 1e-6))
+        skip = corrected_skip(expected_skip(m.require("video.delta_s"), pad_frames), offset_ms, drift_ppm)
         if skip < 0:
             raise GateError(f"DVD-free AudioSkip is negative ({skip:.6f}s); inspect the origin convention")
         start, target = sample_plan(skip, frames)
@@ -122,7 +131,8 @@ class DvdFreeAudio(Stage):
                               "projection": proj, "timing": timing, "rate_2x": rate_2x, "skip": skip,
                               "start": start, "target": target, "corrected": str(corrected), "synced": str(synced),
                               "report": str(report), "run": run, "frames": frames, "head_trim": head_trim,
-                              "pad_frames": pad_frames, "source_id": source_id})
+                              "pad_frames": pad_frames, "source_id": source_id,
+                              "av_correction": {"offset_ms": offset_ms, "drift_ppm": drift_ppm}})
 
     # -- FFmpeg passes
     @staticmethod
@@ -182,6 +192,7 @@ class DvdFreeAudio(Stage):
             "synced": {**synced, "skip_s": d["skip"], "start_sample": d["start"], "target_samples": d["target"],
                        "skip_method": "measured LD output-frame delta minus selected-capture Orc pad_frames/FPS; "
                                       "no DVD reference"},
+            "av_correction": d["av_correction"],
             "external_absolute_av_reference_available": False,
             "caveat": ("The duration/PAD and capture-origin model sets the audio timeline and exact endpoint; an "
                        "external absolute A/V cross-correlation is unavailable without a DVD/reference."),

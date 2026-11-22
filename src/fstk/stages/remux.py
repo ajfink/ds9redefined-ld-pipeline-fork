@@ -23,7 +23,6 @@ class Remux(Stage):
                 ValueSet("deliverable.ld_audio_source"), ValueSet("video.duration_s"), ValueSet("audio.capture"))
     writes_artifacts = ("padfixed",)
     resource = "prep"
-    review = "remux"
 
     def plan(self, ctx, params):
         m = ctx.manifest
@@ -37,10 +36,14 @@ class Remux(Stage):
         missing = [str(p) for p in inputs.values() if not p.is_file()]
         if missing:
             raise GateError(f"remux inputs missing: {missing}")
-        out = ctx.root("out") / f"{ctx.episode.code}-23.976-padfixed.mkv"
-        if out.exists():
-            raise GateError(f"refusing to overwrite {out}")
-        report = ctx.root("reports") / "remux.json"
+        # A/V-check reruns make new versions; nothing is ever overwritten.
+        stem = f"{ctx.episode.code}-23.976-padfixed"
+        version = 1
+        out = ctx.root("out") / f"{stem}.mkv"
+        while out.exists() or out.with_name(out.stem + ".tmp.mkv").exists():
+            version += 1
+            out = ctx.root("out") / f"{stem}-r{version}.mkv"
+        report = ctx.root("reports") / ("remux.json" if version == 1 else f"remux-r{version}.json")
         return StepPlan(self.id, params, inputs=list(inputs.values()), outputs=[out, report],
                         summary=f"remux tracks {m.get('deliverable.mux_tracks')}",
                         data={**{k: str(v) for k, v in inputs.items()}, "out": str(out), "report": str(report),

@@ -39,6 +39,18 @@ def expected_skip(delta_s: float, pad_frames: int) -> float:
     return float(delta_s) - int(pad_frames) / MASTER_FPS
 
 
+def ld_correction(values: dict[str, Any]) -> tuple[float, float]:
+    """(offset_ms, drift_ppm) the reviewer-driven A/V correction applies to the LD track."""
+    cur = ((values.get("audio.av_correction") or {}).get("ld") or {}).get("current") or {}
+    return float(cur.get("offset_ms", 0.0)), float(cur.get("drift_ppm", 0.0))
+
+
+def corrected_skip(base_skip_s: float, offset_ms: float, drift_ppm: float) -> float:
+    """AudioSkip after a correction: delaying audio by D(t) = offset + drift·t stretches the corrected
+    timeline by (1 + drift) and starts ``offset`` earlier in it."""
+    return base_skip_s * (1.0 + drift_ppm * 1e-6) - offset_ms / 1000.0
+
+
 def start_sample(skip_s: float) -> int:
     return math.floor(skip_s * SAMPLE_RATE + 1e-9)
 
@@ -77,10 +89,15 @@ def check_dvd_free(values: dict[str, Any], report: dict, *, native_sha256: str, 
     if not frames or delta is None or pad is None or skip is None:
         issues.append("video.frames, video.delta_s, audio.pad_frames and audio.skip_s are required")
         return issues
-    want_skip = expected_skip(delta, pad)
+    offset_ms, drift_ppm = ld_correction(v)
+    want_skip = corrected_skip(expected_skip(delta, pad), offset_ms, drift_ppm)
     if abs(float(skip) - want_skip) > 0.5 / SAMPLE_RATE:
         issues.append(f"audio.skip_s {float(skip):.9f} disagrees with capture-pad geometry {want_skip:.9f}s "
-                      "by more than half a sample")
+                      f"(A/V correction {offset_ms:+.1f} ms, {drift_ppm:+.1f} ppm) by more than half a sample")
+    applied = report.get("av_correction") or {"offset_ms": 0.0, "drift_ppm": 0.0}
+    if (abs(float(applied.get("offset_ms", 0)) - offset_ms) > 1e-6
+            or abs(float(applied.get("drift_ppm", 0)) - drift_ppm) > 1e-6):
+        issues.append("the delivered LD audio was built with a different A/V correction than the manifest's")
     if abs(float(synced.get("skip_s") or 0.0) - float(skip)) > 0.5 / SAMPLE_RATE:
         issues.append("manifest AudioSkip differs from the timing report's synced recipe")
     if int(synced.get("start_sample", -1)) != start_sample(float(skip)):

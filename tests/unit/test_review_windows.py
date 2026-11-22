@@ -66,10 +66,12 @@ def test_efm_capture_review_offers_automatic_choice(efm_env, qtbot):
     assert json.loads(Path(plans[0]).read_text())["steps"][0]["params"] == {}
 
 
-def _delivery_env(tmp_path, summary):
+def _delivery_env(tmp_path, summary, *, no_dvd=False):
     prof = Profile.from_dict({"schema": SCHEMA, "machine": "T", "os": "linux", "data_root": str(tmp_path / "d"),
                               "media_root": str(tmp_path / "m")})
     m = Manifest.new(efm.EP, title="t")
+    if no_dvd:
+        m.set("mode.dvd_reference_available", False, by="op")
     ws = EpisodeWorkspace(prof, efm.EP)
     ws.store.create(m, by="t", reason="setup")
     reports = prof.root("reports", efm.EP)
@@ -81,6 +83,9 @@ def _delivery_env(tmp_path, summary):
                     {"gate": "full-decode + PAD black", "status": summary.get("pad", "PASS"), "detail": ""}],
         "summary": summary, "review_intervals": [{"id": "pad-black-f240", "gate": "full-decode + PAD black",
                                                   "start_s": 8.0, "end_s": 12.0, "reason": "PAD black"}],
+        "av_check": {"chunks": [{"start_s": 30.0, "end_s": 45.0, "t_s": 37.5},
+                                {"start_s": 600.0, "end_s": 615.0, "t_s": 607.5},
+                                {"start_s": 1200.0, "end_s": 1215.0, "t_s": 1207.5}], "track": "ld"},
         "standing_warnings": ["validate artifacts, not exit codes"]}))
     job = ws.job_dir("qc-job")
     job.mkdir(parents=True)
@@ -95,10 +100,37 @@ def test_delivery_review_records_approval_only_for_a_clean_pending_report(tmp_pa
     prof, ws, report = _delivery_env(tmp_path, {"pass": 2, "fail": 0, "failed_gates": [], "unverified_gates": []})
     dlg = reviews.DeliveryReview(Services(prof), "DS9:S01E20", actor="op")
     qtbot.addWidget(dlg)
-    assert dlg.gates.rowCount() == 2 and dlg.intervals.count() == 1
-    assert dlg.approve_button.isEnabled() and dlg.reject_button.isEnabled()
-    path = dlg.decide("APPROVED", note="watched all flagged intervals; clean")
+    assert dlg.gates.rowCount() == 2 and dlg.intervals.count() == 1 and dlg.chunks.rowCount() == 3
+    assert not dlg.approve_button.isEnabled()                      # chunks not checked yet
+    dlg.set_verdict(0, "ok")
+    dlg.set_verdict(1, "ok")
+    assert not dlg.approve_button.isEnabled() and not dlg.rerun_button.isEnabled()
+    dlg.set_verdict(2, "ok")
+    assert dlg.approve_button.isEnabled() and not dlg.rerun_button.isEnabled()
+    path = dlg.decide("APPROVED")
     assert path and ws.approvals.status("delivery", manifest=ws.store.load()).state == "approved"
+    assert "every chunk in sync" in json.loads(Path(path).read_text())["note"]
+
+
+def test_delivery_review_rerun_writes_a_correction_plan(tmp_path, qtbot):
+    from fstk.ui import reviews
+
+    prof, ws, report = _delivery_env(tmp_path, {"pass": 2, "fail": 0, "failed_gates": [], "unverified_gates": []},
+                                     no_dvd=True)
+    dlg = reviews.DeliveryReview(Services(prof), "DS9:S01E20", actor="op")
+    qtbot.addWidget(dlg)
+    plans = []
+    dlg.plan_ready.connect(plans.append)
+    dlg.set_verdict(0, "ok")
+    dlg.set_verdict(1, "early")
+    assert dlg.rerun_button.isEnabled() and not dlg.approve_button.isEnabled()
+    dlg.rerun()
+    (plan_path,) = plans
+    steps = json.loads(Path(plan_path).read_text())["steps"]
+    assert [s["stage"] for s in steps] == ["av-correction", "dvd-free-audio", "remux", "qc-report"]
+    assert steps[0]["params"]["verdicts"] == [{"t_s": 37.5, "verdict": "ok"}, {"t_s": 607.5, "verdict": "early"}]
+    status = ws.approvals.status("delivery", manifest=ws.store.load())
+    assert status.state == "rejected"                              # this file is not delivered
 
 
 def test_delivery_review_blocks_approval_with_unverified_gates(tmp_path, qtbot):

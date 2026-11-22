@@ -41,6 +41,7 @@ from fstk.qc.gates import (
     STANDING_WARNINGS,
     Gate,
     allowed_skips,
+    av_check_chunks,
     pad_black_hits,
     pad_review_intervals,
     read_frame_list,
@@ -103,6 +104,7 @@ class QcReport(Stage):
               "qc.av_constant_ms", "qc.av_slope_ppm", "qc.av_rms_ms", "qc.track_offset_ms")
     resource = "compute"
     review = "delivery"
+    review_when = "the A/V check: several 15 s chunks marked in sync / audio early / audio late"
 
     def plan(self, ctx, params):
         m = ctx.manifest
@@ -125,7 +127,8 @@ class QcReport(Stage):
         ctx.report(0.05, "full decode + blackdetect")
         scan = ff.blackdetect_decode(deliverable, cancel=ctx.cancel)
         ctx.check_cancel()
-        measured: dict = {"full_decode_errors": len(scan.errors), "frames": scan.frames}
+        measured: dict = {"full_decode_errors": len(scan.errors), "frames": scan.frames,
+                          "black_events": list(scan.events)}
         pads_path = pad_repair_list(ctx, m)
         evidence["pad_repair_frames"] = str(pads_path)
         gates = []
@@ -240,7 +243,7 @@ class QcReport(Stage):
             keys = ("mode.dvd_reference_available", "mode.no_dvd_proceed_approved", "deliverable.tracks",
                     "audio.dvd_free_approved", "audio.rate_method", "audio.origin_verified_by_duration",
                     "audio.duration_candidate_rate_hz", "audio.endpoint_tolerance_frames", "video.frames",
-                    "video.delta_s", "audio.pad_frames", "audio.skip_s")
+                    "video.delta_s", "audio.pad_frames", "audio.skip_s", "audio.av_correction")
             issues = check_dvd_free(
                 {k: m.get(k) for k in keys}, report,
                 native_sha256=sha256_file(ctx.artifact_path("ld_native", m)),
@@ -411,6 +414,11 @@ class QcReport(Stage):
                   "duration_s": inventory.metrics.get("duration_s"), "frame_count": measured.get("frames"),
                   "tracks": tracks, "streams": raw, "results": [g.to_dict() for g in gates], "summary": summary,
                   "evidence_paths": evidence, "review_intervals": review, "packet_hashes": hashes,
+                  "av_check": {"chunks": av_check_chunks(float(info.format.get("duration") or duration),
+                                                         measured.get("black_events", [])),
+                               "track": "ld", "applied_correction": m.get("audio.av_correction") or {},
+                               "instructions": "Watch each chunk; mark it in sync, audio too early (sound before "
+                                               "the lips) or audio too late (sound after the lips)."},
                   "standing_warnings": STANDING_WARNINGS, "candidate_is_approval": False}
         atomic_write_json(d["json"], result)
         atomic_write_bytes(d["md"], render_markdown(f"{ctx.episode} {m.title or ''}".strip(), str(deliverable),

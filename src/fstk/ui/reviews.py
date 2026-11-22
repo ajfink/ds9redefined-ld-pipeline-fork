@@ -297,20 +297,37 @@ class EfmCaptureReview(QDialog):
 
 
 # ------------------------------------------------------------------------------ delivery review
+VERDICT_CHOICES = (("", "— not checked —"), ("ok", "In sync"), ("early", "Audio too early"),
+                   ("late", "Audio too late"))
+
+
 class DeliveryReview(QDialog):
-    """QC gates, flagged intervals with playback, and the delivery approve/reject decision."""
+    """The delivery A/V check (owner decision 2026-11-21: the only human review).
+
+    The QC report offers several 15 s chunks spread over the episode. The reviewer plays each and
+    marks it *in sync*, *audio too early* or *audio too late*. **Approve** needs every chunk in
+    sync and no failed gate. **Rerun with corrections** records the marks, and the app solves the
+    timing correction, rebuilds the audio and remux, reruns QC, and offers new chunks.
+    """
 
     decided = Signal(str)
+    plan_ready = Signal(str)
 
     def __init__(self, services, episode: str, *, actor: str, parent=None):
         super().__init__(parent)
         self.services, self.episode, self.actor = services, episode, actor
-        self.setWindowTitle(f"Delivery review — {episode}")
-        self.resize(1200, 760)
+        self.setWindowTitle(f"A/V check and delivery — {episode}")
+        self.resize(1240, 800)
         self.reports = QComboBox()
         self.reports.currentIndexChanged.connect(self.load_report)
         self.summary = QLabel()
         self.summary.setWordWrap(True)
+        self.chunks = QTableWidget(0, 3)
+        self.chunks.setHorizontalHeaderLabels(["Chunk", "Time", "Verdict"])
+        self.chunks.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.chunks.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.chunks.verticalHeader().setVisible(False)
+        self.chunks.cellDoubleClicked.connect(lambda row, _col: self.play_chunk(row))
         self.gates = QTableWidget(0, 3)
         self.gates.setHorizontalHeaderLabels(["Gate", "Status", "Detail"])
         self.gates.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
@@ -323,10 +340,12 @@ class DeliveryReview(QDialog):
         self.media = MediaPane(video=True)
         self.warnings = QPlainTextEdit()
         self.warnings.setReadOnly(True)
-        self.warnings.setMaximumHeight(110)
-        self.approve_button = QPushButton("Approve delivery…")
+        self.warnings.setMaximumHeight(90)
+        self.approve_button = QPushButton("Approve delivery")
+        self.rerun_button = QPushButton("Rerun with corrections")
         self.reject_button = QPushButton("Reject…")
         self.approve_button.clicked.connect(lambda: self.decide("APPROVED"))
+        self.rerun_button.clicked.connect(self.rerun)
         self.reject_button.clicked.connect(lambda: self.decide("REJECTED"))
         close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         close.rejected.connect(self.reject)
@@ -334,8 +353,10 @@ class DeliveryReview(QDialog):
         left = QWidget()
         ll = QVBoxLayout(left)
         ll.setContentsMargins(0, 0, 0, 0)
-        ll.addWidget(self.gates, 3)
-        ll.addWidget(QLabel("Flagged intervals (double-click to play):"))
+        ll.addWidget(QLabel("A/V check — double-click a chunk to play it, then mark it:"))
+        ll.addWidget(self.chunks, 3)
+        ll.addWidget(self.gates, 2)
+        ll.addWidget(QLabel("QC-flagged intervals (double-click to play):"))
         ll.addWidget(self.intervals, 1)
         split = QSplitter(Qt.Orientation.Horizontal)
         split.addWidget(left)
@@ -347,6 +368,7 @@ class DeliveryReview(QDialog):
         top.addWidget(self.reports, 1)
         bottom = QHBoxLayout()
         bottom.addWidget(self.approve_button)
+        bottom.addWidget(self.rerun_button)
         bottom.addWidget(self.reject_button)
         bottom.addStretch(1)
         bottom.addWidget(close)
@@ -358,12 +380,73 @@ class DeliveryReview(QDialog):
         lay.addLayout(bottom)
         self.result: dict = {}
         self.pending = None
+        self.blockers: list[str] = []
         for p in self.services.qc_reports(episode):
             self.reports.addItem(p.name, str(p))
         if not self.reports.count():
             self.summary.setText("No QC report yet: run the qc-report stage first.")
-            self.approve_button.setEnabled(False)
-            self.reject_button.setEnabled(False)
+            for b in (self.approve_button, self.rerun_button, self.reject_button):
+                b.setEnabled(False)
+
+    # ---------------------------------------------------------------- A/V chunks
+    def _fill_chunks(self) -> None:
+        chunks = (self.result.get("av_check") or {}).get("chunks", [])
+        self.chunks.setRowCount(len(chunks))
+        for i, c in enumerate(chunks):
+            self.chunks.setItem(i, 0, QTableWidgetItem(str(i + 1)))
+            self.chunks.setItem(i, 1, QTableWidgetItem(f"{_fmt_time(c['start_s'])} – {_fmt_time(c['end_s'])}"))
+            box = QComboBox()
+            for value, label in VERDICT_CHOICES:
+                box.addItem(label, value)
+            box.currentIndexChanged.connect(self._update_buttons)
+            self.chunks.setCellWidget(i, 2, box)
+
+    def set_verdict(self, row: int, verdict: str) -> None:
+        box = self.chunks.cellWidget(row, 2)
+        box.setCurrentIndex(next(i for i, (v, _) in enumerate(VERDICT_CHOICES) if v == verdict))
+
+    def verdicts(self) -> list[dict]:
+        chunks = (self.result.get("av_check") or {}).get("chunks", [])
+        out = []
+        for i, c in enumerate(chunks):
+            value = self.chunks.cellWidget(i, 2).currentData()
+            if value:
+                out.append({"t_s": c["t_s"], "verdict": value, "start_s": c["start_s"], "end_s": c["end_s"]})
+        return out
+
+    def play_chunk(self, row: int) -> None:
+        chunks = (self.result.get("av_check") or {}).get("chunks", [])
+        if not 0 <= row < len(chunks):
+            return
+        if self.media.source != self.result.get("deliverable_path"):
+            self.media.load(self.result.get("deliverable_path", ""), keep_position=False)
+        self.media.seek_s(float(chunks[row]["start_s"]))
+        self.media.play()
+
+    def _update_buttons(self) -> None:
+        n = len((self.result.get("av_check") or {}).get("chunks", []))
+        marks = [v["verdict"] for v in self.verdicts()]
+        pending = self.pending is not None
+        self.approve_button.setEnabled(pending and not self.blockers and n > 0 and len(marks) == n
+                                       and all(v == "ok" for v in marks))
+        self.rerun_button.setEnabled(pending and any(v in ("early", "late") for v in marks))
+        self.reject_button.setEnabled(pending)
+
+    def rerun(self) -> str | None:
+        marks = self.verdicts()
+        summary = ", ".join(f"{_fmt_time(v['start_s'])} {dict(VERDICT_CHOICES)[v['verdict']].lower()}" for v in marks)
+        try:
+            path = self.services.write_av_rerun_plan(self.episode, qc_report=self.reports.currentData(),
+                                                     verdicts=[{"t_s": v["t_s"], "verdict": v["verdict"]}
+                                                               for v in marks])
+            self.services.decide(self.episode, self.pending, decision="REJECTED", actor=self.actor,
+                                 note=f"A/V check — rerun with corrections: {summary}")
+        except FstkError as exc:
+            QMessageBox.warning(self, "Rerun not started", str(exc))
+            return None
+        self.plan_ready.emit(str(path))
+        self.load_report(self.reports.currentIndex())
+        return str(path)
 
     def load_report(self, index: int) -> None:
         path = self.reports.itemData(index)
@@ -395,10 +478,17 @@ class DeliveryReview(QDialog):
             lines.append("Delivery cannot be approved on this report: " + ", ".join(blockers))
         elif self.pending is None:
             lines.append("This report is not waiting for a delivery decision (already decided, or superseded).")
+        corr = ((r.get("av_check") or {}).get("applied_correction") or {}).get("ld", {}).get("current")
+        if corr:
+            lines.append(f"LD audio timing correction in this file: {corr['offset_ms']:+.0f} ms, "
+                         f"{corr['drift_ppm']:+.0f} ppm drift")
+        lines.append("Approve needs every chunk marked in sync; mark any chunk 'audio too early' or "
+                     "'audio too late' and press Rerun to let the app re-correct.")
         self.summary.setText("\n".join(lines))
         self.warnings.setPlainText("Standing warnings:\n" + "\n".join(f"• {w}" for w in r.get("standing_warnings", [])))
-        self.approve_button.setEnabled(self.pending is not None and not blockers)
-        self.reject_button.setEnabled(self.pending is not None)
+        self.blockers = blockers
+        self._fill_chunks()
+        self._update_buttons()
         self.media.status.setText(f"{Path(r.get('deliverable_path', '')).name} (double-click an interval or press Play)")
         self.media.play_button.clicked.disconnect()
         self.media.play_button.clicked.connect(self._first_play)
@@ -419,6 +509,9 @@ class DeliveryReview(QDialog):
     def decide(self, decision: str, note: str | None = None) -> str | None:
         if self.pending is None:
             return None
+        if note is None and decision == "APPROVED":
+            note = "A/V check: every chunk in sync — " + ", ".join(
+                _fmt_time(v["start_s"]) for v in self.verdicts())
         if note is None:
             from PySide6.QtWidgets import QInputDialog
 

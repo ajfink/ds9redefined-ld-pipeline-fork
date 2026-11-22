@@ -61,6 +61,23 @@ Newest session first. Format and rules: see `AGENTS.md` → "Logging".
   FFmpeg build (duplicates placed differently in 13% of rows). Real-sample fixture
   `tests/fixtures/s01e20-alignment-samples.npz`; FFmpeg version recorded in descriptor
   metadata. 289 tests.
+- **S3-CP5 — one human review: the A/V check (owner, 2026-11-21).** The owner confirmed the
+  automatic EFM rule. `stack-render` and `remux` have no review any more. The delivery review is
+  now the A/V check. `qc-report` offers 8 × 15 s chunks across the episode, avoiding black
+  (`qc.gates.av_check_chunks`). The reviewer marks each chunk in sync / audio too early / audio
+  too late.
+
+  **Approve** needs every chunk in sync. **Rerun with corrections** records the marks as a
+  rejected delivery and starts av-correction → dvd-free-audio → remux → qc-report.
+  `media/av_correction.py` solves the extra delay D(t) = offset + drift·t from every round's
+  marks, with asymmetric detectability windows (45 ms early, 125 ms late). The feasible region
+  is bisected inside a trust box that doubles while the marks still push against it. Drift comes
+  into play when no offset alone fits. In simulation it converges in 1–6 reruns for offsets up to
+  0.9 s and drifts up to ±200 ppm; contradictory marks are reported, not averaged.
+
+  The no-DVD audio applies the correction: rate ÷ (1 + drift), skip × (1 + drift) − offset. The
+  QC DVD-free gate checks it against the manifest. Remux reruns write `-r2`, `-r3` … versions.
+  DVD-episode reruns wait for the DVD-referenced LD audio stage. 301 tests.
 
 ---
 

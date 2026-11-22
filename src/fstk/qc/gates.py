@@ -57,6 +57,49 @@ class Gate:
         return {"gate": self.name, "status": self.status, "detail": self.detail, "metrics": self.metrics}
 
 
+# --------------------------------------------------------------------------- A/V check chunks
+AV_CHUNK_S = 15.0
+AV_CHUNKS = 8
+
+
+def av_check_chunks(duration_s: float, black: list[tuple[float, float, float]], *, n: int = AV_CHUNKS,
+                    length: float = AV_CHUNK_S, margin: float = 20.0) -> list[dict]:
+    """Chunks for the human A/V check: ``n`` windows of ``length`` s spread across the programme.
+
+    One per equal-width bin, as close to the bin centre as possible while avoiding black (fades,
+    act breaks), where lip sync cannot be judged. Short files get fewer, shorter chunks.
+    """
+    if duration_s <= 0:
+        return []
+    if duration_s <= length + 2:
+        return [{"start_s": 0.0, "end_s": round(duration_s, 3), "t_s": round(duration_s / 2, 3)}]
+    lo, hi = min(margin, duration_s * 0.1), duration_s - min(margin, duration_s * 0.1)
+    n = max(1, min(n, int((hi - lo) // length)))
+    width = (hi - lo) / n
+    spans = [(float(a), float(b)) for a, b, *_ in black]
+
+    def clear(a: float) -> bool:
+        return all(b0 >= a + length or b1 <= a for b0, b1 in spans)
+
+    out = []
+    for i in range(n):
+        b0, b1 = lo + i * width, lo + (i + 1) * width
+        centre = (b0 + b1 - length) / 2
+        best = None
+        for step in range(int(width)):
+            for cand in (centre - step, centre + step):
+                if b0 <= cand <= b1 - min(length, width) and clear(cand):
+                    best = cand
+                    break
+            if best is not None:
+                break
+        start = centre if best is None else best
+        end = min(start + length, duration_s)
+        out.append({"start_s": round(start, 3), "end_s": round(end, 3), "t_s": round((start + end) / 2, 3),
+                    "black_free": best is not None})
+    return out
+
+
 # --------------------------------------------------------------------------- PAD black
 def pad_black_hits(pad_frames: list[int], events: list[tuple[float, float, float]]) -> list[dict]:
     """Confirmed PAD positions that still carry a single-frame black (v38 rule)."""

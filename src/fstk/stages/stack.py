@@ -13,8 +13,8 @@
     Ported behaviour of v38 ``render_stack.py``: render the refreshed project, then validate
     the *artifact*: one ``Loaded`` line per capture, StackerStage multi-input evidence, zero
     unrecoverable samples, Orc's written-frame count == measured ``stack.frames`` == an
-    independent FFprobe decode count. Requires a human review of the render report before
-    downstream stages run (v38 ``review_gate``).
+    independent FFprobe decode count. No human review (owner decision 2026-11-21; v38 had a
+    ``review_gate`` here): the only human check is the delivery A/V check.
 """
 from __future__ import annotations
 
@@ -176,12 +176,11 @@ def _stack_frames_recorded(ctx, manifest):
 class StackRender(Stage):
     id = "stack-render"
     title = "Render weighted stack (Orc)"
-    description = "Orc --process with artifact evidence validation; human quality review required."
+    description = "Orc --process with artifact evidence validation; no human review (owner decision 2026-11-21)."
     requires = (ValueSet("stack.reference"), ValueSet("stack.alignment_map"), ValueSet("stack.frames"),
                 ArtifactExists("stack_project"))
     writes = ()
     resource = "compute"
-    review = "stack-render"
 
     def plan(self, ctx, params):
         try:
@@ -221,7 +220,7 @@ class StackRender(Stage):
             "orc_exit_code": res.returncode, "project": str(project), "master": str(master),
             "expected_frames": plan.data["frames"], "evidence": evidence,
             "status": "PASS" if evidence["ok"] else "REVIEW_REQUIRED",
-            "note": "artifact checks only; human quality review is still required"})
+            "note": "artifact checks only; picture quality is judged in the delivery A/V check"})
         out = StepOutput(report=Path(plan.data["report"]))
         out.data["evidence"] = evidence
         return out

@@ -145,12 +145,10 @@ def test_swapped_replacement_images_fail_identity(env):
     assert sorted(r["frame"] for r in identity["metrics"]["rows"] if not r["pass"]) == [100, 400]
 
 
-def test_no_dvd_episode_passes_full_qc_and_takes_a_delivery_approval(env):
-    """End to end for an LD-only episode: dvd-free-audio → deliverable → every QC gate → approval."""
-    from fstk.evidence.approvals import ApprovalBook
+def _no_dvd_episode(prof, out):
+    """LD-only episode with dvd-free-audio run and the deliverable built from its synced audio."""
     from tests.integration.test_dvd_free_audio import write_native
 
-    prof, out = env
     audio_root, stack = prof.root("audio", EP), prof.root("stack", EP)
     audio_root.mkdir(parents=True)
     stack.mkdir(parents=True)
@@ -175,13 +173,27 @@ def test_no_dvd_episode_passes_full_qc_and_takes_a_delivery_approval(env):
     plan = {"schema": PLAN_SCHEMA, "episode": str(EP), "job": "audio",
             "steps": [{"id": "audio", "stage": "dvd-free-audio", "params": {}, "after": []}]}
     assert Engine(prof, plan, actor="op", tool_overrides={"ffmpeg": ff}).run()["steps"]["audio"]["status"] == "passed"
-    synced = audio_root / ws.store.load().artifact("ld_synced")["name"]
-    d = out / "S01E20-23.976-padfixed.mkv"
-    build(d, audio=synced)
+    _deliver(prof, out, ws, "S01E20-23.976-padfixed.mkv")
     replacements(prof.root("probe", EP))
+    return ws, ff
+
+
+def _deliver(prof, out, ws, name):
+    ff = FFmpeg("ffmpeg", "ffprobe")
+    synced = prof.root("audio", EP) / ws.store.load().artifact("ld_synced")["name"]
+    d = out / name
+    build(d, audio=synced)
     with ws.store.transaction(by="t", reason="deliverable built") as m:
         m.set("video.duration_s", float(ff.probe(d).format["duration"]), by="t")
         m.set_artifact("padfixed", root="out", name=d.name)
+
+
+def test_no_dvd_episode_passes_full_qc_and_takes_a_delivery_approval(env):
+    """End to end for an LD-only episode: dvd-free-audio → deliverable → every QC gate → approval."""
+    from fstk.evidence.approvals import ApprovalBook
+
+    prof, out = env
+    ws, ff = _no_dvd_episode(prof, out)
     st = run(prof, "q4")["steps"]["qc"]
     assert st["status"] == "awaiting-review", st
     rep = _report(prof)
@@ -197,3 +209,35 @@ def test_no_dvd_episode_passes_full_qc_and_takes_a_delivery_approval(env):
     assert run(prof, "q4")["steps"]["qc"]["status"] == "passed"
     m = ws.store.load()
     assert m.get("qc.video_md5") == rep["packet_hashes"]["video"] and m.get("qc.identity_own_ncc_min") >= 0.99
+
+
+def test_av_check_rerun_corrects_the_ld_audio_and_qc_still_proves_it(env):
+    """The owner's A/V check: chunks are offered; "audio too early" → av-correction → the LD audio is
+    rebuilt later by the solved offset → new deliverable → QC's DVD-free gate accepts the correction."""
+    prof, out = env
+    ws, ff = _no_dvd_episode(prof, out)
+    assert run(prof, "q5")["steps"]["qc"]["status"] == "awaiting-review"
+    rep = _report(prof)
+    chunks = rep["av_check"]["chunks"]
+    assert chunks and all(c["end_s"] > c["start_s"] for c in chunks)
+    first_start = json.loads((prof.root("reports", EP) / ws.store.load().artifact("audio_timing_report")["name"])
+                             .read_text())["synced"]["start_sample"]
+    verdicts = [{"t_s": c["t_s"], "verdict": "early"} for c in chunks]
+    plan = {"schema": PLAN_SCHEMA, "episode": str(EP), "job": "rerun1",
+            "steps": [{"id": "fix", "stage": "av-correction", "after": [],
+                       "params": {"track": "ld", "verdicts": verdicts, "qc_report": f"qc-{rep['run']}.json"}},
+                      {"id": "audio", "stage": "dvd-free-audio", "params": {}, "after": ["fix"]}]}
+    state = Engine(prof, plan, actor="op", tool_overrides={"ffmpeg": ff}).run()
+    assert state["steps"]["audio"]["status"] == "passed", state["steps"]
+    m = ws.store.load()
+    cur = m.get("audio.av_correction")["ld"]["current"]
+    assert 20 < cur["offset_ms"] <= 80 and cur["drift_ppm"] == 0
+    timing = json.loads((prof.root("reports", EP) / m.artifact("audio_timing_report")["name"]).read_text())
+    assert timing["av_correction"] == cur
+    shift = first_start - timing["synced"]["start_sample"]                 # audio now starts later
+    assert abs(shift - cur["offset_ms"] / 1000 * 44100) <= 1
+    _deliver(prof, out, ws, "S01E20-23.976-padfixed-r2.mkv")
+    run(prof, "q6")
+    rep2 = max(prof.root("reports", EP).glob("qc-*.json"), key=lambda p: p.stat().st_mtime_ns)
+    status = {r["gate"]: r["status"] for r in json.loads(rep2.read_text())["results"]}
+    assert status["DVD-free sync"] == "PASS", status

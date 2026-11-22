@@ -56,17 +56,23 @@ def run(env, job):
     return Engine(prof, plan, actor="op", tool_overrides={"ffmpeg": FFmpeg("ffmpeg", "ffprobe")}).run()
 
 
-def test_remux_needs_no_encode_approval_and_proves_identity(env):
+def test_remux_needs_no_review_and_proves_identity(env):
     prof, ws, video = env
     state = run(env, "m1")
     st = state["steps"]["mux"]
-    assert st["status"] == "awaiting-review", st.get("issues")
+    assert st["status"] == "passed", st.get("issues")                     # owner: no remux review
     report = json.loads((prof.root("reports", EP) / "remux.json").read_text())
     assert report["status"] == "PASS" and all(r["match"] for r in report["identity"])
     assert [r["stream"] for r in report["identity"]] == ["video", "LD audio", "DVD 5.1"]
     streams = FFmpeg("ffmpeg", "ffprobe").probe(prof.root("out", EP) / "S01E20-23.976-padfixed.mkv").streams
     audio = [s.raw for s in streams if s.codec_type == "audio"]
     assert audio[0]["disposition"]["default"] == 1 and audio[1]["disposition"]["default"] == 0
+    # an A/V-check rerun remuxes again: a new version, the first one untouched
+    first = (prof.root("out", EP) / "S01E20-23.976-padfixed.mkv").read_bytes()
+    assert run(env, "m1-rerun")["steps"]["mux"]["status"] == "passed"
+    assert (prof.root("out", EP) / "S01E20-23.976-padfixed-r2.mkv").is_file()
+    assert (prof.root("out", EP) / "S01E20-23.976-padfixed.mkv").read_bytes() == first
+    assert ws.store.load().artifact("padfixed")["name"] == "S01E20-23.976-padfixed-r2.mkv"
 
 
 def test_overlong_track_is_caught_by_packet_identity(env):

@@ -12,6 +12,16 @@ Live metadata, space gate, resumable size+MD5-verified download of TBC/JSON/EFM 
 - writes: —
 - artifacts: —
 
+## `av-correction` — Apply the A/V check's verdicts
+
+Records one A/V review round (per-chunk in sync / audio early / audio late) and solves the next offset/drift correction; the audio, remux and QC steps after it apply the correction.
+
+- resource: prep
+- human review: —
+- requires: —
+- writes: audio.av_correction
+- artifacts: —
+
 ## `cadence-evidence` — Measure cadence (TFM) and build the repair map
 
 Full-side VapourSynth TFM log, cadence analysis, and repair ranges; human review required.
@@ -101,7 +111,7 @@ CRF 14 / slow / grain / Main 10 single pass from the measured IVTC script; verif
 Full decode + PAD black, frame count, stream inventory, seekability, packet hashes, subtitles and retime gaps; evidence for the human delivery review.
 
 - resource: compute
-- human review: delivery
+- human review: delivery (the A/V check: several 15 s chunks marked in sync / audio early / audio late)
 - requires: deliverable, value:video.frames, value:video.duration_s
 - writes: qc.video_md5, qc.ld_audio_md5, qc.fiveone_md5, qc.srt_md5, qc.pad_aligned_black_hits, qc.full_decode_errors, qc.delivered_bytes, qc.identity_own_ncc_min, qc.identity_other_ncc_max, qc.av_constant_ms, qc.av_slope_ppm, qc.av_rms_ms, qc.track_offset_ms
 - artifacts: —
@@ -111,7 +121,7 @@ Full decode + PAD black, frame count, stream inventory, seekability, packet hash
 Stream-copy only; LD stereo default; packet-identity proof per copied stream (v38 remux).
 
 - resource: prep
-- human review: remux
+- human review: —
 - requires: artifact:padfixed_video, value:deliverable.mux_tracks, value:deliverable.ld_audio_source, value:video.duration_s, value:audio.capture
 - writes: —
 - artifacts: padfixed
@@ -128,10 +138,10 @@ Orc refresh loop; records reference, alignment map, stack frames and fit statist
 
 ## `stack-render` — Render weighted stack (Orc)
 
-Orc --process with artifact evidence validation; human quality review required.
+Orc --process with artifact evidence validation; no human review (owner decision 2026-11-21).
 
 - resource: compute
-- human review: stack-render
+- human review: —
 - requires: value:stack.reference, value:stack.alignment_map, value:stack.frames, artifact:stack_project
 - writes: —
 - artifacts: —

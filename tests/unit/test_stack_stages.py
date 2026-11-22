@@ -9,7 +9,6 @@ import pytest
 
 from fstk.config.profile import SCHEMA, Profile
 from fstk.core.identity import EpisodeId
-from fstk.evidence.approvals import ApprovalBook
 from fstk.manifest.model import Manifest
 from fstk.tools.orc import RefreshResult, project_source_labels
 from fstk.tools.process import ProcessResult
@@ -114,22 +113,16 @@ def test_unstable_recommendation_fails_without_writing(env):
     assert not ws.store.load().is_set("stack.reference")
 
 
-def test_render_requires_estimate_and_review(env):
+def test_render_requires_an_estimate_but_no_review(env):
     prof, ws, _ = env
     orc = FakeOrc()
     bad = dict(RENDER, params={})
     state = run(env, [REF, bad], "r0", orc=orc, ffmpeg=FakeFF())
     assert state["steps"]["render"]["status"] == "blocked" and "planned_gib" in state["steps"]["render"]["issues"][0]
     state = run(env, [REF, RENDER], "r1", orc=orc, ffmpeg=FakeFF())
-    assert state["steps"]["render"]["status"] == "awaiting-review", state["steps"]["render"]
+    assert state["steps"]["render"]["status"] == "passed", state["steps"]["render"]   # owner: no review
     report = prof.root("reports", EP) / "stack-render.json"
     assert json.loads(report.read_text())["status"] == "PASS"
-    master = prof.root("prores", EP) / "S01E20-stack-master.mov"
-    ApprovalBook(ws.state_dir / "approvals").record(review="stack-render", decision="APPROVED",
-                                                    note="stack looks clean", actor="op",
-                                                    evidence=[master, report])
-    state = run(env, [REF, RENDER], "r1", orc=orc, ffmpeg=FakeFF())
-    assert state["steps"]["render"]["status"] == "passed"
 
 
 def test_render_frame_mismatch_fails_even_with_clean_exit(env):
