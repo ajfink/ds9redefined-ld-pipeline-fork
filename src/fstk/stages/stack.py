@@ -25,7 +25,12 @@ from fstk.core.fsio import atomic_write_bytes, atomic_write_json, read_json
 from fstk.core.hashing import SCOPE_HEAD_TAIL
 from fstk.core.timeutil import utc_now_iso
 from fstk.tools.orc import project_source_labels, source_alignment_decision, validate_render_evidence
-from fstk.tools.orc_project import build_stack_project, bundled_template, find_capture_file
+from fstk.tools.orc_project import (
+    build_stack_project,
+    bundled_template,
+    find_capture_file,
+    lossless_render_project,
+)
 
 from .base import (
     ArtifactExists,
@@ -183,6 +188,7 @@ class StackRender(Stage):
     requires = (ValueSet("stack.reference"), ValueSet("stack.alignment_map"), ValueSet("stack.frames"),
                 ArtifactExists("stack_project"))
     writes = ()
+    writes_artifacts = ("stack_master",)
     resource = "compute"
 
     def plan(self, ctx, params):
@@ -194,45 +200,71 @@ class StackRender(Stage):
                             "estimate for this episode (never another episode's file size)") from None
         m = ctx.manifest
         project = ctx.artifact_path("stack_project", m)
-        master = ctx.artifact_path("stack_master", m)
-        if master.exists() and not params.get("replace_existing_master"):
-            raise GateError(f"stack master already exists: {master} (set replace_existing_master to re-render)")
+        # The master is always rendered lossless to <code>-stack-master.mkv. An older master recorded for this
+        # episode (a v38 ProRes .mov) is left untouched; a finished lossless master is reused, not re-rendered.
+        master = ctx.root("prores") / f"{ctx.episode.code}-stack-master.mkv"
+        reuse = master.exists() and not params.get("replace_existing_master")
+        if master.exists() and params.get("replace_existing_master"):
+            raise GateError(f"{master} exists; move it aside before re-rendering (fstk never overwrites a master)")
+        render_project = ctx.root("stack") / f"{project.stem}-lossless.orcprj"
         report = ctx.root("reports") / "stack-render.json"
         return StepPlan(self.id, params, inputs=[project], outputs=[master, report],
-                        space=SpaceNeed("prores", planned, basis),
-                        summary=f"render {project.name} → {master.name}",
-                        data={"project": str(project), "master": str(master), "report": str(report),
-                              "frames": m.require("stack.frames"),
-                              "groups": m.get("stack.pressing_groups")})
+                        space=None if reuse else SpaceNeed("prores", planned, basis),
+                        summary=(f"reuse the lossless master {master.name}" if reuse
+                                 else f"render {project.name} → {master.name} (FFV1)"),
+                        data={"project": str(project), "render_project": str(render_project), "master": str(master),
+                              "report": str(report), "frames": m.require("stack.frames"),
+                              "groups": m.get("stack.pressing_groups"), "reuse": reuse})
 
     def run(self, ctx, plan):
         orc, ff = ctx.tool("orc"), ctx.tool("ffmpeg")
-        project, master = Path(plan.data["project"]), Path(plan.data["master"])
+        d = plan.data
+        project, master = Path(d["project"]), Path(d["master"])
         labels = project_source_labels(project)
-        master.parent.mkdir(parents=True, exist_ok=True)
-        ctx.report(0.0, f"Orc render of {len(labels)} captures")
-        res, text = orc.process_project(project, cancel=ctx.cancel)
-        ctx.check_cancel()
-        if not master.is_file() or master.stat().st_size == 0:
-            raise ArtifactError(f"Orc produced no stack master ({res.describe()})")
-        ctx.report(0.9, "decode-counting master frames")
-        actual = ff.count_frames(master)
-        evidence = validate_render_evidence(text, labels, int(plan.data["frames"]), actual, plan.data["groups"])
-        codec = ff.probe(master).only("video").raw.get("codec_name")
-        evidence["master_codec"] = codec
-        if codec not in LOSSLESS_MASTER_CODECS:
-            evidence["ok"] = False
-            evidence.setdefault("issues", []).append(
-                f"stack master is {codec!r}, not lossless ({', '.join(LOSSLESS_MASTER_CODECS)}): every later picture "
-                "step reads it, so a lossy master would put a second lossy generation before the final encode")
-        atomic_write_json(plan.data["report"], {
+        if d["reuse"]:
+            ctx.report(0.1, f"checking the existing master {master.name}")
+            codec = ff.probe(master).only("video").raw.get("codec_name")
+            actual = ff.count_frames(master)
+            issues = []
+            if codec not in LOSSLESS_MASTER_CODECS:
+                issues.append(f"existing {master.name} is {codec!r}, not lossless; move it aside to re-render")
+            if actual != int(d["frames"]):
+                issues.append(f"existing {master.name} has {actual} frames; stack.frames is {d['frames']}")
+            evidence = {"ok": not issues, "issues": issues, "reused": True, "master_codec": codec,
+                        "decoded_frames": actual}
+            res_desc, exit_code = "reused existing master", None
+        else:
+            render = Path(d["render_project"])
+            atomic_write_bytes(render, lossless_render_project(project.read_text(encoding="utf-8"), master).encode())
+            master.parent.mkdir(parents=True, exist_ok=True)
+            ctx.report(0.0, f"Orc render of {len(labels)} captures (lossless FFV1)")
+            res, text = orc.process_project(render, cancel=ctx.cancel)
+            ctx.check_cancel()
+            if not master.is_file() or master.stat().st_size == 0:
+                raise ArtifactError(f"Orc produced no stack master ({res.describe()}); if this Orc build rejects "
+                                    "ffmpeg_format mkv-ffv1 the log above says so")
+            ctx.report(0.9, "decode-counting master frames")
+            actual = ff.count_frames(master)
+            evidence = validate_render_evidence(text, labels, int(d["frames"]), actual, d["groups"])
+            codec = ff.probe(master).only("video").raw.get("codec_name")
+            evidence["master_codec"] = codec
+            if codec not in LOSSLESS_MASTER_CODECS:
+                evidence["ok"] = False
+                evidence.setdefault("issues", []).append(
+                    f"stack master is {codec!r}, not lossless ({', '.join(LOSSLESS_MASTER_CODECS)}): every later picture "
+                    "step reads it, so a lossy master would put a second lossy generation before the final encode")
+            res_desc, exit_code = res.describe(), res.returncode
+        atomic_write_json(d["report"], {
             "schema": "fstk-stack-render-v1", "created_utc": utc_now_iso(), "episode": str(ctx.episode),
-            "orc_exit_code": res.returncode, "project": str(project), "master": str(master),
-            "expected_frames": plan.data["frames"], "evidence": evidence,
+            "orc_exit_code": exit_code, "orc": res_desc, "project": str(project), "master": str(master),
+            "expected_frames": d["frames"], "evidence": evidence,
             "status": "PASS" if evidence["ok"] else "REVIEW_REQUIRED",
             "note": "artifact checks only; picture quality is judged in the delivery A/V check"})
-        out = StepOutput(report=Path(plan.data["report"]))
+        out = StepOutput(report=Path(d["report"]))
         out.data["evidence"] = evidence
+        if evidence["ok"]:
+            out.artifacts["stack_master"] = {"root": "prores",
+                                             "name": master.relative_to(ctx.root("prores")).as_posix()}
         return out
 
     def verify(self, ctx, plan, output):

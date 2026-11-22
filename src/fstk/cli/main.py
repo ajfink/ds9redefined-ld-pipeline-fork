@@ -334,6 +334,49 @@ def cmd_episode_create(args) -> int:
     return 0
 
 
+def find_dvd(dvd_root: Path, code: str) -> list[Path]:
+    """Video files under ``dvd_root`` whose name carries the episode code (S01E20), case-insensitive."""
+    pat = code.casefold()
+    exts = {".mkv", ".mp4", ".m4v", ".mov", ".ts", ".m2ts", ".vob", ".iso"}
+    if not dvd_root.is_dir():
+        return []
+    return sorted(p for p in dvd_root.rglob("*") if p.is_file() and p.suffix.lower() in exts
+                  and pat in p.name.casefold().replace(" ", ""))
+
+
+def cmd_episode_dvd(args) -> int:
+    """Record the episode's DVD reference (a file, found under dvd_root, or none)."""
+    from fstk.core.identity import EpisodeId
+
+    prof = _profile(args)
+    ws = _workspace(args, args.episode)
+    ep = EpisodeId.parse(args.episode)
+    actor = _actor(args)
+    if args.none:
+        with ws.store.transaction(by=actor, reason="operator: no DVD reference for this episode") as m:
+            m.set("mode.dvd_reference_available", False, by=actor, note="operator: no DVD (fstk episode dvd --none)")
+        _print(args, {"episode": str(ep), "dvd": None}, f"{ep}: no DVD reference (LD-only route)")
+        return 0
+    if args.file:
+        dvd = Path(args.file).absolute()
+    else:
+        root = (prof.sources or {}).get("dvd_root") or ""
+        if not root:
+            raise FstkError("the profile has no sources.dvd_root; pass --file")
+        hits = find_dvd(Path(root), ep.code)
+        if len(hits) != 1:
+            raise FstkError(f"looked for a file named with {ep.code} under {root}: found {len(hits)} "
+                            f"({', '.join(map(str, hits[:5]))}); pass --file")
+        dvd = hits[0]
+    if not dvd.is_file():
+        raise FstkError(f"DVD file not found: {dvd}")
+    with ws.store.transaction(by=actor, reason=f"operator: DVD reference {dvd.name}") as m:
+        m.set_artifact("dvd", path=str(dvd))
+        m.set("mode.dvd_reference_available", True, by=actor, note=f"operator: {dvd}")
+    _print(args, {"episode": str(ep), "dvd": str(dvd)}, f"{ep}: DVD reference {dvd}")
+    return 0
+
+
 # ----------------------------------------------------------------------------- share
 def _tree(args):
     from fstk.workspace.shared import SharedTree
@@ -494,6 +537,13 @@ def build_parser() -> argparse.ArgumentParser:
     ec.add_argument("--parallel", action="store_true",
                     help="create it even though another device is actively working on it")
     ec.set_defaults(func=cmd_episode_create)
+    ed = epi.add_parser("dvd", help="record the episode's DVD reference: --file PATH, --find (under dvd_root) or --none")
+    ed.add_argument("episode")
+    g2 = ed.add_mutually_exclusive_group(required=True)
+    g2.add_argument("--file")
+    g2.add_argument("--find", action="store_true")
+    g2.add_argument("--none", action="store_true")
+    ed.set_defaults(func=cmd_episode_dvd)
 
     sh = sub.add_parser("share", help="shared multi-machine workspace (ADR 0002)").add_subparsers(
         dest="sub", required=True)

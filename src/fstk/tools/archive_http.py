@@ -140,14 +140,24 @@ class ArchiveClient:
 
     # ------------------------------------------------------------------ one file
     def fetch(self, identifier: str, f: RemoteFile, dest_dir: Path, *,
-              progress: Callable[[str, int, int], None] | None = None, cancel=None) -> str:
-        """Download/resume/verify one file. Returns "verified" or "already-verified"."""
+              progress: Callable[[str, int, int], None] | None = None, cancel=None,
+              verified_before: float | None = None) -> str:
+        """Download/resume/verify one file. Returns "verified", "already-verified" or "previously-verified".
+
+        ``verified_before``: mtime of a download manifest that already lists this file as verified with the
+        same name, size and MD5 as the live Archive metadata. A complete file not modified since then is
+        accepted without re-hashing (a full re-hash of a 12-capture item reads about a terabyte).
+        """
         path = dest_dir / f.name
         if path.exists() and not path.is_file():
             raise ArtifactError(f"Destination entry exists but is not a file; inspect without modifying it: {path}")
         have = path.stat().st_size if path.exists() else 0
         if have > f.size:
             raise ArtifactError(f"Existing file is larger than Archive metadata; leaving it untouched: {path}")
+        if have == f.size and verified_before is not None and path.stat().st_mtime <= verified_before:
+            if progress:
+                progress(f.name, f.size, f.size)
+            return "previously-verified"
         digest = hashlib.md5()
         if have:
             with path.open("rb") as stream:
@@ -224,9 +234,17 @@ class ArchiveClient:
 
         status("running")
         completed = False
+        prior_ok: dict[tuple[str, int, str], float] = {}
+        prior = dest_dir / "download-manifest.csv"
+        if prior.is_file():
+            when = prior.stat().st_mtime
+            for r in read_download_manifest(prior):
+                if (r.get("Status") or "").lower() == "verified" and r["ArchiveId"] == sel.identifier:
+                    prior_ok[(r["Name"], int(r["Bytes"]), r["MD5"].lower())] = when
         try:
             for f in sel.files:
-                self.fetch(sel.identifier, f, dest_dir, progress=progress, cancel=cancel)
+                self.fetch(sel.identifier, f, dest_dir, progress=progress, cancel=cancel,
+                           verified_before=prior_ok.get((f.name, f.size, f.md5.lower())))
                 new = not verified_path.exists()
                 with verified_path.open("a", newline="", encoding="utf-8") as stream:
                     w = csv.DictWriter(stream, fieldnames=VERIFIED_FIELDS)

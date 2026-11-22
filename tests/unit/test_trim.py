@@ -131,7 +131,7 @@ def test_delivery_plan_orders_every_stage_for_each_route():
         "stack-render", "cadence-evidence", "dvd-probe", "dvd-alignment", "video-trim", "dvd-ld-audio",
         "dvd-retime", "stretch-preview", "pad-audit", "pad-repair", "frame-fixes", "video-quality", "encode-final", "audio-quality", "remux", "qc-report", "episode-report"]
     render = plan["steps"][0]["params"]
-    assert 25 < render["planned_gib"] < 30 and "287 KB" in render["estimate_basis"]
+    assert 35 < render["planned_gib"] < 42 and "415 KB" in render["estimate_basis"]
     m.set("mode.dvd_reference_available", False, by="op")
     assert [s["stage"] for s in delivery_plan(m)["steps"]] == [
         "stack-render", "cadence-evidence", "video-trim", "dvd-free-audio", "stretch-preview", "pad-audit", "pad-repair", "frame-fixes", "video-quality", "encode-final", "audio-quality", "remux", "qc-report", "episode-report"]

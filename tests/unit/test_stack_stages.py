@@ -151,3 +151,36 @@ def test_render_frame_mismatch_fails_even_with_clean_exit(env):
     state = run(env, [REF, RENDER], "r2", orc=FakeOrc(render_frames=999), ffmpeg=FakeFF())
     issues = state["steps"]["render"]["issues"]
     assert state["steps"]["render"]["status"] == "failed" and any("999" in i for i in issues)
+
+
+def test_imported_prores_master_is_left_alone_and_a_lossless_one_rendered(env):
+    prof, ws, _ = env
+    run(env, [REF], "p0", orc=FakeOrc())
+    old = prof.root("prores", EP) / "S01E20-stack-master.mov"
+    old.parent.mkdir(parents=True, exist_ok=True)
+    old.write_bytes(b"v38 prores")
+    with ws.store.transaction(by="t", reason="v38 import") as m:
+        m.set_artifact("stack_master", root="prores", name=old.name)
+    state = run(env, [REF, RENDER], "p1", orc=FakeOrc(), ffmpeg=FakeFF())
+    assert state["steps"]["render"]["status"] == "passed", state["steps"]["render"].get("issues")
+    assert old.read_bytes() == b"v38 prores"                                   # never touched
+    m = ws.store.load()
+    assert m.artifact("stack_master")["name"] == "S01E20-stack-master.mkv"
+    render = prof.root("stack", EP) / "stack-full-ds9-s01e20-lossless.orcprj"
+    assert "mkv-ffv1" in render.read_text() and "S01E20-stack-master.mkv" in render.read_text()
+
+
+def test_existing_lossless_master_is_reused_and_a_lossy_one_refused(env):
+    prof, ws, _ = env
+    run(env, [REF], "q0", orc=FakeOrc())
+    master = prof.root("prores", EP) / "S01E20-stack-master.mkv"
+    master.parent.mkdir(parents=True, exist_ok=True)
+    master.write_bytes(b"ffv1")
+    orc = FakeOrc()
+    state = run(env, [REF, RENDER], "q1", orc=orc, ffmpeg=FakeFF())
+    assert state["steps"]["render"]["status"] == "passed"
+    rep = json.loads((prof.root("reports", EP) / "stack-render.json").read_text())
+    assert rep["evidence"]["reused"] is True and rep["orc_exit_code"] is None
+    state = run(env, [REF, RENDER], "q2", orc=FakeOrc(), ffmpeg=FakeFF(codec="prores"))
+    assert state["steps"]["render"]["status"] == "failed"
+    assert any("not lossless" in i for i in state["steps"]["render"]["issues"])

@@ -47,7 +47,7 @@ def intake_plan(episode: str | EpisodeId, *, download: bool, job: str | None = N
 
 #: Disk estimates from real data (owner's Legion): the S01E20 stack master is 287 KB/frame;
 #: delivered v38 episodes are 4.1–4.7 GiB for ~65,200 frames (≈ 72 KB/frame). Margins included.
-MASTER_BYTES_PER_STACK_FRAME = 360_000
+MASTER_BYTES_PER_STACK_FRAME = 500_000     # FFV1 10-bit 4:2:2: 415 KB/frame measured on S01E20 (ProRes HQ: 287)
 ENCODE_BYTES_PER_OUTPUT_FRAME = 110_000
 
 
@@ -67,7 +67,7 @@ def delivery_plan(manifest, *, job: str | None = None) -> dict[str, Any]:
     ep = manifest.episode
     dvd = manifest.get("mode.dvd_reference_available")
     if dvd is None:
-        raise FstkError("record whether a DVD reference exists (mode.dvd_reference_available) first")
+        raise FstkError("record the DVD reference first: `fstk episode dvd <episode> --find` (or --file PATH, or --none for LD-only)")
     stack_frames = manifest.get("stack.frames")
     if not stack_frames:
         raise FstkError("run intake first: stack.frames is not measured")
@@ -80,7 +80,7 @@ def delivery_plan(manifest, *, job: str | None = None) -> dict[str, Any]:
         steps.append({"id": sid, "stage": stage, "after": after, "params": params})
 
     add("stack-render", "stack-render", [], planned_gib=round(master_gib, 2),
-        estimate_basis=f"{stack_frames} stack frames × {MASTER_BYTES_PER_STACK_FRAME} B (S01E20 master: 287 KB/frame)")
+        estimate_basis=f"{stack_frames} stack frames × {MASTER_BYTES_PER_STACK_FRAME} B (S01E20 FFV1 measured 415 KB/frame, ProRes 287 KB)")
     add("cadence", "cadence-evidence", ["stack-render"])
     if dvd:
         add("dvd-probe", "dvd-probe", [])

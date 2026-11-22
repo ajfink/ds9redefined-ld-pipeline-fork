@@ -722,3 +722,21 @@ only as a reviewed, opt-in source with side-by-side and in-context previews.
   refused it, so nothing wrong was encoded; every v38 episode had tail_trim 0.
 - Not built: re-stacking a range without the damaged capture (needs Orc on Windows); RIFE for frame fixes and
   stretches (MVTools is used; RIFE remains the PAD engine).
+
+## CP21 — 2026-11-22 ready for the first real Windows run
+- `docs/WINDOWS-RUN.md`: the owner's runbook for DS9:S01E20 tonight (setup → smoke → create → intake → delivery
+  → review, and what to send back per failure). `tools/windows/setup-fstk.ps1` + `make_profile.py`: Python 3.12
+  venv outside Z:, `pip install -e .[gui,media]`, profile from the v38 machine.json with the venv's vspipe, doctor.
+- `media` extra: VapourSynth R82 and every plugin from PyPI wheels (all exist for win_amd64, checked, resize2
+  included).
+- `stack-render` always renders the lossless master to `<code>-stack-master.mkv` from a copy of the stack project
+  with the sink forced to FFV1; an imported v38 ProRes master is left untouched; an existing lossless master with
+  the right frame count is reused instead of re-rendered. Master estimate 500 KB/frame (FFV1 measured 415 KB on
+  S01E20; ProRes was 287).
+- `fstk episode dvd <ep> --find | --file | --none`: a fresh episode can now record its DVD (there was no way).
+- Archive downloader: a complete file unchanged since a matching *verified* download-manifest row is accepted
+  without re-hashing (a 12-capture item is ~1 TB of MD5); changed files are still hashed.
+- `fstk smoke` takes tool paths from the machine profile first (RIFE/Orc are not on PATH on Windows).
+- Parked: the residual-damage map + masked RIFE fill. Real S02E01 TBC JSON: dropouts in 3641 of 166048 fields per
+  capture, median 17 samples; mapping capture fields to stack frames needs Orc's frame-map + alignment semantics,
+  to be confirmed on a real render first.

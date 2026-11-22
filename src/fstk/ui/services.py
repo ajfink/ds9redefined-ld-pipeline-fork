@@ -320,7 +320,7 @@ class Services:
         m = ws.store.load()
         dvd = m.get("mode.dvd_reference_available")
         if dvd is None:
-            raise FstkError("record whether a DVD reference exists (mode.dvd_reference_available) first")
+            raise FstkError("record the DVD reference first: `fstk episode dvd <episode> --find` (or --file PATH, or --none for LD-only)")
         audio_stage = "dvd-ld-audio" if dvd else "dvd-free-audio"
         job = f"av-rerun-{utc_stamp()[:15].lower()}"
         steps = [{"id": "av-correction", "stage": "av-correction", "after": [],

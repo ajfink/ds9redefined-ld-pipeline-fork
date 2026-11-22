@@ -42,6 +42,7 @@ class SmokeSpec:
     rife_standin: bool = False        # CPU-only sandboxes: blend stand-in instead of RIFE (labelled STANDIN)
     steps: list[str] = field(default_factory=lambda: ["cadence", "trim", "audit", "repair", "encode"])
     preset: str = "ultrafast"         # smoke checks seams, not the recipe; recorded as a recipe override
+    profile: Path | None = None       # the machine profile whose tool paths are reused (default location if None)
 
 
 def _log_line(log: list[dict], **kw) -> None:
@@ -53,7 +54,16 @@ def build_profile(spec: SmokeSpec):
     from fstk.config.profile import KNOWN_TOOLS, SCHEMA, Profile, current_os
 
     tools = {}
-    for name, ts in KNOWN_TOOLS.items():
+    try:                     # the machine's own profile first (RIFE and Orc are usually not on PATH) …
+        from fstk.config.profile import default_profile_path
+
+        real = Profile.load(spec.profile) if getattr(spec, "profile", None) else Profile.load(default_profile_path())
+        tools.update({k: v for k, v in real.tools.items() if v and Path(v).exists()})
+    except Exception:        # no profile yet: PATH only
+        pass
+    for name, ts in KNOWN_TOOLS.items():   # … then PATH for anything still missing
+        if name in tools:
+            continue
         found = next((shutil.which(n) for n in ts["path_names"] if shutil.which(n)), None)
         if found:
             tools[name] = found
@@ -178,7 +188,8 @@ def smoke_main(args) -> int:
                      sandbox=Path(args.sandbox), seconds=args.seconds, chroma=args.chroma,
                      dvd=Path(args.dvd) if args.dvd else None, dvd_offset=args.dvd_offset,
                      steps=args.steps.split(",") if args.steps else ["cadence", "trim", "audit", "repair", "encode"],
-                     preset=args.preset, repair=args.repair, rife_standin=args.rife_standin)
+                     preset=args.preset, repair=args.repair, rife_standin=args.rife_standin,
+                     profile=Path(args.profile) if getattr(args, "profile", None) else None)
     try:
         summary = run_smoke(spec)
     except FstkError as exc:

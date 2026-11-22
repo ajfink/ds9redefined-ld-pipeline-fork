@@ -167,3 +167,27 @@ def test_differing_existing_manifest_is_preserved(server, tmp_path):
         c.download_item(c.selection(IDENT), tmp_path, source_url="x")
     assert "OTHER" in (tmp_path / "download-manifest.csv").read_text()
     assert json.loads((tmp_path / "download-status.json").read_text())["status"] == "failed"
+
+
+def test_previously_verified_unchanged_files_are_not_rehashed(server, tmp_path):
+    import os
+
+    c = server.client()
+    sel = c.selection(IDENT)
+    c.download_item(sel, tmp_path, source_url="x")
+    name = "DS9-S02E18-Profit and Loss-L1.tbc"
+    f = next(x for x in sel.files if x.name == name)
+    manifest = tmp_path / "download-manifest.csv"
+    when = manifest.stat().st_mtime
+    assert c.fetch(IDENT, f, tmp_path, verified_before=when) == "previously-verified"
+    # a file changed after verification (newer mtime) is hashed again, and corruption is caught
+    p = tmp_path / name
+    p.write_bytes(b"\0" * f.size)
+    os.utime(p, (when + 10, when + 10))
+    with pytest.raises(ArtifactError, match="MD5 mismatch"):
+        c.fetch(IDENT, f, tmp_path, verified_before=when)
+    before = len(server.requests)
+    p.write_bytes(FILES[name])
+    os.utime(p, (when - 10, when - 10))
+    c.download_item(sel, tmp_path, source_url="x")                # whole item: nothing fetched again
+    assert all("/metadata/" in r[0] for r in server.requests[before:]) or len(server.requests) == before

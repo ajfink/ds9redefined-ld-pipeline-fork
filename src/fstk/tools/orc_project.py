@@ -168,6 +168,27 @@ def set_sink_path(block: list[str], value: str) -> None:
             del block[i:i + 3]
 
 
+def lossless_render_project(text: str, master_out: Path) -> str:
+    """A copy of a stack project whose video sink writes the lossless FFV1 master to ``master_out``.
+
+    Used to re-render an episode whose recorded project (v38's, or an older fstk one) still asks for ProRes.
+    Only the sink node changes: sources, frame maps and the measured alignment are kept exactly.
+    """
+    head, blocks, tail = split_nodes(text)
+    sinks = [i for i, b in blocks.items() if re.search(r"(?m)^      stage: video_sink\s*$", "\n".join(b))]
+    if len(sinks) != 1:
+        raise PipelineError(f"stack project must have exactly one video_sink node (found {len(sinks)})")
+    block = list(blocks[sinks[0]])
+    set_sink_path(block, str(master_out))
+    blocks[sinks[0]] = block
+    lines = [*head, "  nodes:"]
+    for i in blocks:
+        lines.extend(blocks[i])
+    lines.append("  edges:")
+    lines.extend(tail)
+    return "\n".join(lines) + "\n"
+
+
 def find_capture_file(folder: Path, label: str) -> Path:
     hits = [p for p in folder.glob("*.tbc") if p.stem.rsplit("-", 1)[-1].casefold() == label.casefold()]
     if len(hits) != 1:
