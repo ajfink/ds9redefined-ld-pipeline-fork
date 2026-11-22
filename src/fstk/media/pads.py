@@ -48,15 +48,32 @@ def project_map_pads(map_pads: list[int], *, pad_trim: int, head_trim: int) -> l
     return [(int(m) - int(pad_trim)) * 4 // 5 - int(head_trim) for m in map_pads]
 
 
+#: A run of adjacent PADs renders as one black event of up to this many frames (audit 1 / owner 2026-11-21:
+#: adjacent PADs are one gap, not an error). Longer events are breaks/fades and are never repaired.
+RUN_MAX_FRAMES = 3
+
+
 def blips_from_events(events: list[tuple[float, float, float]], *, fps: float = F24,
-                      blip_max_s: float = BLIP_MAX_S) -> tuple[list[int], list[tuple[int, int]]]:
-    """(single-frame blips, longer black spans as (first, last) frames) from blackdetect events."""
+                      blip_max_s: float = BLIP_MAX_S, run_max_frames: int = RUN_MAX_FRAMES,
+                      groups: list[list[int]] | None = None) -> tuple[list[int], list[tuple[int, int]]]:
+    """(blip frames, longer black spans as (first, last) frames) from blackdetect events.
+
+    Single-frame events are blips. Events of 2..``run_max_frames`` frames are expanded to one blip per
+    frame and appended to ``groups`` (so ``classify_pads`` can require the whole run to be explained by
+    map PADs); anything longer is a span (break black, fade).
+    """
     blips: list[int] = []
     spans: list[tuple[int, int]] = []
     for start, end, dur in events:
         first = round(start * fps)
+        n = max(1, round(dur * fps))
         if dur <= blip_max_s:
             blips.append(first)
+        elif n <= run_max_frames:
+            run = list(range(first, first + n))
+            blips.extend(run)
+            if groups is not None:
+                groups.append(run)
         else:
             spans.append((first, max(first, round(end * fps) - 1)))
     return sorted(set(blips)), spans
@@ -100,8 +117,10 @@ def is_cut(score: float, threshold: float = CUT_THRESHOLD) -> bool:
 
 
 def near_black(rgb: np.ndarray) -> tuple[bool, int, float]:
-    """Full-raster verdict for one RGB frame (8-bit): (is_black, max, mean)."""
-    mx, mean = int(rgb.max()), float(rgb.mean())
+    """Full-raster verdict for one RGB frame (8- or 16-bit): (is_black, max, mean)."""
+    if rgb.dtype == np.uint16:           # 16-bit full scale → the 8-bit scale the v38 limits are written in
+        rgb = rgb.astype(np.float32) * np.float32(255.0 / 65535.0)
+    mx, mean = int(np.ceil(float(rgb.max()))), float(rgb.mean())
     return (mx <= RGB_MAX_LIMIT and mean <= RGB_MEAN_LIMIT), mx, mean
 
 
@@ -114,7 +133,7 @@ class PadAuditResult:
 
 
 def classify_pads(projected: dict[int, int], *, frames: int, blips: list[int], spans: list[tuple[int, int]] = (),
-                  tolerance: int = TOLERANCE_FRAMES) -> PadAuditResult:
+                  tolerance: int = TOLERANCE_FRAMES, groups: list[list[int]] = ()) -> PadAuditResult:
     """Account for every map PAD. ``projected`` is {map pad master frame: output frame}.
 
     Statuses: ``trimmed_away`` (outside the output), ``inside_break_black`` (inside a longer black span),
@@ -126,6 +145,13 @@ def classify_pads(projected: dict[int, int], *, frames: int, blips: list[int], s
     in_span = {o for _, o in inside if any(a - tolerance <= o <= b + tolerance for a, b in spans)}
     candidates = [o for _, o in inside if o not in in_span]
     matched = match_blips(candidates, blips, tolerance=tolerance)
+    # a multi-frame black event is repaired only if map PADs explain every frame of it; a partial match
+    # means real dark content next to a PAD, so the whole event is left alone (never half-repaired)
+    taken = set(matched.values())
+    for g in groups:
+        if any(f in taken for f in g) and not all(f in taken for f in g):
+            for p in [p for p, b in matched.items() if b in g]:
+                del matched[p]
     boundary = boundary_orphan_frames(sorted(set(matched.values())), set(matched.values()), frames)
     for m, o in sorted(projected.items()):
         if not 0 <= o < frames:
@@ -144,3 +170,14 @@ def classify_pads(projected: dict[int, int], *, frames: int, blips: list[int], s
     res.counts = {"map_pads": len(res.rows), "rendered_isolated": c["matched"], **{k: c[k] for k in (
         "trimmed_away", "inside_break_black", "never_rendered")}}
     return res
+
+
+def runs_of(frames: list[int]) -> list[list[int]]:
+    """Group sorted frames into runs of consecutive frames: [20, 21, 40] → [[20, 21], [40]]."""
+    out: list[list[int]] = []
+    for f in sorted(set(frames)):
+        if out and f == out[-1][-1] + 1:
+            out[-1].append(f)
+        else:
+            out.append([f])
+    return out

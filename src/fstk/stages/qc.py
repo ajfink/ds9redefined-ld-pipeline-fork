@@ -366,7 +366,7 @@ class QcReport(Stage):
         ff = ctx.tool("ffmpeg")
         info = ff.probe(deliverable)
         raw = [s.raw for s in info.streams]
-        inventory = stream_inventory(raw, info.format, tracks, duration)
+        inventory = stream_inventory(raw, info.format, tracks, duration, m.get("mode.chroma_output"))
         gates.append(inventory)
         audio_count = sum(1 for s in raw if s.get("codec_type") == "audio")
         ctx.report(0.7, "audio seekability")

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
+from typing import ClassVar
 
 import cv2
 import numpy as np
@@ -32,12 +33,14 @@ def scene(seed, w=W, h=H):
 
 
 A, B = scene(1), scene(2)
+BLACK = {20, 41}
+SPEED = 3   # px per frame of the synthetic pan
 
 
 def ld_frame(i: int) -> np.ndarray:           # shot A until frame 41, shot B from 42; PADs 20 and 41 are black
-    if i in (20, 41):
+    if i in BLACK:
         return np.zeros((H, W, 3), np.uint8)
-    return np.roll(A, 3 * i, axis=1) if i < 42 else np.roll(B, 3 * (i - 42), axis=1)
+    return np.roll(A, SPEED * i, axis=1) if i < 42 else np.roll(B, SPEED * (i - 42), axis=1)
 
 
 class FakeVS:
@@ -62,8 +65,10 @@ class FakeVS:
 
 class FakeRife:
     method = "RIFE-test-CPU-TTA"
+    steps: ClassVar[list] = []
 
-    def interpolate(self, prev, nxt, out, cancel=None):
+    def interpolate(self, prev, nxt, out, step=0.5, cancel=None):
+        self.steps.append(step)
         a, b = cv2.imread(str(prev)), cv2.imread(str(nxt))
         cv2.imwrite(str(out), ((a.astype(int) + b.astype(int)) // 2).astype(np.uint8))
 
@@ -91,8 +96,9 @@ def env(tmp_path, monkeypatch):
 
 
 def run(prof, steps, job, vs, **tools):
+    tools.setdefault("rife", FakeRife())
     plan = {"schema": PLAN_SCHEMA, "episode": str(EP), "job": job, "steps": steps}
-    return Engine(prof, plan, actor="op", tool_overrides={"vapoursynth": vs, "rife": FakeRife(), **tools}).run()
+    return Engine(prof, plan, actor="op", tool_overrides={"vapoursynth": vs, **tools}).run()
 
 
 AUDIT = {"id": "audit", "stage": "pad-audit", "after": [], "params": {}}
@@ -160,9 +166,10 @@ def test_dvd_route_borrows_the_frame_on_a_cut(env):
     cut = next(r for r in rows if r["frame"] == 41)
     assert cut["method"] == "dvd-cut-frame", cut["note"]
     assert "colour-matched to the prev LD frame" in cut["note"]
-    got = cv2.cvtColor(cv2.imread(cut["png"]), cv2.COLOR_BGR2RGB)
+    got = cv2.cvtColor(cv2.imread(cut["png"], cv2.IMREAD_UNCHANGED), cv2.COLOR_BGR2RGB)
     truth = np.roll(A, 3 * 41, axis=1)
-    assert np.abs(got[8:-8, 8:-8].astype(int) - truth[8:-8, 8:-8].astype(int)).mean() < 8
+    assert got.dtype == np.uint16
+    assert np.abs(got[8:-8, 8:-8].astype(float) / 257 - truth[8:-8, 8:-8].astype(float)).mean() < 8
     assert {r["frame"]: r["method"] for r in rows}[20] == "RIFE-test-CPU-TTA"   # non-cut PAD still uses RIFE
 
 
@@ -191,3 +198,25 @@ def test_encode_final_prefers_a_current_padfix_script_and_refuses_a_stale_one(en
 
     with pytest.raises(GateError, match="older encode script"):
         EncodeFinal().plan(ctx(), {"planned_gib": 0.01, "estimate_basis": "t"})
+
+
+def test_two_adjacent_pads_are_one_gap_with_thirds(env, monkeypatch):
+    prof, ws = env
+    import tests.integration.test_pad_stages as me
+
+    monkeypatch.setattr("fstk.stages.pads.reference_map_ranges", lambda *a, **k: [26, 27, 200])   # → frames 20, 21
+    monkeypatch.setattr(me, "BLACK", {20, 21})
+    monkeypatch.setattr(me, "SPEED", 1)
+    fake = FakeRife()
+    FakeRife.steps = []
+    vs = FakeVS(pads=())
+    vs.events = [(20 / F24, 22 / F24, 2 / F24)]            # one two-frame black event, as blackdetect reports it
+    orig = vs.scan
+    vs.scan = lambda script, **kw: ScriptScan(orig(script).thumbs, vs.events, [])
+    state = run(prof, [AUDIT, REPAIR], "r4", vs, rife=fake)
+    assert state["steps"]["repair"]["status"] == "passed", state["steps"]["repair"].get("issues")
+    m = ws.store.load()
+    assert m.get("pads.repaired") == 2
+    rows = json.loads((prof.root("reports", EP) / m.artifact("pad_repair_report")["name"]).read_text())["rows"]
+    assert [r["frame"] for r in rows] == [20, 21] and all(r["run"] == [20, 21] for r in rows), rows
+    assert [round(x, 3) for x in FakeRife.steps] == [0.333, 0.667], [(r['method'], r['note']) for r in rows]

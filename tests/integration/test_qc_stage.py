@@ -77,6 +77,7 @@ def setup(prof, out, deliverable):
     m.set("video.frames", FRAMES, by="t")
     m.set("video.duration_s", float(ff.probe(deliverable).format["duration"]), by="t")
     m.set("deliverable.tracks", ["ld"], by="op")
+    m.set("mode.chroma_output", "420", by="op")        # this fixture's video is 4:2:0
     m.set("mode.dvd_reference_available", False, by="op", note="fixture has no DVD")
     m.set("qc.ld_audio_md5", ff.packet_md5(deliverable, "0:a:0"), by="t")
     m.set_artifact("padfixed", root="out", name=deliverable.name)
@@ -158,6 +159,7 @@ def _no_dvd_episode(prof, out):
         "    - id: 2\n      stage: frame_map\n      parameters:\n        ranges:\n          type: string\n"
         "          value: 0-299,PAD_1,300-613\n  edges:\n    - from: 1\n      to: 2\n", encoding="utf-8")
     m = Manifest.new(EP, title="In the Hands of the Prophets")
+    m.set("mode.chroma_output", "420", by="op")
     m.set("mode.dvd_reference_available", False, by="op", note="no DVD for this episode")
     m.set("mode.no_dvd_proceed_approved", True, by="op", note="operator chose LD-only")
     for key, value in (("audio.pad_frames", 0), ("stack.frames", 615), ("video.frames", FRAMES),

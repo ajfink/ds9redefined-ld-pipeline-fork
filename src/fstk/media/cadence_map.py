@@ -74,7 +74,7 @@ def parse_ranges(text: str) -> list[tuple[int, int]]:
 def ivtc_vpy_script(source: str, pad: int, trim_start: int, trim_end: int,
                     ranges: list[tuple[int, int]], repair: str,
                     expected_frames: int | None = None, *, probe_json: str | None = None,
-                    probe_head: int = 0, probe_tail: int = 0) -> str:
+                    probe_head: int = 0, probe_tail: int = 0, chroma: str = "422") -> str:
     """The IVTC/PAD-repair encode script (v38 ``build_map_vpy.py``).
 
     With ``probe_json`` the script also tags every source frame with its index (frame property
@@ -198,15 +198,31 @@ def ivtc_vpy_script(source: str, pad: int, trim_start: int, trim_end: int,
     else:
         a("out = core.std.Trim(out, TRIM_START, None)")
     a("")
-    a("# --- 10-bit (AviSynth ConvertBits(10)) ----------------------------------")
-    a("# Keeps the source chroma subsampling; FFmpeg applies -pix_fmt yuv420p10le")
-    a("# exactly as encode_episode.ps1 does on Windows.")
-    a("_f = out.format")
-    a("if _f.sample_type == vs.INTEGER and _f.bits_per_sample < 10:")
-    a("    _tgt = core.query_video_format(_f.color_family, vs.INTEGER, 10,")
-    a("                                   _f.subsampling_w, _f.subsampling_h)")
-    a("    out = core.resize.Bicubic(out, format=_tgt)")
-    a("")
+    if chroma == "422":
+        a("# --- output format: 10-bit, the master's own 4:2:2 chroma ----------------")
+        a("# Owner decision 2026-11-21 (audit 1, item A1): the stack master is yuv422p10le, so the")
+        a("# delivery keeps 4:2:2 and no chroma resampling happens anywhere in the chain. v38")
+        a("# encoded 4:2:0 and left the conversion to FFmpeg's default swscale kernel with no")
+        a("# chroma siting information; that step is simply gone. Only the bit depth is raised,")
+        a("# and only if the source is below 10-bit.")
+        a("_f = out.format")
+        a("if _f.sample_type == vs.INTEGER and _f.bits_per_sample < 10:")
+        a("    _tgt = core.query_video_format(_f.color_family, vs.INTEGER, 10,")
+        a("                                   _f.subsampling_w, _f.subsampling_h)")
+        a("    out = core.resize.Spline36(out, format=_tgt, dither_type='error_diffusion')")
+        a("")
+    else:
+        a("# --- output format: 10-bit 4:2:0, chroma resampled by zimg ---------------")
+        a("# The compatible output (4:2:2 HEVC is outside most hardware decoders). The chroma")
+        a("# resample is done here by zimg with Spline36 and MPEG-2/BT.601 left siting in and out")
+        a("# (the DVD side reports chroma_location=left), not by FFmpeg's default swscale kernel")
+        a("# with no siting information as in v38 (audit 1, item A1).")
+        a("_f = out.format")
+        a("if (_f.color_family, _f.sample_type, _f.bits_per_sample, _f.subsampling_w, _f.subsampling_h) != \\")
+        a("        (vs.YUV, vs.INTEGER, 10, 1, 1):")
+        a("    out = core.resize.Spline36(out, format=vs.YUV420P10, chromaloc_in_s='left',")
+        a("                               chromaloc_s='left', dither_type='error_diffusion')")
+        a("")
     if expected_frames is not None:
         a(f"assert out.num_frames == {int(expected_frames)}, ('output frame count', out.num_frames)")
     if probe_json:

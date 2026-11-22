@@ -11,7 +11,6 @@ Every function here is pure numpy/OpenCV so it is unit-testable without VapourSy
 """
 from __future__ import annotations
 
-import itertools
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -36,10 +35,23 @@ def choose_method(*, cut: bool, dvd: bool) -> str:
     return DVD_CUT if dvd else HOLD
 
 
+def f32(img: np.ndarray) -> np.ndarray:
+    """Any 8- or 16-bit frame as float32 on the 0–255 scale (all PAD maths is done in float)."""
+    if img.dtype == np.uint16:
+        return img.astype(np.float32) * np.float32(255.0 / 65535.0)
+    return img.astype(np.float32)
+
+
+def to_u16(img: np.ndarray) -> np.ndarray:
+    """float 0–255 → uint16 full scale (×257, so 8-bit values keep their exact 16-bit equivalents)."""
+    return np.clip(np.rint(img * np.float32(257.0)), 0, 65535).astype(np.uint16)
+
+
 def desc48(img: np.ndarray) -> np.ndarray:
     """48×36 zero-mean unit-norm descriptor of an RGB/grey frame (area resize)."""
     import cv2
 
+    img = f32(img)
     g = img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
     small = cv2.resize(g, (48, 36), interpolation=cv2.INTER_AREA).astype(np.float32).ravel()
     small -= small.mean()
@@ -56,11 +68,13 @@ class FlankMatch:
     candidate: int
 
 
-def match_flanks(prev_desc: np.ndarray, next_desc: np.ndarray, dvd_descs: np.ndarray) -> FlankMatch | None:
-    """Locate the LD flank frames in a DVD window; require the DVD frames to be exactly two apart.
+def match_flanks(prev_desc: np.ndarray, next_desc: np.ndarray, dvd_descs: np.ndarray,
+                 gap: int = 1) -> FlankMatch | None:
+    """Locate the LD flank frames in a DVD window; require the DVD frames to be ``gap + 1`` apart.
 
     ``dvd_descs`` is (n, 1728) unit-norm. Returns None unless both matches are strong, unique and
-    ``q − p == 2`` (one DVD frame lies between them — the missing frame).
+    ``q − p == gap + 1`` (``gap`` DVD frames lie between them — the missing frames). ``candidate``
+    is the first of them.
     """
     if len(dvd_descs) < 3:
         return None
@@ -71,7 +85,7 @@ def match_flanks(prev_desc: np.ndarray, next_desc: np.ndarray, dvd_descs: np.nda
         rest = np.delete(s, k)
         return len(rest) == 0 or s[k] - float(rest.max()) >= MIN_FLANK_MARGIN
 
-    if sp[p] < MIN_FLANK_NCC or sq[q] < MIN_FLANK_NCC or q - p != 2:
+    if sp[p] < MIN_FLANK_NCC or sq[q] < MIN_FLANK_NCC or q - p != gap + 1:
         return None
     if not (unique(sp, p) and unique(sq, q)):
         return None
@@ -84,8 +98,8 @@ def register_affine(src_rgb: np.ndarray, dst_rgb: np.ndarray) -> np.ndarray:
 
     h, w = dst_rgb.shape[:2]
     sh, sw = src_rgb.shape[:2]
-    g_src = cv2.cvtColor(src_rgb, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
-    g_dst = cv2.cvtColor(dst_rgb, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
+    g_src = cv2.cvtColor(f32(src_rgb), cv2.COLOR_RGB2GRAY) / 255.0
+    g_dst = cv2.cvtColor(f32(dst_rgb), cv2.COLOR_RGB2GRAY) / 255.0
     warp = np.array([[sw / w, 0.0, 0.0], [0.0, sh / h, 0.0]], np.float32)   # dst → src coordinates
     crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 200, 1e-7)
     try:
@@ -100,7 +114,7 @@ def warp_to(src_rgb: np.ndarray, warp: np.ndarray, size: tuple[int, int]) -> np.
     import cv2
 
     w, h = size
-    return cv2.warpAffine(src_rgb, warp, (w, h), flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP,
+    return cv2.warpAffine(f32(src_rgb), warp, (w, h), flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP,
                           borderMode=cv2.BORDER_REPLICATE)
 
 
@@ -108,8 +122,8 @@ def fit_colour(src_rgb: np.ndarray, ref_rgb: np.ndarray) -> tuple[np.ndarray, np
     """Per-channel gain/offset taking ``src`` to ``ref`` using stable, low-gradient, unclipped pixels."""
     import cv2
 
-    s, r = src_rgb.astype(np.float32), ref_rgb.astype(np.float32)
-    gs = cv2.cvtColor(src_rgb, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    s, r = f32(src_rgb), f32(ref_rgb)
+    gs = cv2.cvtColor(s, cv2.COLOR_RGB2GRAY)
     gx = np.abs(cv2.Sobel(gs, cv2.CV_32F, 1, 0)) + np.abs(cv2.Sobel(gs, cv2.CV_32F, 0, 1))
     mask = (gx < np.percentile(gx, 60)) & (gs > 8) & (gs < 247)
     mask[:8, :] = mask[-8:, :] = False
@@ -132,32 +146,39 @@ def fit_colour(src_rgb: np.ndarray, ref_rgb: np.ndarray) -> tuple[np.ndarray, np
 
 
 def apply_colour(rgb: np.ndarray, gains: np.ndarray, offsets: np.ndarray) -> np.ndarray:
-    return np.clip(rgb.astype(np.float32) * gains + offsets, 0, 255).round().astype(np.uint8)
+    """Float result on the 0–255 scale (no rounding: it is quantised once, to 16 bits, at the very end)."""
+    return np.clip(f32(rgb) * gains + offsets, 0, 255)
 
 
 @dataclass
 class Borrowed:
-    image: np.ndarray        # uint8 RGB at the LD raster
+    images: list[np.ndarray]  # uint16 RGB (full-scale 16-bit) at the LD raster, one per missing frame
     gains: list[float]
     offsets: list[float]
     reference: str           # "prev" or "next": the LD flank the colour was matched to
     post_ncc: float
     match: FlankMatch
 
+    @property
+    def image(self) -> np.ndarray:
+        return self.images[0]
 
-def borrow_dvd_frame(ld_prev: np.ndarray, ld_next: np.ndarray, dvd_window: np.ndarray) -> Borrowed | None:
-    """Build the replacement for a PAD on a cut from a DVD window ((n,h,w,3) progressive RGB).
+
+def borrow_dvd_frame(ld_prev: np.ndarray, ld_next: np.ndarray, dvd_window: np.ndarray,
+                     gap: int = 1) -> Borrowed | None:
+    """Build the ``gap`` replacement frames for PAD(s) on a cut from a DVD window ((n,h,w,3) progressive RGB).
 
     Returns None (→ hold the previous frame) when the flanks do not match uniquely two frames
     apart, or the registered/colour-matched DVD flank does not reproduce the LD flank.
     """
-    m = match_flanks(desc48(ld_prev), desc48(ld_next), np.stack([desc48(f) for f in dvd_window]))
+    m = match_flanks(desc48(ld_prev), desc48(ld_next), np.stack([desc48(f) for f in dvd_window]), gap)
     if m is None:
         return None
-    cand = dvd_window[m.candidate]
-    # which shot does the borrowed frame belong to? colour-match to that side's LD frame
-    sim_prev = float(desc48(cand) @ desc48(ld_prev))
-    sim_next = float(desc48(cand) @ desc48(ld_next))
+    cands = [dvd_window[m.candidate + k] for k in range(gap)]
+    # which shot do the borrowed frames belong to? colour-match to that side's LD frame (the first
+    # missing frame decides: the shot before a cut is the one that lost its last frame(s))
+    sim_prev = float(desc48(cands[0]) @ desc48(ld_prev))
+    sim_next = float(desc48(cands[0]) @ desc48(ld_next))
     ref_name, ref_ld, ref_dvd = (("prev", ld_prev, dvd_window[m.p]) if sim_prev >= sim_next
                                  else ("next", ld_next, dvd_window[m.q]))
     h, w = ref_ld.shape[:2]
@@ -170,8 +191,8 @@ def borrow_dvd_frame(ld_prev: np.ndarray, ld_next: np.ndarray, dvd_window: np.nd
     post = float(desc48(apply_colour(warped_ref, gains, offsets)) @ desc48(ref_ld))
     if post < MIN_POST_NCC:
         return None
-    image = apply_colour(warp_to(cand, warp, (w, h)), gains, offsets)
-    return Borrowed(image, [round(float(g), 4) for g in gains], [round(float(o), 3) for o in offsets],
+    images = [to_u16(apply_colour(warp_to(c, warp, (w, h)), gains, offsets)) for c in cands]
+    return Borrowed(images, [round(float(g), 4) for g in gains], [round(float(o), 3) for o in offsets],
                     ref_name, post, m)
 
 
@@ -187,6 +208,20 @@ def replacements_tsv(label: str, rows: list[dict]) -> str:
     for r in sorted(rows, key=lambda r: r["frame"]):
         lines.append("\t".join([label, str(r["frame"]), r["method"], str(r.get("png") or ""), r.get("note", "")]))
     return "\n".join(lines) + "\n"
+
+
+def _runs(frames: list[int]) -> list[list[int]]:
+    from fstk.media.pads import runs_of
+
+    return runs_of(frames)
+
+
+def _hold_from(frame: int, frames: list[int]) -> int:
+    """The last non-PAD frame before ``frame`` (the frame before the start of its run)."""
+    f = frame
+    while f - 1 in set(frames):
+        f -= 1
+    return f - 1
 
 
 def base_sha(base_text: str) -> str:
@@ -214,23 +249,28 @@ def padfix_script(base_text: str, *, repairs: list[dict], payload: str | None, e
     body = stripped[: -len(tail)].rstrip() + "\n"
     reps = sorted(repairs, key=lambda r: r["frame"])
     frames = [r["frame"] for r in reps]
-    if len(set(frames)) != len(frames) or any(f < 1 or f >= expected_frames - 1 for f in frames):
-        raise ArtifactError("PAD repair frames must be unique and interior")
-    if any(b - a < 2 for a, b in itertools.pairwise(frames)):
-        raise ArtifactError("adjacent PAD repairs are not supported (neighbours would be PAD frames)")
+    if len(set(frames)) != len(frames):
+        raise ArtifactError("PAD repair frames must be unique")
+    for run in _runs(frames):
+        if run[0] < 1 or run[-1] >= expected_frames - 1:
+            raise ArtifactError(f"PAD run {run[0]}..{run[-1]} touches the clip boundary; its neighbours are undefined")
     needs_payload = any(r["method"] != HOLD for r in reps)
     if needs_payload and not payload:
         raise ArtifactError("image-backed repairs need a payload clip")
     out = [f"# fstk-padfix-base-sha256: {base_sha(base_text)}", body, "# --- PAD repair (fstk.media.pad_repair; owner rules 2026-11-21) ---",
-           f"PAD_REPAIRS = {[(r['frame'], r['method'], r.get('slot')) for r in reps]!r}"]
+           f"PAD_REPAIRS = {[(r['frame'], r['method'], r.get('slot')) for r in reps]!r}",
+           # a hold copies the last real frame before its run (never a neighbouring PAD)
+           f"PAD_HOLD_FROM = {({r['frame']: _hold_from(r['frame'], frames) for r in reps if r['method'] == HOLD})!r}"]
     if needs_payload:
         out += [f"_payload = core.bs.VideoSource({payload!r})",
-                "_payload = core.resize.Bicubic(_payload, format=out.format.id, matrix_s='170m', range_s='limited')"]
+                "_payload = core.resize.Spline36(_payload, format=out.format.id, matrix_s='170m', range_s='limited',",
+                "                                chromaloc_s='left', dither_type='error_diffusion')"]
     out += ["_pieces, _at = [], 0",
             "for _n, _m, _k in PAD_REPAIRS:",
             "    if _n > _at:",
             "        _pieces.append(out[_at:_n])",
-            "    _pieces.append(out[_n - 1:_n] if _m == 'hold-prev-scene-cut' else _payload[_k:_k + 1])",
+            "    _pieces.append(out[PAD_HOLD_FROM[_n]:PAD_HOLD_FROM[_n] + 1] if _m == 'hold-prev-scene-cut'",
+            "                   else _payload[_k:_k + 1])",
             "    _at = _n + 1",
             "if _at < out.num_frames:",
             "    _pieces.append(out[_at:])",
@@ -245,6 +285,7 @@ def padfix_script(base_text: str, *, repairs: list[dict], payload: str | None, e
 
 
 def write_png(path: Path, rgb: np.ndarray) -> None:
+    """RGB uint8 or uint16 → PNG of the same depth (16-bit PNGs keep the 10-bit chain's precision)."""
     import cv2
 
     path.parent.mkdir(parents=True, exist_ok=True)

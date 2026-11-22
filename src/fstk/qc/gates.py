@@ -118,7 +118,8 @@ def read_frame_list(path: Path) -> list[int]:
 
 
 # --------------------------------------------------------------------------- stream inventory
-def stream_inventory(streams: list[dict], fmt: dict, tracks: list[str], duration_s: float) -> Gate:
+def stream_inventory(streams: list[dict], fmt: dict, tracks: list[str], duration_s: float,
+                     chroma: str | None = None) -> Gate:
     vid = [s for s in streams if s.get("codec_type") == "video"]
     aud = [s for s in streams if s.get("codec_type") == "audio"]
     sub = [s for s in streams if s.get("codec_type") == "subtitle"]
@@ -136,9 +137,12 @@ def stream_inventory(streams: list[dict], fmt: dict, tracks: list[str], duration
         problems.append(f"video streams={len(vid)}")
     else:
         v = vid[0]
-        if v.get("profile") != "Main 10":
+        from fstk.media.encode import chroma_spec
+
+        spec = chroma_spec(chroma)
+        if v.get("profile") != spec["profile"]:
             problems.append(f"profile={v.get('profile')}")
-        if v.get("pix_fmt") != "yuv420p10le":
+        if v.get("pix_fmt") != spec["pix_fmt"]:
             problems.append(f"pix_fmt={v.get('pix_fmt')}")
         if v.get("r_frame_rate") not in ("24000/1001", "23.976"):
             problems.append(f"rate={v.get('r_frame_rate')}")

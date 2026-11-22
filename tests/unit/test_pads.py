@@ -107,7 +107,8 @@ def test_borrowed_frame_is_scaled_and_colour_matched_to_the_ld_neighbour():
     got = pr.borrow_dvd_frame(ld_prev, ld_next, dvd)
     assert got is not None and got.reference == "prev"
     assert got.image.shape == truth.shape
-    err = np.abs(got.image[10:-10, 10:-10].astype(int) - truth[10:-10, 10:-10].astype(int)).mean()
+    assert got.image.dtype == np.uint16
+    err = np.abs(got.image[10:-10, 10:-10].astype(float) / 257 - truth[10:-10, 10:-10].astype(float)).mean()
     assert err < 6.0, err                       # tint corrected (uncorrected error is ≈ 10+)
     raw = cv2.resize(dvd[4], (truth.shape[1], truth.shape[0]))
     raw_err = np.abs(raw[10:-10, 10:-10].astype(int) - truth[10:-10, 10:-10].astype(int)).mean()
@@ -135,17 +136,43 @@ def test_padfix_script_splices_without_changing_the_frame_count():
     compile(text, "padfix", "exec")
 
 
+def test_adjacent_pads_are_one_gap_and_holds_copy_the_last_real_frame():
+    text = pr.padfix_script(BASE, repairs=[{"frame": 7, "method": pr.HOLD}, {"frame": 8, "method": pr.HOLD},
+                                           {"frame": 20, "method": pr.HOLD}], payload=None, expected_frames=100)
+    assert "PAD_HOLD_FROM = {7: 6, 8: 6, 20: 19}" in text
+    assert pm.runs_of([8, 7, 20]) == [[7, 8], [20]]
+    compile(text, "padfix", "exec")
+
+
+def test_a_two_frame_black_event_is_one_run_only_if_map_pads_explain_all_of_it():
+    groups: list[list[int]] = []
+    blips, spans = pm.blips_from_events([(10 / pm.F24, 12 / pm.F24, 2 / pm.F24)], groups=groups)
+    assert blips == [10, 11] and groups == [[10, 11]] and spans == []
+    both = pm.classify_pads({1: 10, 2: 11}, frames=100, blips=blips, groups=groups)
+    assert both.candidates == [10, 11]
+    one = pm.classify_pads({1: 10}, frames=100, blips=blips, groups=groups)
+    assert one.candidates == []                      # real dark content beside a PAD: left alone
+
+
+def test_a_gap_borrow_needs_the_flanks_gap_plus_one_apart():
+    ld_prev, _, ld_next, dvd, a_frames, b_frames = make_case()
+    seq2 = [to for to in dvd]                        # one missing frame in `dvd`
+    d = np.stack([pr.desc48(f) for f in seq2])
+    assert pr.match_flanks(pr.desc48(ld_prev), pr.desc48(ld_next), d, gap=1) is not None
+    assert pr.match_flanks(pr.desc48(ld_prev), pr.desc48(ld_next), d, gap=2) is None
+
+
 def test_hold_only_needs_no_payload_and_bad_inputs_are_refused():
     text = pr.padfix_script(BASE, repairs=[{"frame": 7, "method": pr.HOLD, "slot": None}], payload=None,
                             expected_frames=100)
-    assert "_payload" not in text.split("PAD_REPAIRS")[1].split("_pieces")[0]
+    assert "_payload = " not in text
     with pytest.raises(ArtifactError):
         pr.padfix_script(BASE, repairs=[{"frame": 7, "method": pr.RIFE, "slot": 0}], payload=None, expected_frames=100)
     with pytest.raises(ArtifactError):
-        pr.padfix_script(BASE, repairs=[{"frame": 7, "method": pr.HOLD}, {"frame": 8, "method": pr.HOLD}],
-                         payload=None, expected_frames=100)
-    with pytest.raises(ArtifactError):
         pr.padfix_script(BASE, repairs=[{"frame": 0, "method": pr.HOLD}], payload=None, expected_frames=100)
+    with pytest.raises(ArtifactError):               # a run touching the end has no real neighbour
+        pr.padfix_script(BASE, repairs=[{"frame": 98, "method": pr.HOLD}, {"frame": 99, "method": pr.HOLD}],
+                         payload=None, expected_frames=100)
     with pytest.raises(ArtifactError):
         pr.padfix_script("out = 1\n", repairs=[], payload=None, expected_frames=1)
 

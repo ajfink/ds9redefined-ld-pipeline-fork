@@ -36,13 +36,20 @@ GOOD = [stream("video", profile="Main 10", pix_fmt="yuv420p10le", r_frame_rate="
                disposition={"default": 1}, tags={"language": "eng", "title": "LD 2.0 (original Dolby Surround)"})]
 
 
+def test_stream_inventory_expects_the_chosen_chroma():
+    assert stream_inventory(GOOD, {"duration": "100"}, ["ld"], 100.0, "420").status == "PASS"
+    assert stream_inventory(GOOD, {"duration": "100"}, ["ld"], 100.0, "422").status == "FAIL"   # the 4:2:2 default
+    g422 = [dict(GOOD[0], profile="Rext", pix_fmt="yuv422p10le"), *GOOD[1:]]
+    assert stream_inventory(g422, {"duration": "100"}, ["ld"], 100.0).status == "PASS"          # default is 422
+
+
 def test_stream_inventory():
-    assert stream_inventory(GOOD, {"duration": "100.001", "size": "5"}, ["ld"], 100.0).status == "PASS"
-    g = stream_inventory(GOOD, {"duration": "100.01"}, ["ld"], 100.0)
+    assert stream_inventory(GOOD, {"duration": "100.001", "size": "5"}, ["ld"], 100.0, "420").status == "PASS"
+    g = stream_inventory(GOOD, {"duration": "100.01"}, ["ld"], 100.0, "420")
     assert g.status == "FAIL" and "container duration" in g.detail
     bad = [dict(GOOD[0], width=720), GOOD[1]]
-    assert "raster=720x484" in stream_inventory(bad, {"duration": "100"}, ["ld"], 100.0).detail
-    g = stream_inventory(GOOD, {"duration": "100"}, ["ld", "51"], 100.0)
+    assert "raster=720x484" in stream_inventory(bad, {"duration": "100"}, ["ld"], 100.0, "420").detail
+    g = stream_inventory(GOOD, {"duration": "100"}, ["ld", "51"], 100.0, "420")
     assert g.status == "FAIL" and "audio streams=1 want 2" in g.detail
 
 

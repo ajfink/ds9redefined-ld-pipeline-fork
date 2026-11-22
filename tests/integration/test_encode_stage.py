@@ -52,6 +52,7 @@ def env(tmp_path):
     m.set("video.frames", FRAMES, by="t")
     m.set("video.duration_s", FRAMES * 1001 / 24000, by="t")
     m.set("audio.capture", "P2", by="t")
+    m.set("mode.chroma_output", "420", by="t")      # the y4m fixture is 4:2:0; the 4:2:2 default has its own test
     m.set_artifact("stack_master", root="prores", name=master.name)
     m.set_artifact("encode_script", root="scripts", name=script.name)
     ws = EpisodeWorkspace(prof, EP)
@@ -88,3 +89,18 @@ def test_frame_count_disagreement_stops_before_encoding(env):
     st = state["steps"]["enc"]
     assert st["status"] == "failed" and "video.frames" in st["issues"][0]
     assert not (prof.root("out", EP)).exists() or not any(prof.root("out", EP).iterdir())
+
+
+def test_default_encode_keeps_422_and_the_checks_know_it(env, tmp_path):
+    prof, ws, _ = env
+    y422 = tmp_path / "ivtc422.y4m"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=24000/1001",
+                    "-frames:v", str(FRAMES), "-pix_fmt", "yuv422p10le", "-strict", "-1", str(y422)], check=True)
+    with ws.store.transaction(by="t", reason="default chroma") as m:
+        m.unset("mode.chroma_output", by="t", reason="default is 4:2:2")
+    state = run((prof, ws, y422), "e422")
+    st = state["steps"]["enc"]
+    assert st["status"] == "passed", st.get("issues")
+    out = prof.root("out", EP) / "S01E20-23.976-padfixed-video.mkv"
+    raw = FFmpeg("ffmpeg", "ffprobe").probe(out).only("video").raw
+    assert raw["pix_fmt"] == "yuv422p10le" and raw["profile"] == "Rext"

@@ -30,13 +30,13 @@ class Rife:
         version = name.removeprefix("rife-v").removeprefix("rife-")
         return f"RIFE-{version}-CPU-TTA"
 
-    def command(self, prev: Path, nxt: Path, out: Path) -> list[str]:
-        return [self.engine, "-0", str(prev), "-1", str(nxt), "-o", str(out), "-s", "0.5", "-g", "-1", "-x", "-z",
+    def command(self, prev: Path, nxt: Path, out: Path, step: float = 0.5) -> list[str]:
+        return [self.engine, "-0", str(prev), "-1", str(nxt), "-o", str(out), "-s", f"{step:g}", "-g", "-1", "-x", "-z",
                 "-m", self.model_dir, "-j", "1:4:1"]
 
-    def interpolate(self, prev: Path, nxt: Path, out: Path, *, cancel=None) -> None:
+    def interpolate(self, prev: Path, nxt: Path, out: Path, *, step: float = 0.5, cancel=None) -> None:
         out.parent.mkdir(parents=True, exist_ok=True)
         log = self.log_dir / f"rife-{out.stem}.log" if self.log_dir else None
-        res = process.run(self.command(prev, nxt, out), log_path=log, cancel=cancel)
+        res = process.run(self.command(prev, nxt, out, step), log_path=log, cancel=cancel)
         if res.returncode != 0 or not out.is_file() or out.stat().st_size == 0:
             raise ToolError(f"RIFE failed for {out.name}: {res.describe()}")

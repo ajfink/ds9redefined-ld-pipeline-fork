@@ -74,8 +74,9 @@ class PadAudit(Stage):
         if scan.frames != d["frames"]:
             raise ArtifactError(f"scan decoded {scan.frames} frames but video.frames={d['frames']}")
         projected = dict(zip(pads, pm.project_map_pads(pads, pad_trim=d["pad"], head_trim=d["head"]), strict=True))
-        blips, spans = pm.blips_from_events(scan.events)
-        res = pm.classify_pads(projected, frames=d["frames"], blips=blips, spans=spans)
+        groups: list[list[int]] = []
+        blips, spans = pm.blips_from_events(scan.events, groups=groups)
+        res = pm.classify_pads(projected, frames=d["frames"], blips=blips, spans=spans, groups=groups)
         scores = pm.flank_scores(scan.thumbs)
         info = vs.info(Path(d["script"]))
         w, h = int(info["width"]), int(info["height"])
@@ -93,6 +94,11 @@ class PadAudit(Stage):
                 content.append(f)
                 continue
             score = float(scores[f])
+            run = next(r for r in pm.runs_of(res.candidates) if f in r)
+            if len(run) > 1:   # adjacent PADs: score across the whole gap (the flanks of a member are PADs)
+                a_, b_ = run[0] - 1, run[-1] + 1
+                score = (float(1.0 - np.dot(pm._norm(scan.thumbs[a_]), pm._norm(scan.thumbs[b_])))
+                         if a_ >= 0 and b_ < len(scan.thumbs) else float("nan"))
             r.update(flank_score=None if np.isnan(score) else round(score, 4), cut=pm.is_cut(score),
                      ambiguous=bool(not np.isnan(score) and pm.AMBIGUOUS_BAND[0] <= score <= pm.AMBIGUOUS_BAND[1]))
             repairable.append(f)
@@ -178,11 +184,17 @@ class PadRepair(Stage):
                         summary=f"{len(cand)} PAD(s): " + ", ".join(f"{k}×{sum(v == k for v in methods.values())}"
                                                                       for k in (pr.RIFE, pr.DVD_CUT, pr.HOLD)),
                         data={**{k: str(v) for k, v in files.items()}, "base": str(script), "dvd": dvd,
+                              "cuts": {str(f): bool(rows[f].get("cut", True)) for f in cand},
                               "methods": {str(k): v for k, v in methods.items()}, "candidates": cand,
                               "frames": int(m.require("video.frames")), "head": int(m.require("video.head_trim")),
                               "pad": int(m.require("audio.pad_frames")), "label": ctx.episode.code})
 
-    def _borrow(self, ctx, d, f, ld_prev, ld_next):
+    @staticmethod
+    def _cut(d, run) -> bool:
+        """Audit verdict for a single PAD; a run is re-scored at repair time from its real neighbours."""
+        return all(d["cuts"].get(str(f), True) for f in run)
+
+    def _borrow(self, ctx, d, f, ld_prev, ld_next, gap=1):
         """DVD window around the aligned position of output frame ``f`` → Borrowed | None (+reason)."""
         m = ctx.manifest
         rec = m.require("video.dvd_alignment")
@@ -198,13 +210,29 @@ class PadRepair(Stage):
         vs = ctx.tool("vapoursynth")
         info = vs.info(win)
         frames = vs.frames(win, 0, info["frames"] - 1, width=int(info["width"]), height=int(info["height"]))
-        got = pr.borrow_dvd_frame(ld_prev, ld_next, frames)
-        return got, ("" if got else "flank frames not found two apart in the aligned DVD window, or the registered "
-                                    "DVD frame does not reproduce the LD neighbour")
+        got = pr.borrow_dvd_frame(ld_prev, ld_next, frames, gap)
+        return got, ("" if got else f"flank frames not found {gap + 1} apart in the aligned DVD window, or the "
+                                    "registered DVD frames do not reproduce the LD neighbour")
 
-    def run(self, ctx, plan):
+    def _rife_run(self, ctx, rife, work, run, ld_prev, ld_next, w, h):
+        """RIFE at t = k/(L+1) between the real neighbours of a run of L PADs → L uint16 images."""
         import cv2
 
+        a, b = work / f"prev-{run[0]}.png", work / f"next-{run[0]}.png"
+        pr.write_png(a, np.rint(pr.f32(ld_prev)).astype(np.uint8))   # the engine takes 8-bit
+        pr.write_png(b, np.rint(pr.f32(ld_next)).astype(np.uint8))
+        out = []
+        for k, f in enumerate(run, start=1):
+            o = work / f"rife-{f}.png"
+            rife.interpolate(a, b, o, step=k / (len(run) + 1), cancel=ctx.cancel)
+            bgr = cv2.imread(str(o), cv2.IMREAD_COLOR)
+            if bgr is None or bgr.shape[:2] != (h, w):
+                raise ArtifactError(f"RIFE output for PAD {f} is missing or the wrong size")
+            # rife-ncnn-vulkan reads and writes 8-bit PNG (stb_image): that is the engine's precision
+            out.append(pr.to_u16(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB).astype(np.float32)))
+        return out
+
+    def run(self, ctx, plan):
         d = plan.data
         vs, ffm = ctx.tool("vapoursynth"), ctx.tool("ffmpeg")
         base = Path(d["base"])
@@ -212,48 +240,51 @@ class PadRepair(Stage):
         w, h = int(info["width"]), int(info["height"])
         work = Path(d["work"])
         work.mkdir(parents=True, exist_ok=True)
-        rife = ctx.tool("rife") if pr.RIFE in d["methods"].values() else None
+        dvd = d["dvd"]
+        runs = pm.runs_of(d["candidates"])
+        rife = ctx.tool("rife") if any(not r_cut for r_cut in (self._cut(d, r) for r in runs)) else None
         rows, repairs, images = [], [], []
-        for n, f in enumerate(d["candidates"]):
+        for n, run in enumerate(runs):
             ctx.check_cancel()
-            ctx.report(0.05 + 0.8 * n / max(len(d["candidates"]), 1), f"repairing PAD {f} ({d['methods'][str(f)]})")
-            method, note = d["methods"][str(f)], ""
-            tri = vs.frames(base, f - 1, f + 1, width=w, height=h)
-            ld_prev, ld_next = tri[0], tri[2]
-            image, extra = None, {}
+            ctx.report(0.05 + 0.8 * n / max(len(runs), 1), f"repairing PAD(s) {run[0]}..{run[-1]}")
+            L = len(run)
+            tri = vs.frames(base, run[0] - 1, run[-1] + 1, width=w, height=h)
+            ld_prev, ld_next = tri[0], tri[-1]
+            cut = self._cut(d, run)
+            if L > 1:   # neighbours of a run are the first real frames either side: re-score across the whole gap
+                cut = pm.is_cut(1.0 - float(pr.desc48(ld_prev) @ pr.desc48(ld_next)))
+            tag = f"run of {L} adjacent PADs; " if L > 1 else ""
+            method, imgs, extra, note = pr.choose_method(cut=cut, dvd=dvd), None, {}, ""
             if method == pr.DVD_CUT:
-                got, why = self._borrow(ctx, d, f, ld_prev, ld_next)
+                got, why = self._borrow(ctx, d, run[0], ld_prev, ld_next, gap=L)
                 if got is None:
                     method, note = pr.HOLD, f"hold-prev-scene-cut: {why}"
                 else:
-                    image = got.image
+                    imgs = got.images
                     extra = {"gains": got.gains, "offsets": got.offsets, "colour_reference": got.reference,
                              "post_ncc": round(got.post_ncc, 4), "dvd_flanks": [got.match.p, got.match.q]}
-                    note = (f"borrowed from DVD, colour-matched to the {got.reference} LD frame "
+                    note = (f"{tag}borrowed from DVD, colour-matched to the {got.reference} LD frame "
                             f"(post-NCC {got.post_ncc:.3f})")
-            elif method == pr.RIFE:
-                a, b, o = work / f"prev-{f}.png", work / f"next-{f}.png", work / f"rife-{f}.png"
-                pr.write_png(a, ld_prev)
-                pr.write_png(b, ld_next)
-                rife.interpolate(a, b, o, cancel=ctx.cancel)
-                bgr = cv2.imread(str(o), cv2.IMREAD_COLOR)
-                if bgr is None or bgr.shape[:2] != (h, w):
-                    raise ArtifactError(f"RIFE output for PAD {f} is missing or the wrong size")
-                image, note = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), f"{rife.method} midpoint of the neighbours"
+            if method == pr.RIFE:
+                imgs = self._rife_run(ctx, rife, work, run, ld_prev, ld_next, w, h)
+                note = f"{tag}{rife.method} interpolation between the real neighbours"
             elif method == pr.HOLD and not note:
-                note = "hold-prev-scene-cut: no DVD reference; the previous frame is held one more frame"
-            slot = None
-            if image is not None:
-                slot = len(images)
-                images.append(image)
-                png = work / f"pad-{f:06d}.png"
-                pr.write_png(png, image)
-            else:
-                png = work / f"pad-{f:06d}-held.png"
-                pr.write_png(png, ld_prev)
+                note = (f"{tag}hold-prev-scene-cut: no DVD reference; the previous frame is held "
+                        f"{'for each missing frame' if L > 1 else 'one more frame'}")
             label = {pr.RIFE: rife.method if rife else "", pr.DVD_CUT: "dvd-cut-frame", pr.HOLD: pr.HOLD}[method]
-            rows.append({"frame": f, "method": label, "png": str(png), "note": note, "slot": slot, **extra})
-            repairs.append({"frame": f, "method": method, "slot": slot})
+            for k, f in enumerate(run):
+                slot = None
+                if imgs is not None:
+                    slot = len(images)
+                    images.append(imgs[k])
+                    png = work / f"pad-{f:06d}.png"
+                    pr.write_png(png, imgs[k])
+                else:
+                    png = work / f"pad-{f:06d}-held.png"
+                    pr.write_png(png, ld_prev)   # the held frame, at the precision it was read
+                rows.append({"frame": f, "method": label, "png": str(png), "note": note, "slot": slot,
+                             "run": [run[0], run[-1]], **extra})
+                repairs.append({"frame": f, "method": method, "slot": slot})
         payload = None
         if images:
             ctx.report(0.88, "building the lossless payload clip")
@@ -262,7 +293,7 @@ class PadRepair(Stage):
             for k, img in enumerate(images):
                 pr.write_png(seq / f"{k:05d}.png", img)
             res = process.run([ffm.ffmpeg, "-y", "-hide_banner", "-nostdin", "-v", "error", "-framerate", "24000/1001",
-                               "-i", str(seq / "%05d.png"), "-c:v", "ffv1", "-pix_fmt", "rgb24", d["payload"]],
+                               "-i", str(seq / "%05d.png"), "-c:v", "ffv1", "-pix_fmt", "rgb48le", d["payload"]],
                               cancel=ctx.cancel)
             if res.returncode != 0 or not Path(d["payload"]).is_file():
                 raise ArtifactError(f"payload clip failed: {res.describe()}")

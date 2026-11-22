@@ -117,6 +117,9 @@ FIELDS: tuple[FieldDef, ...] = (
     _F("mode.cut_pad_images_choice", "choice", "str",
        "Use of curated cut-PAD stills in no-DVD mode", v38="cut_pad_images_choice",
        choices=("use", "skip", "not-applicable", "not-available")),   # S02E02 (v38) uses not-available
+    _F("mode.chroma_output", "setting", "str",
+       "Chroma of the delivered video: 422 keeps the master's chroma (default, quality first), "
+       "420 is the v38/compatible output", choices=("422", "420")),
     _F("mode.format", "setting", "str", "Episode format", v38="format", choices=("one_part", "two_part")),
     _F("mode.record_status", "setting", "str", "Manifest lifecycle status", v38="record_status"),
     _F("mode.pad_report_label", "setting", "str", "Key used in shared PAD reports", v38="pad_report_label"),

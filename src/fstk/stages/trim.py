@@ -24,6 +24,7 @@ from fstk.core.fsio import atomic_write_bytes, atomic_write_json, read_json
 from fstk.core.timeutil import utc_now_iso, utc_stamp
 from fstk.media import alignment as al
 from fstk.media.cadence_map import ivtc_vpy_script, parse_ranges
+from fstk.media.encode import DEFAULT_CHROMA
 from fstk.media.trim import decide, no_dvd_programme_start, tail_ld_only_start
 
 from .base import ArtifactExists, Custom, Stage, StepOutput, StepPlan, ValueSet, register
@@ -81,6 +82,7 @@ class VideoTrim(Stage):
                         summary=f"probe the IVTC frame map, trim, write the encode script (repair {repair})",
                         data={**{k: str(v) for k, v in files.items()}, "repair": repair, "ranges": ranges, "dvd": dvd,
                               "master": str(inputs[0]), "pad": int(m.require("audio.pad_frames")),
+                              "chroma": m.get("mode.chroma_output") or DEFAULT_CHROMA,
                               "stack_frames": int(m.require("stack.frames"))})
 
     def _origin(self, ctx, d, m) -> tuple[int, np.ndarray, int | None, list[str]]:
@@ -111,7 +113,7 @@ class VideoTrim(Stage):
         expected_head = max(0, (origin - d["pad"]) * 4 // 5)
         script = ivtc_vpy_script(d["master"], d["pad"], 0, 0, [tuple(r) for r in d["ranges"]], d["repair"],
                                  probe_json=d["probe_json"], probe_head=expected_head + HEAD_PROBE_MARGIN,
-                                 probe_tail=TAIL_PROBE)
+                                 probe_tail=TAIL_PROBE, chroma=d["chroma"])
         Path(d["probe_script"]).parent.mkdir(parents=True, exist_ok=True)
         atomic_write_bytes(d["probe_script"], script.encode())
         ctx.report(0.05, "probing the IVTC frame map (head and tail)")
@@ -127,7 +129,7 @@ class VideoTrim(Stage):
             raise GateError(f"trim decision: {exc}") from None
         dec.notes = route_notes + dec.notes
         final = ivtc_vpy_script(d["master"], d["pad"], dec.head_trim, dec.tail_trim, [tuple(r) for r in d["ranges"]],
-                                d["repair"], expected_frames=dec.frames)
+                                d["repair"], expected_frames=dec.frames, chroma=d["chroma"])
         atomic_write_bytes(d["script"], final.encode())
         ctx.report(0.6, "confirming the trimmed script")
         info2 = vs.info(Path(d["script"]))

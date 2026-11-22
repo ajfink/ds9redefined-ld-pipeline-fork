@@ -137,14 +137,16 @@ class VapourSynth:
             raise ToolError(f"scan of {script} failed or was truncated: {res.describe()}")
         return ScriptScan(np.frombuffer(data, np.uint8).reshape(-1, size).copy(), events, errors)
 
-    def frames(self, script: Path, first: int, last: int, *, width: int, height: int, pix_fmt: str = "rgb24",
+    def frames(self, script: Path, first: int, last: int, *, width: int, height: int, pix_fmt: str = "rgb48le",
                name: str = "frames", cancel=None):
         """Frames ``first``..``last`` of ``script``, area-scaled to ``width``×``height`` (the native
         size for a lossless read), as a numpy array.
 
-        ``rgb24`` → (n, height, width, 3) through an explicit BT.601 limited → full conversion (the
-        matrix the stack master uses and ``build_payload_clip`` converts back with); ``gray`` →
-        (n, height, width). ``vspipe`` is asked for the exact range, so indices are the script's own.
+        ``rgb48le`` → (n, height, width, 3) ``uint16`` and ``rgb24`` → the same shape in ``uint8``,
+        both through an explicit BT.601 limited → full conversion (the matrix the stack master uses
+        and the payload clip converts back with); ``gray`` → (n, height, width) ``uint8``. The 16-bit
+        form is the default because the chain is 10-bit and PAD replacements are written back into it
+        (audit 1, item A2). ``vspipe`` is asked for the exact range, so indices are the script's own.
         """
         import numpy as np
 
@@ -152,9 +154,9 @@ class VapourSynth:
         n = last - first + 1
         if n < 1:
             raise ToolError("empty frame range")
-        if pix_fmt == "rgb24":
+        if pix_fmt in ("rgb24", "rgb48le"):
             vf = (f"scale={width}:{height}:in_range=tv:in_color_matrix=bt601:out_range=pc:"
-                  "flags=area+accurate_rnd+full_chroma_int,format=rgb24")
+                  f"flags=area+accurate_rnd+full_chroma_int,format={pix_fmt}")
         elif pix_fmt == "gray":
             vf = f"scale={width}:{height}:flags=area,format=gray"
         else:
@@ -164,12 +166,13 @@ class VapourSynth:
         res = process.run_pipeline([self.serve(script, first, last), ff], env=self.env(), log_path=self._log(name),
                                    capture_stdout=True, cancel=cancel)
         data = res.stdout or b""
-        channels = 3 if pix_fmt == "rgb24" else 1
-        per = width * height * channels
+        channels = 1 if pix_fmt == "gray" else 3
+        dtype = np.uint16 if pix_fmt == "rgb48le" else np.uint8
+        per = width * height * channels * np.dtype(dtype).itemsize
         if res.returncode != 0 or len(data) != per * n:
             raise ToolError(f"could not read frames {first}..{last} of {script} (got {len(data)} bytes for "
                             f"{n} frames of {per}): {res.describe()}")
-        arr = np.frombuffer(data, np.uint8)
+        arr = np.frombuffer(data, dtype)
         return arr.reshape(n, height, width, 3) if channels == 3 else arr.reshape(n, height, width)
 
 
