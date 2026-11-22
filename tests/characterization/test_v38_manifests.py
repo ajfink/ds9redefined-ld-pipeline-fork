@@ -57,3 +57,32 @@ def test_imported_manifest_can_be_stored(tmp_path):
     store = ManifestStore(tmp_path)
     store.create(import_v38(json.loads(raw)), by="import", reason="v38 import")
     assert store.load().get("stack.frames") == 83335 and store.verify() == []
+
+
+def test_imported_episode_resolves_v38_files_and_still_exports_identically(fixtures):
+    """--v38-profile: artifacts become absolute paths on the v38 machine; the v38 view is unchanged."""
+    import json
+
+    from fstk.manifest.v38 import export_v38, import_v38, resolve_v38_artifacts, v38_equivalent
+
+    doc = json.loads((fixtures / "v38" / "manifests" / "S01E20.json").read_text(encoding="utf-8-sig"))
+    m = import_v38(doc)
+    roots = {"probe": "Z:\\ld-pipeline-device\\probe", "prores": "Z:\\ld-pipeline-device\\prores",
+             "audio": "Z:\\ld-pipeline-device\\audio", "dvd_root": "Z:\\Video\\DS9S1D5"}
+    out = resolve_v38_artifacts(m, roots)
+    spec = m.artifact("stack_master")
+    assert spec == {"path": "Z:\\ld-pipeline-device\\prores\\S01E20-stack-master.mov"}
+    assert "stack_master" in out["resolved"]
+    if m.artifact("ld_native"):
+        assert m.artifact("ld_native")["path"].startswith("Z:\\ld-pipeline-device\\audio\\S01E20\\")
+    assert v38_equivalent(doc, export_v38(m))
+
+
+def test_real_v38_values_outside_the_old_registry_limits_import():
+    """S01E18 recorded a negative retime gap-vs-black; S02E02 a cut-PAD choice of not-available."""
+    from fstk.core.identity import EpisodeId
+    from fstk.manifest.model import Manifest
+
+    m = Manifest.new(EpisodeId.parse("DS9:S01E18"), title="t")
+    m.set("retime.max_gap_vs_black_s", -0.719255, by="t")
+    m.set("mode.cut_pad_images_choice", "not-available", by="op", note="v38")

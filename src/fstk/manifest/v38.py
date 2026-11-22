@@ -171,7 +171,8 @@ def export_v38(manifest: Manifest) -> dict[str, Any]:
         for part in parts[:-1]:
             node = node.setdefault(part, {})
         node[parts[-1]] = value
-    doc["files"] = {k: copy.deepcopy(v) for k, v in manifest.doc["artifacts"].items()}
+    original = (manifest.doc.get("legacy") or {}).get("v38_files_original") or {}
+    doc["files"] = {k: copy.deepcopy(original.get(k, v)) for k, v in manifest.doc["artifacts"].items()}
     legacy = (manifest.doc.get("legacy") or {}).get("v38") or {}
     for dotted, value in legacy.items():
         if dotted.startswith("__section__."):
@@ -211,3 +212,37 @@ def v38_equivalent(a: dict[str, Any], b: dict[str, Any]) -> bool:
 
 
 __all__ = ["BY_V38", "export_v38", "import_v38", "v38_equivalent"]
+
+
+def v38_machine_roots(profile_doc: dict[str, Any]) -> dict[str, str]:
+    """Root name → folder from a v38 machine profile (``machine.json``: ``roots`` plus ``dvd_root``)."""
+    roots = dict(profile_doc.get("roots") or {})
+    return {k: str(v) for k, v in roots.items() if isinstance(v, str) and v and k != "downloads_template"}
+
+
+def resolve_v38_artifacts(manifest: Manifest, roots: dict[str, str]) -> dict[str, list[str]]:
+    """Make an imported episode continuable on the machine that ran v38.
+
+    v38's media folders are flat (``probe/<file>``) or per episode (``audio/S01E20/<file>``) and
+    can't be expressed as fstk root overrides, so every ``{root, name}`` artifact whose root the v38
+    profile names becomes an absolute ``{path}``. The original references are kept under
+    ``legacy.v38_files_original`` and ``export_v38`` writes them back, so the v38 view of the
+    manifest is unchanged. Returns ``{"resolved": [...], "unresolved": [...]}``.
+    """
+    original: dict[str, Any] = {}
+    out = {"resolved": [], "unresolved": []}
+    for key, spec in list(manifest.doc["artifacts"].items()):
+        if not (isinstance(spec, dict) and "root" in spec and "name" in spec):
+            continue
+        base = roots.get(spec["root"]) or roots.get(f"{spec['root']}_root")
+        if not base:
+            out["unresolved"].append(key)
+            continue
+        original[key] = copy.deepcopy(spec)
+        sep = "\\" if ("\\" in base or ":" in base[:3]) else "/"
+        name = spec["name"].replace("/", sep) if sep == "\\" else spec["name"]
+        manifest.doc["artifacts"][key] = {"path": base.rstrip("\\/") + sep + name}
+        out["resolved"].append(key)
+    if original:
+        manifest.doc.setdefault("legacy", {})["v38_files_original"] = original
+    return out

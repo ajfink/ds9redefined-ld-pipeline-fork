@@ -40,7 +40,7 @@ Owner's order: alignment → DVD audio rate/origin → retime → PAD; only huma
 | P10 | `cadence-evidence` accepted automatically inside the v38 ranges (12 episodes), review only outside | **done** (CP9) |
 | P6b | No-DVD head/tail trims (no reference for where the programme starts) | todo |
 | P13 | `delivery_plan` + "Run to delivery" button + `fstk plan delivery` (stack render → … → QC for either route) | **done** (CP9) |
-| P11 | Import S01E12/17/18/20 from v38 once P5–P6 exist | **next** |
+| P11 | Import the v38 episodes: all 13 real device manifests import + round-trip; `--v38-profile` resolves their files to absolute paths so they continue in fstk | **done** (CP10); first real continuation run on Windows still owed |
 | P12 | Per-capture EFM decode, Orc version in provenance; catalog 30-day refresh; H.264 review proxy fallback | todo |
 
 Validation data on the owner's Legion: `Z:\ld-pipeline-device\{probe,prores,audio}` (S01E20 descriptors,
@@ -201,6 +201,21 @@ validated by the owner running the app.
   episode's route, with disk estimates from real sizes (master 287 KB/frame, delivery
   ≈ 72 KB/frame, both with margin). It is available as `fstk plan delivery <ep>` and the app's
   **Run to delivery** button. The no-DVD route still needs trims recorded (P6b).
+- **S3-CP10 — v38 episodes import and can continue (P11).** All 13 real device manifests
+  (S01E08–S02E02 on Legion, Flex, Mac) import and round-trip. Fixed: two registry limits real data
+  breaks (S01E18 `retime.max_gap_vs_black_s` −0.72; S02E02 `cut_pad_images_choice`
+  "not-available") and a BOM in the CLI import.
+
+  `fstk manifest import … --v38-profile <that device's machine.json>` resolves every
+  `{root, name}` file to an absolute path on that machine. v38's flat `probe/` and per-episode
+  `audio/S01E20/` can't be expressed as fstk root overrides. The original references are kept
+  (`legacy.v38_files_original`) and exported back, so the v38 view still round-trips. README
+  documents continuing an episode; S01E20 resolves to the real files on `Z:`.
+
+  Caveats for the first continuation run:
+  - descriptors in v38's metadata format are not reused (fstk re-decodes them);
+  - fstk's `efm-select` needs fstk-format EFM provenance, so it may re-decode;
+  - S01E20 will switch to M1 by the automatic rule.
 
 ---
 

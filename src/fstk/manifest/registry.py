@@ -116,7 +116,7 @@ FIELDS: tuple[FieldDef, ...] = (
        "Operator explicitly approved the LD-only (no-DVD) route", v38="no_dvd_proceed_approved"),
     _F("mode.cut_pad_images_choice", "choice", "str",
        "Use of curated cut-PAD stills in no-DVD mode", v38="cut_pad_images_choice",
-       choices=("use", "skip", "not-applicable")),
+       choices=("use", "skip", "not-applicable", "not-available")),   # S02E02 (v38) uses not-available
     _F("mode.format", "setting", "str", "Episode format", v38="format", choices=("one_part", "two_part")),
     _F("mode.record_status", "setting", "str", "Manifest lifecycle status", v38="record_status"),
     _F("mode.pad_report_label", "setting", "str", "Key used in shared PAD reports", v38="pad_report_label"),
@@ -207,8 +207,8 @@ FIELDS: tuple[FieldDef, ...] = (
     _F("retime.end_black_ld", "measurement", "list", "Final fade-to-black [start, end] in master time", "s",
        "retime.end_black_ld"),
     _F("retime.srt_cues", "measurement", "int", "SRT cue count", "count", "retime.srt_cues", 0),
-    _F("retime.max_gap_vs_black_s", "measurement", "number", "Largest retime gap vs black", "s",
-       "retime.max_gap_vs_black_s", 0),
+    _F("retime.max_gap_vs_black_s", "measurement", "number", "Largest retime gap vs black (negative: gap inside black)",
+       "s", "retime.max_gap_vs_black_s"),   # S01E18 (v38): −0.719
     _F("retime.head_sil_end", "measurement", "number", "End of head silence", "s", "retime.head_sil_end"),
     _F("retime.tail_sil_start", "measurement", "number", "Start of tail silence", "s", "retime.tail_sil_start"),
     # ---------------------------------------------------------------- QC

@@ -18,7 +18,7 @@ Status: early development (see `docs/DEVLOG.md`). The v38 tree remains the produ
 
 ## Install (development)
 ```
-python -m pip install -e ".[dev,gui]"
+python -m pip install -e ".[dev,gui]"      # includes soxr (exact-ratio audio resampling)
 ruff check src tests tools
 pytest -q
 ```
@@ -32,6 +32,24 @@ fstk --profile <new-profile.json> doctor
 fstk-gui --profile <new-profile.json>
 ```
 Imports never modify the v38 files. v38 approvals arrive as *historical* and must be re-confirmed.
+
+### Continue an in-flight v38 episode in fstk
+```
+fstk --profile <p> manifest import "<…\devices\<DEVICE>\episodes\S01E20\manifest\S01E20.json" ^
+     --v38-profile "<…\devices\<DEVICE>\local device config\machine.json"
+fstk --profile <p> plan delivery DS9:S01E20        # or the app's "Run to delivery" button
+fstk --profile <p> run <the plan it printed>
+```
+`--v38-profile` points every file the v38 manifest knows (stack master, EFM WAVs, DVD,
+descriptors) at its real location on that machine, so fstk continues from them instead of
+starting over. The delivery plan runs:
+
+stack render → DVD probe/alignment → cadence → trims/DELTA → DVD-referenced LD audio →
+5.1/subtitle retime → encode → remux → QC
+
+It stops for one human review, the A/V check (several 15 s chunks, or rerun with "audio too
+early/late"). Steps whose evidence is already current are reused. New runtime dependency:
+`pip install soxr`.
 
 ## Several machines (Legion, Flex, Mac)
 Each machine keeps its own profile, state and media. To see each other's episodes and pass an

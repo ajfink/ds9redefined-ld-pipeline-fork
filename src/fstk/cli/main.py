@@ -95,15 +95,23 @@ def cmd_manifest_import(args) -> int:
     from fstk.manifest.v38 import export_v38, import_v38, v38_equivalent
 
     raw = Path(args.v38_manifest).read_bytes()
-    doc = json.loads(raw)
+    doc = json.loads(raw.decode("utf-8-sig"))           # v38 manifests may carry a BOM
     manifest = import_v38(doc, source_sha256=sha256_bytes(raw))
     if not v38_equivalent(doc, export_v38(manifest)):
         raise FstkError("round-trip check failed; refusing to import (report this manifest)")
+    resolved = None
+    if getattr(args, "v38_profile", None):
+        from fstk.manifest.v38 import resolve_v38_artifacts, v38_machine_roots
+
+        roots = v38_machine_roots(json.loads(Path(args.v38_profile).read_bytes().decode("utf-8-sig")))
+        resolved = resolve_v38_artifacts(manifest, roots)
+        if not v38_equivalent(doc, export_v38(manifest)):
+            raise FstkError("round-trip check failed after resolving artifact paths; refusing to import")
     ws = _workspace(args, str(manifest.episode))
     ws.store.create(manifest, by=_actor(args), reason=f"import from v38 {Path(args.v38_manifest).name}",
                     origin="v38")
     _print(args, {"episode": str(manifest.episode), "manifest": str(ws.store.path),
-                  "values": len(manifest.set_keys())},
+                  "values": len(manifest.set_keys()), "artifacts": resolved},
            f"imported {manifest.episode} → {ws.store.path} ({len(manifest.set_keys())} values; "
            "v38 records are historical until re-confirmed)")
     return 0
@@ -432,6 +440,8 @@ def build_parser() -> argparse.ArgumentParser:
     man = sub.add_parser("manifest").add_subparsers(dest="sub", required=True)
     mi = man.add_parser("import", help="import a v38 episode manifest (never modifies the source)")
     mi.add_argument("v38_manifest")
+    mi.add_argument("--v38-profile", help="that machine's v38 machine.json: resolve artifact files to absolute "
+                                          "paths so the episode can continue in fstk")
     mi.set_defaults(func=cmd_manifest_import)
     for name, func in (("show", cmd_manifest_show), ("verify", cmd_manifest_verify),
                        ("history", cmd_manifest_history)):
