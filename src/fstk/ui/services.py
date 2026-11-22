@@ -278,7 +278,8 @@ class Services:
 
     def write_av_rerun_plan(self, episode: str | EpisodeId, *, verdicts: list[dict[str, Any]],
                             qc_report: str | Path, track: str = "ld") -> Path:
-        """Plan for an A/V-check rerun: av-correction → rebuild the LD audio → remux → QC.
+        """Plan for an A/V-check rerun: av-correction → rebuild the LD audio (``dvd-ld-audio`` for DVD
+        episodes, ``dvd-free-audio`` otherwise) → remux → QC.
 
         ``verdicts``: ``[{"t_s": chunk centre, "verdict": "ok"|"early"|"late"}]`` from the delivery
         review. The rebuilt deliverable is a new version; nothing is overwritten.
@@ -291,14 +292,15 @@ class Services:
         if not any(v.get("verdict") in ("early", "late") for v in verdicts):
             raise FstkError("mark at least one chunk 'audio too early' or 'audio too late' to rerun")
         m = ws.store.load()
-        if m.get("mode.dvd_reference_available") is not False:
-            raise FstkError("A/V reruns for DVD episodes need the DVD-referenced LD audio stage, which is not "
-                            "ported yet; only no-DVD episodes can be re-corrected today")
+        dvd = m.get("mode.dvd_reference_available")
+        if dvd is None:
+            raise FstkError("record whether a DVD reference exists (mode.dvd_reference_available) first")
+        audio_stage = "dvd-ld-audio" if dvd else "dvd-free-audio"
         job = f"av-rerun-{utc_stamp()[:15].lower()}"
         steps = [{"id": "av-correction", "stage": "av-correction", "after": [],
                   "params": {"track": track, "verdicts": verdicts, "qc_report": Path(qc_report).name}},
-                 {"id": "dvd-free-audio", "stage": "dvd-free-audio", "params": {}, "after": ["av-correction"]},
-                 {"id": "remux", "stage": "remux", "params": {}, "after": ["dvd-free-audio"]},
+                 {"id": audio_stage, "stage": audio_stage, "params": {}, "after": ["av-correction"]},
+                 {"id": "remux", "stage": "remux", "params": {}, "after": [audio_stage]},
                  {"id": "qc-report", "stage": "qc-report", "params": {}, "after": ["remux"]}]
         plan = {"schema": PLAN_SCHEMA, "episode": ws.episode.canonical, "job": job, "steps": steps}
         validate_plan(plan)

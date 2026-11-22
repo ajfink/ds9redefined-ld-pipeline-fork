@@ -32,10 +32,10 @@ Owner's order: alignment → DVD audio rate/origin → retime → PAD; only huma
 | P2 | A/V check as the only review + self-correcting reruns (`av-correction`) | **done** (CP5); DVD episodes need P5 |
 | P3 | Exact-ratio resampling: python-soxr VHQ, 24-bit FLAC, one pass (`media/resample.py`, `stages/ldaudio_build.py`) | **done** (CP6) |
 | P4 | `dvd-free-audio` on the exact resampler (retire the 0.5 Hz `asetrate` quantisation); QC accepts 24-bit | **done** (CP6) |
-| P5 | **next** — `dvd-ld-audio`: DVD-referenced LD rate + origin (windows of LD vs DVD stereo, mapped to master through the act curves, centre-referenced robust fit, cross-checks vs duration model + picture slope), builds corrected/synced, applies A/V corrections | todo |
+| P5 | `dvd-ld-audio`: DVD-referenced LD rate + origin (windows of LD vs DVD stereo, mapped to master through the act curves, centre-referenced robust fit, cross-checks vs duration model + picture slope), builds corrected/synced, applies A/V corrections | **done** (CP7), validated on S01E20 M1+P2 |
 | P6 | `video-trim`: DVD-referenced head/tail trims + `video.delta_s` + IVTC encode script + `video.frames` (needs VapourSynth → only runnable on Windows; unit-tested with fakes) | todo |
-| P7 | Rerun plan for DVD episodes (A/V check → av-correction → dvd-ld-audio → remux → QC) | todo, after P5 |
-| P8 | Retime DVD 5.1 + SRT through the act curves (small breaks measured on audio); 5.1 correctable in the A/V check | todo |
+| P7 | Rerun plan for DVD episodes (A/V check → av-correction → dvd-ld-audio → remux → QC) | **done** (CP7) |
+| P8 | Retime DVD 5.1 + SRT onto the LD timeline. **Use audio-to-audio matching (LD EFM ↔ DVD stereo), not the picture curves**: CP7 showed the picture curves carry ±1-frame local error while the audio relation is ms-precise. 5.1 correctable in the A/V check | todo |
 | P9 | PAD audit/repair port | todo |
 | P10 | `cadence-evidence` still has a human `cadence-review`: make it automatic (review only on failed checks), per the owner's one-review rule | todo |
 | P11 | Import S01E12/17/18/20 from v38 once P5–P6 exist | todo |
@@ -114,6 +114,34 @@ validated by the owner running the app.
   `audio.asetrate` holds the exact applied rate. QC accepts 16- or 24-bit LD FLAC and checks the
   applied rate = duration rate ÷ (1 + drift correction). New runtime dependency: `soxr`
   (pyproject; `fstk doctor` requires it). **Owner: `pip install soxr` on each machine.** 303 tests.
+- **S3-CP7 — DVD-referenced LD audio (P5, P7).** `media/dvd_audio.py` matches 20 s windows of
+  the native EFM audio (every 12 s) against the DVD stereo. Matching is two-stage: 50 ms
+  envelopes within ±8 s, then 5 ms envelopes with a parabolic peak. The search is bootstrapped
+  by one 60 s window against the whole DVD, so no origin is guessed. Each match is mapped to
+  master time through the accepted act curves (`ActMap`), and master = intercept + slope·wav is
+  fitted centre-referenced and robustly (Huber; outliers beyond max(4·MAD, 20 ms) dropped).
+  Windows over act breaks, near-silent windows and weak peaks are rejected. A bug fix along the
+  way: window starts are snapped to the envelope grids; `int()` truncation had biased the rate
+  by 10 ppm in the synthetic test.
+
+  **Validated on S01E20.** M1 measures 44,055.966 Hz (−998.5 ppm ±1.6) with WAV0 at master frame
+  18.89 ±0.08. P2 measures 44,055.980 Hz (−998.2 ppm) with WAV0 at 118.99. The two captures agree
+  within 0.3 ppm, the pad difference is reproduced (100.10 vs 100 frames), and the rate is
+  1000:1001 within 1.5 ppm. Both origins sit +0.9–1.0 frame from the plain capture-pad geometry:
+  either v38's known one-frame origin convention or the DVD's own A/V offset, which a single DVD
+  cannot separate. The DVD measurement is primary and the A/V check is the safety net. Per-window
+  residual MAD is 16 ms and autocorrelated (0.78). That is picture-map error, not audio: one act
+  (1803–1953 s) sits ≈ −33 ms off, so P8 must retime by audio matching.
+
+  v38's duration/PAD model does **not** hold for captures with a nonzero pad (its P2 rate
+  43,993.6 Hz and −118-frame endpoint residual are that pad), so on S01E20 `dvd-free-audio` would
+  correctly refuse.
+
+  `stages/dvdaudio.py` (`dvd-ld-audio`) accepts automatically when there are ≥ 40 windows, ≥ 80%
+  coverage, origin SE ≤ 5 ms, rate SE ≤ 5 ppm and a leave-one-out spread ≤ 5 ppm; otherwise it
+  is blocked with the numbers. It builds the 24-bit exact-rate track with skip = delta −
+  intercept (+ A/V correction) and records cross-checks (origin − pad geometry, rate − 1000:1001)
+  and per-act residuals. The A/V-check rerun plan now uses `dvd-ld-audio` for DVD episodes.
 
 ---
 

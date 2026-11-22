@@ -59,7 +59,7 @@ Operator-chosen no-DVD route: rate from native audio vs stack duration, ±1-fram
 - resource: compute
 - human review: —
 - requires: value:mode.dvd_reference_available==False, value:mode.no_dvd_proceed_approved==True, ld-only, value:audio.capture, value:audio.pad_frames, value:stack.reference, value:stack.frames, value:video.frames, value:video.head_trim, value:video.delta_s, artifact:ld_native, artifact:stack_project
-- writes: audio.rate_method, audio.duration_candidate_rate_hz, audio.intermediate_asetrate_hz, audio.asetrate, audio.resampler, audio.skip_s, audio.skip_method, audio.wav0_master_frame, audio.endpoint_residual_frames, audio.endpoint_tolerance_frames, audio.origin_verified_by_duration, audio.absolute_av_reference_available, audio.dvd_free_approved, audio.corrected_duration_s, deliverable.ld_audio_source, deliverable.tracks, deliverable.mux_tracks
+- writes: audio.rate_method, audio.duration_candidate_rate_hz, audio.asetrate, audio.resampler, audio.skip_s, audio.skip_method, audio.wav0_master_frame, audio.endpoint_residual_frames, audio.endpoint_tolerance_frames, audio.origin_verified_by_duration, audio.absolute_av_reference_available, audio.dvd_free_approved, audio.corrected_duration_s, deliverable.ld_audio_source, deliverable.tracks, deliverable.mux_tracks
 - artifacts: ld_corrected, ld_synced, audio_timing_report
 
 ## `dvd-probe` — Probe DVD reference
