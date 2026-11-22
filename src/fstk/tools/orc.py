@@ -19,6 +19,7 @@ from json import JSONDecoder
 from pathlib import Path
 
 from fstk.core.errors import ArtifactError as PipelineError  # v38 name kept in ported bodies
+from fstk.core.errors import ToolError
 from fstk.tools import process
 
 LOADED_RE = re.compile(r"\btbc_source:\s*Loaded\b", re.IGNORECASE)
@@ -288,6 +289,26 @@ class Orc:
 
     def _log(self, name: str) -> Path | None:
         return self.log_dir / f"{name}.log" if self.log_dir else None
+
+    def version(self) -> str:
+        """``orc-cli --version`` (first non-empty line), or "unknown". Recorded in EFM provenance:
+        the report parser fails closed, so newer Orc versions are allowed and the version is
+        evidence (owner, 2026-11-21: best output, not a pin)."""
+        try:
+            res = process.run([self.exe, "--version"], capture_stdout=True, log_path=self._log("orc-version"))
+        except (OSError, ToolError):        # the version is evidence, never a gate
+            return "unknown"
+        text = (res.stdout or b"").decode("utf-8", errors="replace")
+        m = re.search(r"\b(\d+\.\d+(?:\.\d+)?)\b", text)
+        return m.group(1) if res.returncode == 0 and m else "unknown"
+
+    def identity(self) -> dict:
+        """Version (if Orc reports one) and the executable's SHA-256, which identifies the build exactly."""
+        from fstk.core.hashing import sha256_file
+
+        exe = Path(self.exe)
+        digest = sha256_file(exe) if exe.is_file() else None
+        return {"version": self.version(), "exe": exe.name, "exe_sha256": digest}
 
     def refresh(self, project: Path, *, log_name: str = "orc-refresh", cancel=None) -> RefreshResult:
         """Refresh analysis/maps only (never ``--process``); parse the JSON from mixed output."""

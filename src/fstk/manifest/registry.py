@@ -245,6 +245,8 @@ FIELDS: tuple[FieldDef, ...] = (
        v38="audio.efm_provenance", v38_unset={}),
     _F("video.trim_review", "record", "dict", "Visual head/tail trim review", v38="video.trim_review"),
     _F("video.cadence_review", "record", "dict", "Cadence evidence review", v38="video.cadence_review"),
+    _F("audio.efm_decode_failures", "record", "dict",
+       "EFM decodes that failed, per capture (run, reason, source size) — excluded from the automatic choice"),
     _F("audio.dvd_clock", "measurement", "dict",
        "DVD-referenced LD audio clock fit: rate, origin, precision, window evidence summary"),
     _F("audio.av_correction", "record", "dict",

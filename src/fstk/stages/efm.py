@@ -39,7 +39,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from fstk.core.errors import ArtifactError, GateError
+from fstk.core.errors import ArtifactError, GateError, ToolError
 from fstk.core.fsio import atomic_write_json, read_json
 from fstk.core.hashing import SCOPE_HEAD_TAIL, head_tail_sha256, sha256_file
 from fstk.core.timeutil import utc_now_iso, utc_stamp
@@ -186,7 +186,7 @@ class EfmDecode(Stage):
     description = ("Per-capture Orc/EFMSink decode with log path-binding, PCM format and report checks; "
                    "records verified provenance and quality metrics.")
     requires = (Custom("efm-sources", _has_efm),)
-    writes = ("audio.efm_provenance", "audio.efm_provenance_required")
+    writes = ("audio.efm_provenance", "audio.efm_provenance_required", "audio.efm_decode_failures")
     resource = "compute"
 
     def plan(self, ctx, params):
@@ -238,7 +238,7 @@ class EfmDecode(Stage):
                 basis.append(f"{label}: {why}")
             todo.append(item)
             inputs += [tbc, meta, efm]
-            outputs += [Path(item["provenance"]), Path(item["report"])]
+            outputs.append(Path(item["provenance"]))    # VERIFIED, or FAILED with the reason
         space = None
         if todo:
             if "planned_gib" in params:
@@ -322,6 +322,7 @@ class EfmDecode(Stage):
             "formats": {"video_format": video, "source_format": source, "amplitude_unit": amplitude,
                         "from": plan.data["formats_from"]},
             "orc_project": {"name": project.name, "sha256": sha256_file(project)},
+            "orc_version": plan.data.get("orc_version", "unknown"),
             "orc_log": {"name": orc_log.name, "sha256": sha256_file(orc_log), "exit": res.returncode},
             "path_checks": checks,
             "wav": {"relative_path": _rel(wav, audio_root), "size_bytes": wav.stat().st_size,
@@ -337,21 +338,49 @@ class EfmDecode(Stage):
                 "verified_utc": prov["created_utc"], "run": plan.data["run"]}
 
     def run(self, ctx, plan):
+        """Decode every capture; one failure does not stop the others (owner: best-quality outcome —
+        every successful decode is a candidate). Failures are recorded and excluded from the
+        automatic choice; the step fails only if nothing decoded."""
         todo = plan.data["todo"]
+        if todo:
+            orc = ctx.tool("orc")
+            plan.data["orc_version"] = orc.identity() if hasattr(orc, "identity") else {"version": orc.version()}
         merged = {k: list(v) for k, v in (ctx.manifest.get("audio.efm_provenance") or {}).items()}
-        added = {}
+        failures = dict(ctx.manifest.get("audio.efm_decode_failures") or {})
+        added, failed = {}, {}
         for n, item in enumerate(todo):
             ctx.check_cancel()
             ctx.report(n / max(1, len(todo)), f"capture {item['label']} ({n + 1}/{len(todo)})")
-            entry = self._decode_one(ctx, plan, item)
+            try:
+                entry = self._decode_one(ctx, plan, item)
+            except (ArtifactError, GateError, ToolError) as exc:
+                failed[item["label"]] = {"run": plan.data["run"], "reason": str(exc)[:2000],
+                                         "efm_bytes": item["specs"]["efm"].get("bytes"), "utc": utc_now_iso()}
+                prov = Path(item["provenance"])
+                if not prov.exists():
+                    atomic_write_json(prov, {"schema": PROVENANCE_SCHEMA, "status": "FAILED", "episode": str(ctx.episode),
+                                             "capture": item["label"], "run": plan.data["run"],
+                                             "created_utc": utc_now_iso(), "reason": str(exc),
+                                             "orc_version": plan.data.get("orc_version", "unknown")})
+                continue
             merged.setdefault(item["label"], []).append(entry)
             added[item["label"]] = entry
+            failures.pop(item["label"], None)
+        if todo and not added:
+            raise ArtifactError("no capture decoded: " + "; ".join(f"{k}: {v['reason'][:300]}" for k, v in failed.items()))
+        failures.update(failed)
         out = StepOutput()
         out.data["added"] = added
+        out.data["failed"] = failed
         if added:
             out.measure("audio.efm_provenance", merged,
-                        note=f"verified EFMSink decode(s) {sorted(added)} in run {plan.data['run']}")
+                        note=f"verified EFMSink decode(s) {sorted(added)} in run {plan.data['run']}"
+                             + (f"; failed {sorted(failed)}" if failed else ""))
             out.measure("audio.efm_provenance_required", True)
+        if failed or (ctx.manifest.get("audio.efm_decode_failures") or {}) != failures:
+            out.measure("audio.efm_decode_failures", failures,
+                        note=f"{sorted(failed)} failed in run {plan.data['run']}" if failed else "cleared by a decode")
+        out.notes += [f"{k} failed: {v['reason'][:200]}" for k, v in failed.items()]
         return out
 
     def verify(self, ctx, plan, output):
@@ -371,6 +400,9 @@ def _comparison(ctx, manifest) -> tuple[dict[str, dict], list[str], dict[str, di
     for cap in efm_captures(manifest):
         label = cap["label"]
         history = provenance.get(label) or []
+        failure = (manifest.get("audio.efm_decode_failures") or {}).get(label)
+        if failure and failure.get("efm_bytes") == cap["files"]["efm"].get("bytes"):
+            continue   # this capture's current source cannot be decoded: not a candidate
         if not history:
             problems.append(f"{label}: no verified decode")
             continue

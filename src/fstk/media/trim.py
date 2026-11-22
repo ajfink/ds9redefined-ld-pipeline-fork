@@ -12,6 +12,11 @@ v38 had these entered by a person after a visual review (``record_video_trim_rev
   exact via the IVTC probe. Cross-check: across 12 v38 episodes ``delta_s`` was 49.5–52.4 s and
   is the master frame of the first programme frame (S01E15: 1515, the same frame fstk measures
   as S01E20's origin).
+* **Head without a DVD** (``no_dvd_programme_start``). Across 12 v38 episodes the programme began
+  49.5–52.4 s into the master, at a fade-up from black after the LD front matter. The rule takes
+  the fade-up (≥ 0.5 s black, then ≥ 80% textured for 1 s) inside 45–58 s; if there are several or
+  none, it widens to 30–90 s and takes the one nearest 50.6 s, saying so in the notes. On S01E20
+  it finds master frame 1515, exactly the DVD-measured programme start.
 * **Tail.** v38 never trimmed the tail (``tail_trim`` = 0 in all 12 episodes). Here the tail is
   cut only if the LD carries ≥ 5 s of textured picture after the last DVD-matched act that the
   DVD does not have (e.g. a trailer). Otherwise it runs to the end of the master.
@@ -67,6 +72,36 @@ def tail_ld_only_start(samples: list[dict], last_act_end: int, step: int) -> int
         else:
             run = []
     return None
+
+
+PRIOR_WINDOW_S = (45.0, 58.0)
+WIDE_WINDOW_S = (30.0, 90.0)
+PRIOR_CENTRE_S = 50.6
+
+
+def fade_ups(flat: np.ndarray, lo_s: float, hi_s: float) -> list[int]:
+    """Frames where ≥ 15 black frames end and ≥ 80% of the next 30 are textured."""
+    out = []
+    lo, hi = max(16, int(lo_s * FPS)), min(len(flat) - 31, int(hi_s * FPS))
+    for f in range(lo, hi):
+        if flat[f - 15:f].all() and not flat[f] and (~flat[f:f + 30]).mean() >= 0.8:
+            out.append(f)
+    return out
+
+
+def no_dvd_programme_start(flat: np.ndarray) -> tuple[int, list[str]]:
+    """Programme start for an episode with no DVD reference (see module docstring)."""
+    found = fade_ups(flat, *PRIOR_WINDOW_S)
+    notes = []
+    if len(found) != 1:
+        wide = fade_ups(flat, *WIDE_WINDOW_S)
+        if not wide:
+            raise ValueError(f"no fade-up from black between {WIDE_WINDOW_S[0]:.0f} and {WIDE_WINDOW_S[1]:.0f} s")
+        pick = min(wide, key=lambda f: abs(f / FPS - PRIOR_CENTRE_S))
+        notes.append(f"{len(found)} fade-up(s) in {PRIOR_WINDOW_S[0]:.0f}–{PRIOR_WINDOW_S[1]:.0f} s; chose the one "
+                     f"nearest {PRIOR_CENTRE_S} s among {[round(f / FPS, 2) for f in wide]}")
+        return pick, notes
+    return found[0], notes
 
 
 def decide(probe: dict, *, flat: np.ndarray, origin: int, tail_cut: int | None) -> TrimDecision:

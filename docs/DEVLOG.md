@@ -38,10 +38,13 @@ Owner's order: alignment → DVD audio rate/origin → retime → PAD; only huma
 | P8 | Retime DVD 5.1 + SRT onto the LD timeline by **audio** (`dvd-retime`, `media/retime_map.py`, `media/retime_render.py`) | **done** (CP8), map verified on real S01E20 audio |
 | P9 | PAD audit/repair port | todo |
 | P10 | `cadence-evidence` accepted automatically inside the v38 ranges (12 episodes), review only outside | **done** (CP9) |
-| P6b | No-DVD head/tail trims (no reference for where the programme starts) | todo |
+| P6b | No-DVD head/tail trims: fade-up after the LD front matter inside the v38 prior (45–58 s; 12 episodes 49.5–52.4 s) | **done** (CP11); finds S01E20's DVD-measured start (1515) |
 | P13 | `delivery_plan` + "Run to delivery" button + `fstk plan delivery` (stack render → … → QC for either route) | **done** (CP9) |
 | P11 | Import the v38 episodes: all 13 real device manifests import + round-trip; `--v38-profile` resolves their files to absolute paths so they continue in fstk | **done** (CP10); first real continuation run on Windows still owed |
-| P12 | Per-capture EFM decode, Orc version in provenance; catalog 30-day refresh; H.264 review proxy fallback | todo |
+| P12 | EFM: every capture decoded even if one fails, failures recorded + excluded from the automatic choice, Orc identity (version if reported + exe SHA-256) in provenance | **done** (CP12) |
+| P14 | Catalog refresh when the snapshot is > 30 days old (`fstk catalog refresh`, startup check) | **next** |
+| P15 | H.264 review-proxy fallback in the A/V check window | todo |
+| P9b | PAD audit/repair port (v38 `audit_pads` / cut-PAD stills) | todo |
 
 Validation data on the owner's Legion: `Z:\ld-pipeline-device\{probe,prores,audio}` (S01E20 descriptors,
 stack master, EFM WAVs), DVDs in `Z:\Video\DS9S1D5`, captures on `X:\`. Windows-only tools
@@ -216,6 +219,26 @@ validated by the owner running the app.
   - descriptors in v38's metadata format are not reused (fstk re-decodes them);
   - fstk's `efm-select` needs fstk-format EFM provenance, so it may re-decode;
   - S01E20 will switch to M1 by the automatic rule.
+- **S3-CP11 — no-DVD trims (P6b).** `video-trim` now serves both routes.
+  - **No DVD:** it reads the first two minutes of the master (`gray_thumbnails(max_frames=…)`,
+    sequential) and takes the fade-up from black (≥ 0.5 s black, then ≥ 80% textured) in
+    45–58 s. If there are none or several, it widens to 30–90 s, takes the one nearest 50.6 s,
+    and records a note.
+  - **Real-data check:** on S01E20's master the only candidate in the window is frame 1515
+    (50.55 s), exactly the DVD-measured programme start. The others are front matter (2.1 s) and
+    the main titles (109.6 s).
+  - `delivery_plan`'s no-DVD route now includes `video-trim`, so both routes run start to finish.
+- **S3-CP12 — EFM robustness (P12).** `efm-decode` now attempts every capture.
+  - **A failure** (an Orc error, an MD5 mismatch, a missing WAV, …) is recorded in
+    `audio.efm_decode_failures` (run, reason, source size) with a FAILED provenance JSON, and
+    the other captures carry on. The step fails only if nothing decodes.
+  - **Selection:** `efm-select` excludes captures whose *current* source failed to decode, and
+    still blocks on any capture never attempted. A later successful decode clears the failure.
+  - **Orc identity:** provenance records `{version, exe, exe_sha256}`. The version is taken only
+    from `orc-cli --version` output that contains a version number; doctor notes Orc may print
+    none, and the exe hash identifies the build regardless.
+  - **Version policy** (owner: best output): newer Orc is allowed, because the report parser
+    fails closed. 321 tests.
 
 ---
 

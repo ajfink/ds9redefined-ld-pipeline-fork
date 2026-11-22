@@ -42,16 +42,23 @@ def _value(text: str, key: str) -> str:
 
 
 class FakeOrc:
-    def __init__(self, quality=None, exit_code=1, wrong_tbc_in_log=False, mono=False):
+    def __init__(self, quality=None, exit_code=1, wrong_tbc_in_log=False, mono=False, fail=()):
         self.quality = quality or {}
         self.exit_code, self.wrong_tbc_in_log, self.mono = exit_code, wrong_tbc_in_log, mono
+        self.fail = set(fail)
         self.calls = []
+
+    def version(self):
+        return "orc-cli 2.11.1 (fake)"
 
     def decode_efm(self, project, orc_log, *, log_name="", cancel=None, on_line=None):
         text = Path(project).read_text(encoding="utf-8")
         tbc, efm, wav = _value(text, "input_path"), _value(text, "efm_path"), _value(text, "output_path")
         label = re.search(r'user_label: "TBC Source (.+)"', text).group(1)
         self.calls.append((label, efm))
+        if label in self.fail:
+            Path(orc_log).write_text("EFMSink: fatal: corrupt EFM stream", encoding="utf-8")
+            return ProcessResult(["orc"], 1, 0.1, None, [], None)
         with wave.open(wav, "wb") as w:
             w.setnchannels(1 if self.mono else 2)
             w.setsampwidth(2)
@@ -168,6 +175,33 @@ def test_decode_all_then_auto_select_unique_pareto(env):
     assert "keeping verified" in state["steps"]["efm"]["plan_summary"]
 
 
+def test_one_failed_capture_does_not_stop_the_others_or_the_choice(env):
+    prof, ws, _, _ = env
+    _stack(env)
+    orc = FakeOrc(fail={"L1"})
+    state = run(env, [DECODE, SELECT], "f1", orc=orc)
+    assert state["steps"]["efm"]["status"] == "passed", state["steps"]["efm"]
+    assert len(orc.calls) == 3                                             # every capture was attempted
+    m = ws.store.load()
+    assert sorted(m.get("audio.efm_provenance")) == ["P1", "P6"]
+    fail = m.get("audio.efm_decode_failures")["L1"]
+    assert "L1-efm.wav" in fail["reason"] and fail["efm_bytes"]
+    assert state["steps"]["select"]["status"] == "passed"                  # chosen among P1/P6
+    assert m.get("audio.capture") in ("P1", "P6")
+    report = json.loads((ws.state_dir / m.get("audio.efm_provenance")["P6"][0]["report_path"]).read_text())
+    assert report["orc_version"]["version"] == "orc-cli 2.11.1 (fake)"
+    # a later decode run retries only the failed capture; success clears the failure
+    state = run(env, [DECODE], "f2", orc=FakeOrc())
+    assert state["steps"]["efm"]["status"] == "passed"
+    assert sorted(ws.store.load().get("audio.efm_provenance")) == LABELS
+    assert ws.store.load().get("audio.efm_decode_failures") == {}
+
+
+def test_nothing_decoding_fails_the_step(env):
+    state = run(env, [DECODE], "f3", orc=FakeOrc(fail=set(LABELS)))
+    assert state["steps"]["efm"]["status"] == "failed" and "no capture decoded" in state["steps"]["efm"]["issues"][0]
+
+
 def test_ambiguous_quality_picks_least_bad_and_operator_can_override(env):
     _, ws, _, _ = env
     _stack(env)
@@ -220,7 +254,7 @@ def test_log_bound_to_another_tbc_fails_and_records_nothing(env):
     _, ws, _, _ = env
     state = run(env, [DECODE], "x1", orc=FakeOrc(wrong_tbc_in_log=True))
     st = state["steps"]["efm"]
-    assert st["status"] == "failed" and "loaded_tbc" in st["issues"][0]
+    assert st["status"] == "failed" and "loaded_tbc" in st["issues"][0]      # every capture failed this way
     assert not ws.store.load().is_set("audio.efm_provenance")
 
 
@@ -229,14 +263,15 @@ def test_non_native_wav_fails(env):
     assert state["steps"]["efm"]["status"] == "failed" and "44.1 kHz" in state["steps"]["efm"]["issues"][0]
 
 
-def test_md5_mismatch_stops_before_orc(env):
-    _, _, _, dl = env
+def test_md5_mismatch_excludes_that_capture_before_orc(env):
+    _, ws, _, dl = env
     orc = FakeOrc()
     efm = next(dl.glob("*-L1.efm"))
     efm.write_bytes(b"X" + efm.read_bytes()[1:])                            # same size, different bytes
     state = run(env, [DECODE], "x3", orc=orc)
-    assert state["steps"]["efm"]["status"] == "failed" and "MD5" in state["steps"]["efm"]["issues"][0]
-    assert orc.calls == []
+    assert state["steps"]["efm"]["status"] == "passed"
+    assert "L1" not in [c[0] for c in orc.calls]                           # never reached Orc
+    assert "MD5" in ws.store.load().get("audio.efm_decode_failures")["L1"]["reason"]
 
 
 def test_compressed_efm_is_extracted_into_work_and_decoded(env):

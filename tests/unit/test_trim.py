@@ -134,4 +134,52 @@ def test_delivery_plan_orders_every_stage_for_each_route():
     assert 25 < render["planned_gib"] < 30 and "287 KB" in render["estimate_basis"]
     m.set("mode.dvd_reference_available", False, by="op")
     assert [s["stage"] for s in delivery_plan(m)["steps"]] == [
-        "stack-render", "cadence-evidence", "dvd-free-audio", "encode-final", "remux", "qc-report"]
+        "stack-render", "cadence-evidence", "video-trim", "dvd-free-audio", "encode-final", "remux", "qc-report"]
+
+
+def test_no_dvd_programme_start_uses_the_v38_prior():
+    from fstk.media.trim import no_dvd_programme_start
+
+    flat = np.ones(int(120 * FPS), bool)
+    flat[60:1200] = False                       # front matter (logos)
+    flat[1515:2400] = False                     # programme fades up at 50.55 s
+    flat[3285:3500] = False                     # main titles after the teaser
+    assert no_dvd_programme_start(flat) == (1515, [])
+    flat[1515:2400] = True                      # no fade-up in 45–58 s: widen, nearest to 50.6 s
+    flat[2000:2400] = False                     # 66.7 s
+    start, notes = no_dvd_programme_start(flat)
+    assert start == 2000 and notes
+
+
+class FakeFF:
+    def gray_thumbnails(self, path, w, h, *, cancel=None, max_frames=None):
+        desc = np.zeros((max_frames, w * h), np.uint8)
+        tex = ~flat_master()[:max_frames]
+        desc[tex] = np.random.default_rng(2).integers(0, 255, (int(tex.sum()), w * h))
+        return desc
+
+
+def test_stage_no_dvd_route(tmp_path):
+    prof = Profile.from_dict({"schema": SCHEMA, "machine": "T", "os": "linux", "data_root": str(tmp_path / "d"),
+                              "media_root": str(tmp_path / "m")})
+    probe_dir, master_dir = prof.root("probe", EP), prof.root("prores", EP)
+    probe_dir.mkdir(parents=True)
+    master_dir.mkdir(parents=True)
+    (master_dir / "master.mov").write_bytes(b"x")
+    (probe_dir / "di.txt").write_text("[400 401]")
+    m = Manifest.new(EP, title="t")
+    m.set("mode.dvd_reference_available", False, by="op")
+    m.set("mode.no_dvd_proceed_approved", True, by="op")
+    for k, v in (("audio.pad_frames", PAD), ("stack.frames", STACK), ("video.repair_frames", 2)):
+        m.set(k, v, by="t")
+    m.set_artifact("stack_master", root="prores", name="master.mov")
+    m.set_artifact("di_map", root="probe", name="di.txt")
+    ws = EpisodeWorkspace(prof, EP)
+    ws.store.create(m, by="t", reason="setup")
+    plan = {"schema": PLAN_SCHEMA, "episode": str(EP), "job": "trim",
+            "steps": [{"id": "trim", "stage": "video-trim", "params": {}, "after": []}]}
+    st = Engine(prof, plan, actor="op", tool_overrides={"vapoursynth": FakeVS(), "ffmpeg": FakeFF()}).run()
+    assert st["steps"]["trim"]["status"] == "passed", st["steps"]["trim"].get("issues")
+    m = ws.store.load()
+    assert master_of(m.get("video.head_trim")) >= 1511 > master_of(m.get("video.head_trim") - 1)
+    assert m.get("video.tail_trim") == 0

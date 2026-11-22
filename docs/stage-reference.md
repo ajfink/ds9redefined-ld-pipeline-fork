@@ -103,7 +103,7 @@ Per-capture Orc/EFMSink decode with log path-binding, PCM format and report chec
 - resource: compute
 - human review: —
 - requires: efm-sources
-- writes: audio.efm_provenance, audio.efm_provenance_required
+- writes: audio.efm_provenance, audio.efm_provenance_required, audio.efm_decode_failures
 - artifacts: —
 
 ## `efm-select` — Select the EFM audio capture
@@ -166,12 +166,12 @@ Orc --process with artifact evidence validation; no human review (owner decision
 - writes: —
 - artifacts: —
 
-## `video-trim` — Trims, DELTA and the encode script (DVD-referenced)
+## `video-trim` — Trims, DELTA and the encode script
 
-Exact IVTC frame map (tagged probe), head at the DVD programme's fade-up, tail only if the LD has picture the DVD lacks; writes the verified encode script.
+Exact IVTC frame map (tagged probe); head at the programme's fade-up (DVD origin, or the v38-prior fade-up without a DVD); tail only if the LD has picture the DVD lacks; writes the verified encode script.
 
 - resource: compute
 - human review: —
-- requires: value:mode.dvd_reference_available==True, dvd-alignment, value:audio.pad_frames, value:stack.frames, value:video.repair_frames, artifact:stack_master, artifact:di_map, artifact:master_descriptors, artifact:alignment_report
+- requires: route, value:audio.pad_frames, value:stack.frames, value:video.repair_frames, artifact:stack_master, artifact:di_map
 - writes: video.head_trim, video.tail_trim, video.frames, video.duration_s, video.delta_s, video.fade_up_output
 - artifacts: encode_script

@@ -285,15 +285,18 @@ class FFmpeg:
             raise ArtifactError(f"FFmpeg returned no -progress out_time for a:{stream_number} at {at_s:.3f}s")
         return seconds
 
-    def gray_thumbnails(self, path: str | Path, width: int = 48, height: int = 36, *, cancel=None):
-        """Decode every frame of v:0 sequentially to ``width``×``height`` grey (area scaling).
+    def gray_thumbnails(self, path: str | Path, width: int = 48, height: int = 36, *, cancel=None,
+                        max_frames: int | None = None):
+        """Decode frames of v:0 sequentially to ``width``×``height`` grey (area scaling).
 
         Returns a uint8 array (frames, width*height). Frames are indexed exactly; nothing seeks.
+        ``max_frames`` stops after the first N frames (still sequential from frame 0).
         """
         import numpy as np
 
+        limit = ["-frames:v", str(int(max_frames))] if max_frames else []
         res = process.run([self.ffmpeg, "-hide_banner", "-nostdin", "-v", "error", "-i", str(path), "-map", "0:v:0",
-                           "-vf", f"scale={width}:{height}:flags=area,format=gray", "-f", "rawvideo",
+                           *limit, "-vf", f"scale={width}:{height}:flags=area,format=gray", "-f", "rawvideo",
                            "-pix_fmt", "gray", "-"], capture_stdout=True, log_path=self._log("thumbnails"),
                           cancel=cancel)
         data = res.stdout or b""
