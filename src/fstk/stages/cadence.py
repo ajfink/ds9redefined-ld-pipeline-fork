@@ -25,9 +25,10 @@ from pathlib import Path
 from fstk.core.errors import ArtifactError
 from fstk.core.fsio import atomic_write_bytes, atomic_write_json, decode_text, read_json
 from fstk.core.timeutil import utc_now_iso, utc_stamp
+from fstk.media import hybrid
 from fstk.media.cadence import analyze_tfm_rows, load_motion_trace, parse_tfm_log
 from fstk.media.cadence_map import di_map_text, repair_mask, repair_ranges
-from fstk.tools.vapoursynth import tfm_log_script
+from fstk.tools.vapoursynth import field_diff_script, read_field_diffs, tfm_log_script
 
 from .base import ArtifactExists, Stage, StepOutput, StepPlan, ValueSet, register
 
@@ -56,8 +57,9 @@ class CadenceEvidence(Stage):
                    "inside the ranges of every completed v38 episode, otherwise held for review.")
     requires = (ValueSet("stack.frames"), ValueSet("audio.pad_frames"), ArtifactExists("stack_master"))
     writes = ("video.tfm_period5_pct", "video.tfm_unmatched", "video.tfm_combed_count",
-              "video.tfm_combed_spans", "video.inserts", "video.repair_frames", "video.repair_pct")
-    writes_artifacts = ("tfm_log", "di_map", "cadence_summary")
+              "video.tfm_combed_spans", "video.inserts", "video.repair_frames", "video.repair_pct",
+              "video.hybrid_seconds")
+    writes_artifacts = ("tfm_log", "di_map", "cadence_summary", "hybrid_plan")
     resource = "compute"
     review = "cadence-review"
     review_when = "only when a cadence measurement is outside the v38-calibrated ranges"
@@ -74,11 +76,13 @@ class CadenceEvidence(Stage):
         slug = ctx.episode.slug
         files = {"script": ctx.root("scripts") / f"cadence-tfm-{slug}.vpy",
                  "log": probe / f"full-tfm-log-{slug}.txt", "di_map": probe / f"di-map-{slug}.txt",
+                 "hybrid": probe / f"hybrid-plan-{slug}.json", "fd_script": ctx.root("scripts") / f"field-diff-{slug}.vpy",
+                 "fd_log": probe / f"field-diff-{slug}.txt",
                  "report": ctx.root("reports") / "cadence.json"}
         motion = params.get("motion_trace")
         inputs = [master] + ([Path(motion)] if motion else [])
         return StepPlan(self.id, params, inputs=inputs,
-                        outputs=[files["log"], files["di_map"], files["report"]],
+                        outputs=[files["log"], files["di_map"], files["hybrid"], files["report"]],
                         summary=f"TFM over {expected} frames (pad {pad})",
                         data={k: str(v) for k, v in files.items()} | {
                             "master": str(master), "pad": pad, "expected": expected,
@@ -114,7 +118,9 @@ class CadenceEvidence(Stage):
             raise ArtifactError("repair-set implementations disagree; refusing to build a map")
         ranges = repair_ranges(mask)
         atomic_write_bytes(d["di_map"], di_map_text(ranges).encode())
-        atomic_write_json(d["report"], {"schema": "fstk-cadence-v1", "created_utc": utc_now_iso(),
+        plan_doc = self._hybrid_plan(ctx, d, rows)
+        atomic_write_json(d["hybrid"], plan_doc)
+        atomic_write_json(d["report"], {"schema": "fstk-cadence-v1", "hybrid": plan_doc["summary"], "created_utc": utc_now_iso(),
                                         "episode": str(ctx.episode), "source_pad": d["pad"],
                                         "decoded_frames": decode.frames, "repair_ranges": ranges,
                                         "analysis": analysis, "auto_accept": AUTO_ACCEPT,
@@ -135,7 +141,40 @@ class CadenceEvidence(Stage):
         out.artifacts["tfm_log"] = {"root": "probe", "name": log.relative_to(probe).as_posix()}
         out.artifacts["di_map"] = {"root": "probe", "name": Path(d["di_map"]).relative_to(probe).as_posix()}
         out.artifacts["cadence_summary"] = {"root": "reports", "name": "cadence.json"}
+        out.artifacts["hybrid_plan"] = {"root": "probe", "name": Path(d["hybrid"]).relative_to(probe).as_posix()}
+        out.measure("video.hybrid_seconds", float(plan_doc["summary"]["video_seconds"]),
+                    note=f"{plan_doc['summary']['video_segments']} video-origin stretch(es) converted at 23.976p; "
+                         f"{plan_doc['summary']['plate_segments']} film plate(s) under a video overlay kept as film")
         return out
+
+    def _hybrid_plan(self, ctx, d, rows) -> dict:
+        """Video-origin stretches and, for each, whether its main picture is still a telecined film plate."""
+        segments = hybrid.plan_segments(hybrid.classify_cycles(rows))
+        cand = [s for s in segments if s.kind != hybrid.FILM]
+        verdicts: dict[int, dict] = {}
+        if cand:
+            ranges = [s.source_frames for s in cand]
+            fd_log = Path(d["fd_log"])
+            if fd_log.exists():
+                fd_log.rename(fd_log.with_name(f"{fd_log.stem}.superseded-{utc_stamp()}{fd_log.suffix}"))
+            atomic_write_bytes(d["fd_script"], field_diff_script(Path(d["master"]), d["pad"], ranges, fd_log).encode())
+            ctx.report(0.9, f"film-plate test on {len(cand)} video-origin stretch(es)")
+            dec = ctx.tool("vapoursynth").full_decode(Path(d["fd_script"]), name="field-diff", cancel=ctx.cancel)
+            if not dec.clean or not fd_log.is_file():
+                raise ArtifactError(f"field-difference pass failed: vspipe={dec.vspipe_rc} ffmpeg={dec.ffmpeg_rc} "
+                                    f"errors={dec.errors[:5]}")
+            try:
+                diffs = read_field_diffs(fd_log.read_text(encoding="ascii"), ranges)
+            except ValueError as exc:
+                raise ArtifactError(str(exc)) from None
+            for s, fd in zip(cand, diffs, strict=True):
+                verdicts[s.first_cycle] = hybrid.film_plate_verdict(fd)
+        segments = [hybrid.Segment(s.kind, s.first_cycle, s.end_cycle,
+                                   bool(verdicts.get(s.first_cycle, {}).get("plate", False))) for s in segments]
+        return {"schema": "fstk-hybrid-plan-v1", "created_utc": utc_now_iso(), "frame_space": "post-pad source frames",
+                "segments": [s.as_dict() for s in segments],
+                "plate_tests": {str(k): v for k, v in verdicts.items()},
+                "summary": hybrid.summary(segments)}
 
     def verify(self, ctx, plan, output):
         report = read_json(plan.data["report"])

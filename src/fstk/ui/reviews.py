@@ -377,7 +377,11 @@ class DeliveryReview(QDialog):
         self.tabs = QTabWidget()
         self.tabs.addTab(self.media, "Playback")
         self.tabs.addTab(quality, "Episode quality report")
+        self.tabs.addTab(self._stretch_tab(), "Video-origin stretches")
+        self.tabs.addTab(self._fix_tab(), "Frame fixes")
         self._fill_quality()
+        self._fill_fixes()
+        self._fill_stretches()
         split.addWidget(left)
         split.addWidget(self.tabs)
         split.setStretchFactor(0, 3)
@@ -414,6 +418,258 @@ class DeliveryReview(QDialog):
             self.contact_image.setPixmap(QPixmap(str(png)))
         else:
             self.contact_image.setText("No contact sheet.")
+
+    # ---------------------------------------------------------------- operator frame fixes
+    FIX_ACTIONS = (("interpolate", "Interpolate from LD neighbours (1–3 frames)"),
+                   ("ld-patch", "Region patch from the clean LD frame next to it"),
+                   ("dvd", "Use the DVD (whole frame, or region if a rectangle is given)"),
+                   ("leave", "Leave as captured"))
+
+    def _fix_tab(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(QLabel("Worst moments (double-click to add a fix there). Frames are delivered-episode frames; "
+                             "a rectangle is x,y,w,h in the full picture (even numbers)."))
+        self.moments = QListWidget()
+        self.moments.itemDoubleClicked.connect(self._add_fix_from_moment)
+        lay.addWidget(self.moments, 1)
+        self.fix_table = QTableWidget(0, 6)
+        self.fix_table.setHorizontalHeaderLabels(["First", "Last", "Action", "Rectangle", "From (±1)", "What is wrong"])
+        self.fix_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        self.fix_table.verticalHeader().setVisible(False)
+        lay.addWidget(self.fix_table, 2)
+        row = QHBoxLayout()
+        add = QPushButton("Add range")
+        add.clicked.connect(lambda: self.add_fix(0, 0))
+        rem = QPushButton("Remove selected")
+        rem.clicked.connect(lambda: self.fix_table.removeRow(self.fix_table.currentRow()))
+        self.preview_button = QPushButton("Preview selected")
+        self.preview_button.clicked.connect(self.preview_fix)
+        show = QPushButton("Show latest preview")
+        show.clicked.connect(self.show_fix_preview)
+        self.apply_fixes_button = QPushButton("Apply fixes and re-encode…")
+        self.apply_fixes_button.clicked.connect(self.apply_fixes)
+        for b in (add, rem, self.preview_button, show, self.apply_fixes_button):
+            row.addWidget(b)
+        lay.addLayout(row)
+        self.fix_preview_text = QLabel("")
+        self.fix_preview_text.setWordWrap(True)
+        lay.addWidget(self.fix_preview_text)
+        self.fix_strips = QLabel("")
+        strips = QScrollArea()
+        strips.setWidget(self.fix_strips)
+        strips.setWidgetResizable(True)
+        lay.addWidget(strips, 2)
+        clips = QHBoxLayout()
+        self.play_captured = QPushButton("Play as captured")
+        self.play_fixed = QPushButton("Play with the fix")
+        self.play_captured.clicked.connect(lambda: self._play_fix_clip("captured"))
+        self.play_fixed.clicked.connect(lambda: self._play_fix_clip("fixed"))
+        clips.addWidget(self.play_captured)
+        clips.addWidget(self.play_fixed)
+        clips.addStretch(1)
+        lay.addLayout(clips)
+        self.fix_clip_paths: dict = {}
+        return w
+
+    def _fill_fixes(self) -> None:
+        self.fix_ctx = ctx = self.services.fix_context(self.episode)
+        self.moments.clear()
+        for mo in ctx["moments"]:
+            item = QListWidgetItem(f"{_fmt_time(mo['time_s'])}  frame {mo['frame']}  {mo['reason']}")
+            item.setData(Qt.ItemDataRole.UserRole, mo)
+            self.moments.addItem(item)
+        self.fix_table.setRowCount(0)
+        for f in ctx["fixes"]:
+            self.add_fix(f["first"], f["last"], f.get("action", "interpolate"), f.get("rect"), f.get("src"),
+                         f.get("note", ""))
+        self._update_fix_buttons()
+
+    def _add_fix_from_moment(self, item: QListWidgetItem) -> None:
+        mo = item.data(Qt.ItemDataRole.UserRole)
+        self.add_fix(mo["frame"], mo["frame"], note="")
+
+    def add_fix(self, first: int, last: int, action: str = "interpolate", rect=None, src=None, note: str = "") -> int:
+        r = self.fix_table.rowCount()
+        self.fix_table.insertRow(r)
+        self.fix_table.setItem(r, 0, QTableWidgetItem(str(first)))
+        self.fix_table.setItem(r, 1, QTableWidgetItem(str(last)))
+        box = QComboBox()
+        for key, label in self.FIX_ACTIONS:
+            if key == "dvd" and not self.fix_ctx.get("dvd"):
+                continue
+            box.addItem(label, key)
+        idx = box.findData(action)
+        box.setCurrentIndex(max(idx, 0))
+        box.currentIndexChanged.connect(lambda _i: self._update_fix_buttons())
+        self.fix_table.setCellWidget(r, 2, box)
+        self.fix_table.setItem(r, 3, QTableWidgetItem(",".join(map(str, rect)) if rect else ""))
+        self.fix_table.setItem(r, 4, QTableWidgetItem("" if src is None else str(src)))
+        self.fix_table.setItem(r, 5, QTableWidgetItem(note))
+        self._update_fix_buttons()
+        return r
+
+    def fix_rows(self) -> list[dict]:
+        out = []
+        for r in range(self.fix_table.rowCount()):
+            def txt(c, r=r):
+                it = self.fix_table.item(r, c)
+                return it.text().strip() if it else ""
+            try:
+                f = {"first": int(txt(0)), "last": int(txt(1)), "action": self.fix_table.cellWidget(r, 2).currentData(),
+                     "note": txt(5)}
+                if txt(3):
+                    f["rect"] = [int(v) for v in txt(3).split(",")]
+                if txt(4):
+                    f["src"] = int(txt(4))
+            except ValueError as exc:
+                raise FstkError(f"row {r + 1}: frames, rectangle and source must be whole numbers") from exc
+            out.append(f)
+        return out
+
+    def _update_fix_buttons(self) -> None:
+        n = self.fix_table.rowCount()
+        self.preview_button.setEnabled(n > 0)
+        self.apply_fixes_button.setEnabled(n > 0 or bool(self.fix_ctx.get("fixes")))
+
+    def preview_fix(self) -> str | None:
+        row = max(self.fix_table.currentRow(), 0)
+        try:
+            fix = self.fix_rows()[row]
+            path = self.services.write_fix_preview_plan(self.episode, fix)
+        except (FstkError, IndexError) as exc:
+            QMessageBox.warning(self, "Preview not started", str(exc))
+            return None
+        self.fix_preview_text.setText("Rendering the preview… press 'Show latest preview' when the job finishes.")
+        self.plan_ready.emit(str(path))
+        return str(path)
+
+    def show_fix_preview(self) -> None:
+        rep = self.services.latest_fix_preview(self.episode)
+        if not rep:
+            self.fix_preview_text.setText("No preview yet.")
+            return
+        f, det = rep["fix"], rep.get("detail", {})
+        bits = [f"{f['action']} {f['first']}..{f['last']}"]
+        if "grain_ratio_vs_neighbour" in det:
+            bits.append(f"grain {det['grain_ratio_vs_neighbour']:.2f} of the neighbour's"
+                        + (" — smoother than the real frames" if det.get("grain_flag") else ""))
+        if "post_ncc" in det:
+            bits.append(f"DVD match {det['post_ncc']:.3f} after registration and colour match")
+        self.fix_preview_text.setText("Top: as captured. Bottom: with the fix" + (" (DVD frames conformed to the LD)"
+                                      if f["action"] == "dvd" else "") + ". " + "; ".join(bits))
+        strips = rep.get("strips", {})
+        from PySide6.QtGui import QPainter
+
+        tops = [QPixmap(strips[k]) for k in ("captured", "fixed") if strips.get(k)]
+        if tops:
+            wdt, hgt = max(p.width() for p in tops), sum(p.height() for p in tops)
+            canvas = QPixmap(wdt, hgt)
+            canvas.fill(QColor("black"))
+            painter = QPainter(canvas)
+            y = 0
+            for p in tops:
+                painter.drawPixmap(0, y, p)
+                y += p.height()
+            painter.end()
+            self.fix_strips.setPixmap(canvas)
+        self.fix_clip_paths = rep.get("clips", {})
+        self.play_captured.setEnabled("captured" in self.fix_clip_paths)
+        self.play_fixed.setEnabled("fixed" in self.fix_clip_paths)
+
+    def _play_fix_clip(self, name: str) -> None:
+        clip = self.fix_clip_paths.get(name)
+        if clip:
+            self.tabs.setCurrentWidget(self.media)
+            self.media.load(clip, keep_position=False)
+            self.media.play()
+
+    def apply_fixes(self) -> str | None:
+        try:
+            path = self.services.write_fixes_plan(self.episode, fixes=self.fix_rows(), actor=self.actor)
+            if self.pending is not None:
+                self.services.decide(self.episode, self.pending, decision="REJECTED", actor=self.actor,
+                                     note=f"re-encode with {self.fix_table.rowCount()} operator frame fix(es)")
+        except FstkError as exc:
+            QMessageBox.warning(self, "Re-encode not started", str(exc))
+            return None
+        self.plan_ready.emit(str(path))
+        return str(path)
+
+    # ---------------------------------------------------------------- video-origin stretches
+    def _stretch_tab(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(QLabel("Video-shot stretches are delivered at 23.976p from the nearest real frames by default. "
+                             "Double-click a row to play its preview (left: nearest real frames, right: "
+                             "interpolated), choose per stretch, then re-encode."))
+        self.stretches = QTableWidget(0, 5)
+        self.stretches.setHorizontalHeaderLabels(["Starts", "Length", "Kind", "In current encode", "Choice"])
+        self.stretches.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.stretches.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.stretches.verticalHeader().setVisible(False)
+        self.stretches.cellDoubleClicked.connect(lambda row, _c: self.play_stretch(row))
+        self.stretch_button = QPushButton("Re-encode with these choices…")
+        self.stretch_button.clicked.connect(self.apply_stretches)
+        lay.addWidget(self.stretches, 1)
+        lay.addWidget(self.stretch_button)
+        return w
+
+    def _fill_stretches(self) -> None:
+        self.stretch_rows = self.services.video_stretches(self.episode)
+        self.stretches.setRowCount(len(self.stretch_rows))
+        for i, r in enumerate(self.stretch_rows):
+            self.stretches.setItem(i, 0, QTableWidgetItem(_fmt_time(r["start_s"])))
+            self.stretches.setItem(i, 1, QTableWidgetItem(f"{r['seconds']:.1f} s"))
+            self.stretches.setItem(i, 2, QTableWidgetItem(r["kind"]))
+            self.stretches.setItem(i, 3, QTableWidgetItem(r["encoded"] or "—"))
+            box = QComboBox()
+            box.addItem("Nearest real frames (default)", "nearest")
+            box.addItem("Interpolated (even motion)", "interpolate")
+            box.setCurrentIndex(0 if r["treatment"] == "nearest" else 1)
+            box.currentIndexChanged.connect(lambda _i: self._update_stretch_button())
+            self.stretches.setCellWidget(i, 4, box)
+        self._update_stretch_button()
+
+    def stretch_choices(self) -> dict[str, str]:
+        return {str(r["first_cycle"]): self.stretches.cellWidget(i, 4).currentData()
+                for i, r in enumerate(self.stretch_rows)}
+
+    def _update_stretch_button(self) -> None:
+        changed = any(self.stretch_choices()[str(r["first_cycle"])] != (r["encoded"] or "nearest")
+                      for r in self.stretch_rows)
+        self.stretch_button.setEnabled(bool(self.stretch_rows) and changed)
+
+    def play_stretch(self, row: int) -> None:
+        clip = self.stretch_rows[row].get("preview")
+        if not clip:
+            QMessageBox.information(self, "No preview", "Run the stretch-preview stage to render this stretch.")
+            return
+        self.tabs.setCurrentWidget(self.media)
+        self.media.load(clip, keep_position=False)
+        self.media.play()
+
+    def apply_stretches(self, note: str | None = None) -> str | None:
+        if note is None:
+            from PySide6.QtWidgets import QInputDialog
+
+            note, ok = QInputDialog.getMultiLineText(self, "Re-encode with these choices",
+                                                     "What did you see in the previews?")
+            if not ok:
+                return None
+        try:
+            path = self.services.write_stretch_plan(self.episode, choices=self.stretch_choices(),
+                                                    actor=self.actor, note=note)
+            if self.pending is not None:
+                self.services.decide(self.episode, self.pending, decision="REJECTED", actor=self.actor,
+                                     note=f"re-encode with chosen video-stretch treatments: {note.strip()}")
+        except FstkError as exc:
+            QMessageBox.warning(self, "Re-encode not started", str(exc))
+            return None
+        self.plan_ready.emit(str(path))
+        return str(path)
 
     # ---------------------------------------------------------------- A/V chunks
     def _fill_chunks(self) -> None:

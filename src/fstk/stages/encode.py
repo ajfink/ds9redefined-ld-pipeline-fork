@@ -19,7 +19,6 @@ from pathlib import Path
 from fstk.core.errors import ArtifactError, GateError
 from fstk.core.fsio import atomic_write_json
 from fstk.core.timeutil import utc_now_iso
-from fstk.media import pad_repair
 from fstk.media.encode import (
     DEFAULT_CHROMA,
     DEFAULT_PRESET,
@@ -50,18 +49,16 @@ class EncodeFinal(Stage):
             raise GateError("encode-final needs planned_gib and estimate_basis (a defensible estimate)") from None
         m = ctx.manifest
         out = ctx.root("out") / f"{ctx.episode.code}-23.976-padfixed-video.mkv"
-        if out.exists():
-            raise GateError(f"refusing to overwrite existing encode {out}")
+        rev = 2
+        while out.exists():          # a fresh encode after review choices: never overwrite, number the revision
+            out = ctx.root("out") / f"{ctx.episode.code}-23.976-padfixed-video-r{rev}.mkv"
+            rev += 1
         tmp = out.with_name(out.stem + ".tmp" + out.suffix)
         if tmp.exists():
             raise GateError(f"temporary output exists; inspect it before retrying: {tmp}")
-        script = ctx.artifact_path("encode_script", m)
-        if m.artifact("padfix_script"):   # PAD-repaired chain; must have been built from this very base script
-            fixed = ctx.artifact_path("padfix_script", m)
-            if not pad_repair.padfix_matches_base(fixed.read_text(encoding="utf-8"),
-                                                  script.read_text(encoding="utf-8")):
-                raise GateError("padfix_script was built from an older encode script; re-run pad-audit and pad-repair")
-            script = fixed
+        from .framefix import resolve_chain
+
+        script = resolve_chain(ctx, m)   # encode script → PAD splice → operator fixes, each verified
         if m.artifact("finish_script"):   # measured finishing (crop, concealment, optional chroma denoise)
             fin = ctx.artifact_path("finish_script", m)
             if not finish_matches_base(fin.read_text(encoding="utf-8"), script.read_text(encoding="utf-8")):

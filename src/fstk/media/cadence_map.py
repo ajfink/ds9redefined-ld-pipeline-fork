@@ -74,7 +74,8 @@ def parse_ranges(text: str) -> list[tuple[int, int]]:
 def ivtc_vpy_script(source: str, pad: int, trim_start: int, trim_end: int,
                     ranges: list[tuple[int, int]], repair: str,
                     expected_frames: int | None = None, *, probe_json: str | None = None,
-                    probe_head: int = 0, probe_tail: int = 0, chroma: str = "422") -> str:
+                    probe_head: int = 0, probe_tail: int = 0, chroma: str = "422",
+                    video_cycles: dict[int, str] | None = None) -> str:
     """The IVTC/PAD-repair encode script (v38 ``build_map_vpy.py``).
 
     With ``probe_json`` the script also tags every source frame with its index (frame property
@@ -82,6 +83,10 @@ def ivtc_vpy_script(source: str, pad: int, trim_start: int, trim_end: int,
     master frame of the first ``probe_head`` and last ``probe_tail`` decimated output frames to
     that JSON. ``video-trim`` uses it to place the trims and ``video.delta_s`` exactly, rather
     than inferring TDecimate's choices.
+
+    ``video_cycles`` (from ``fstk.media.hybrid.cycle_treatments``) maps telecine cycles of video-origin stretches
+    to their treatment; those output frames are replaced after decimation by the nearest-moment or interpolated
+    frames (4 per cycle, so the frame count and every frame number are unchanged).
     """
     lines: list[str] = []
     a = lines.append
@@ -94,6 +99,11 @@ def ivtc_vpy_script(source: str, pad: int, trim_start: int, trim_end: int,
     a(f"# head trim    : {trim_start}   (post-decimation 23.976 output frames)")
     a(f"# tail trim    : {trim_end}")
     a(f"# repair set   : {len(ranges)} range(s) {ranges if ranges else ''}")
+    vc = dict(sorted((int(k), str(v)) for k, v in (video_cycles or {}).items()))
+    bad = {v for v in vc.values()} - {"NI", "NP", "II", "IP"}
+    if bad:
+        raise PipelineError(f"unknown video-stretch treatment code(s) {sorted(bad)}")
+    a(f"# video cycles : {len(vc)} cycle(s) converted (nearest/interpolated), see fstk.media.hybrid")
     a("")
     a("import vapoursynth as vs")
     a("")
@@ -176,6 +186,7 @@ def ivtc_vpy_script(source: str, pad: int, trim_start: int, trim_end: int,
         a("else:")
         a("    di = QTempGaussMC(source_match__iterations=3, lossless__mode=QTempGaussMC.LosslessMode.PRESHARPEN,")
         a("                      final__tr=2, sharpen__strength=0.2).deinterlace(src)")
+        a("bob = di                                  # 59.94p, every field a frame (reused for video stretches)")
         a("di = core.std.SelectEvery(di, 2, 0)      # FPSDivisor=2, phase 0")
         a("assert di.num_frames == fm.num_frames, (di.num_frames, fm.num_frames)")
         a("assert (di.fps_num, di.fps_den) == (fm.fps_num, fm.fps_den), \\")
@@ -193,15 +204,17 @@ def ivtc_vpy_script(source: str, pad: int, trim_start: int, trim_end: int,
     a("# AviSynth: fm.TDecimate(mode=1, cycle=5, cycleR=1, chroma=true)")
     a("out = core.tivtc.TDecimate(fm, mode=1, cycle=5, cycleR=1, chroma=1)")
     a("")
+    if vc:
+        _video_stretches(a, vc, have_bob=bool(ranges and repair == "qtgmc"), probe=bool(probe_json))
     a("# --- trims (post-decimation 23.976 output frames) -----------------------")
     a("# Drop TRIM_START frames at the head and TRIM_END frames at the tail.")
     a("# (v38's AviSynth line Trim(start, -N) returned N frames: docs/findings/0002.)")
     if trim_end > 0:
-        # VapourSynth's std.Trim rejects AviSynth-style negative-from-end indices
-        # (it raises "invalid last frame specified"). AviSynth treats -1 as the
-        # last frame, so -N maps to the absolute index (num_frames - N). The
-        # resulting frame count is verified later by the video.frames / QC gate.
-        a("out = core.std.Trim(out, TRIM_START, out.num_frames - TRIM_END)")
+        # std.Trim's ``last`` is inclusive, so dropping TRIM_END frames keeps up to index
+        # num_frames - 1 - TRIM_END. (Before 2026-11-22 this was num_frames - TRIM_END, one frame
+        # too many; video-trim's vspipe count check refused it, so nothing wrong was ever encoded.
+        # Found on real VapourSynth; every v38 episode had TRIM_END = 0.)
+        a("out = core.std.Trim(out, TRIM_START, out.num_frames - 1 - TRIM_END)")
     else:
         a("out = core.std.Trim(out, TRIM_START, None)")
     a("")
@@ -248,3 +261,60 @@ def ivtc_vpy_script(source: str, pad: int, trim_start: int, trim_end: int,
         a("    _json.dump({'schema': 'fstk-ivtc-probe-v1', 'frames': _n, 'source_pad': SOURCE_PAD, 'map': _map}, _fh)")
     a("out.set_output()")
     return "\n".join(lines) + "\n"
+
+
+def _video_stretches(a, vc: dict[int, str], *, have_bob: bool, probe: bool) -> None:
+    """Script lines replacing the decimated frames of video-origin cycles (see fstk.media.hybrid)."""
+    from .hybrid import BOB_NEAREST, PROG_NEAREST
+
+    codes = set(vc.values())
+    a("# --- video-origin stretches at constant 23.976p (fstk.media.hybrid) -------")
+    a("# Decimation would keep a 29.97 sample stream and drop one frame in five. For these cycles the")
+    a("# output frame s of each 5-frame cycle is instead the real 59.94p (bobbed) frame nearest the")
+    a("# 23.976 grid (NI), the nearest real 29.97p frame (NP), or a motion-compensated in-between frame")
+    a("# (II/IP, operator choice). Always 4 frames per cycle: frame count and numbering are unchanged.")
+    a(f"VIDEO_CYCLES = {vc!r}")
+    if {"NI", "II"} & codes:
+        if not have_bob:
+            a("# 59.94p bob: znedi3 double rate, top field first (QTGMC repair not selected for this script)")
+            a("bob = core.znedi3.nnedi3(src, field=3)")
+        a("assert bob.num_frames == 2 * src.num_frames, ('bob length', bob.num_frames, src.num_frames)")
+    if "NI" in codes:
+        a(f"near_i = core.std.SelectEvery(bob, 10, {list(BOB_NEAREST)!r})")
+    if "NP" in codes:
+        a(f"near_p = core.std.SelectEvery(fm, 5, {list(PROG_NEAREST)!r})")
+    if {"II", "IP"} & codes:
+        a("def _flow(c, factor):")
+        a("    sup = core.mv.Super(c, pel=2, sharp=2, rfilter=4)")
+        a("    bv = core.mv.Analyse(sup, isb=True, blksize=16, overlap=8, search=3, truemotion=True)")
+        a("    fv = core.mv.Analyse(sup, isb=False, blksize=16, overlap=8, search=3, truemotion=True)")
+        a("    bv = core.mv.Recalculate(sup, bv, blksize=8, overlap=4)")
+        a("    fv = core.mv.Recalculate(sup, fv, blksize=8, overlap=4)")
+        a("    # mask=2 with ml: where vectors are unreliable FlowFPS falls back towards a blend, never a warp")
+        a("    f = core.mv.FlowFPS(c, sup, bv, fv, num=c.fps_num * factor, den=c.fps_den, mask=2, ml=100)")
+        a("    return core.std.SelectEvery(f, 20, [0, 5, 10, 15])     # 119.88p → 23.976 grid")
+    if "II" in codes:
+        a("interp_i = _flow(bob, 2)")
+    if "IP" in codes:
+        a("interp_p = _flow(fm, 4)")
+    if probe:
+        a("def _src_i(j):")
+        a(f"    return (10 * (j // 4) + {list(BOB_NEAREST)!r}[j % 4]) // 2")
+        a("def _src_p(j):")
+        a(f"    return 5 * (j // 4) + {list(PROG_NEAREST)!r}[j % 4]")
+    names = {"NI": ("near_i", "_src_i"), "NP": ("near_p", "_src_p"), "II": ("interp_i", "_src_i"),
+             "IP": ("interp_p", "_src_p")}
+    a("_alt = {" + ", ".join(f"{c!r}: {names[c][0]}" for c in sorted(codes)) + "}")
+    if probe:
+        a("# keep the probe's source-frame tag exact on replaced frames (nearest real field / source frame)")
+        a("def _tagger(fn):")
+        a("    def _t(n, f):")
+        a("        g = f.copy()")
+        a("        g.props['FstkN'] = fn(n)")
+        a("        return g")
+        a("    return _t")
+        for c in sorted(codes):
+            a(f"_alt[{c!r}] = core.std.ModifyFrame(_alt[{c!r}], _alt[{c!r}], _tagger({names[c][1]}))")
+    a("dec = out")
+    a("out = core.std.FrameEval(dec, lambda n: _alt[VIDEO_CYCLES[n // 4]] if (n // 4) in VIDEO_CYCLES else dec)")
+    a("")

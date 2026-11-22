@@ -249,6 +249,60 @@ def tfm_log_script(source: Path, pad: int, tfm_log: Path | None, *, side_by_side
     return "\n".join(lines) + "\n"
 
 
+def field_diff_script(source: Path, pad: int, ranges: list[tuple[int, int]], out_txt: Path) -> str:
+    """Same-parity field differences over source-frame ranges [a, b) (post-pad), for the film-plate test.
+
+    For each range the frames are split into fields (top first, as the TFM chain assumes) and field ``k`` is
+    compared with field ``k+2``; every evaluated frame appends ``<global index> <PlaneStatsDiff>`` to ``out_txt``
+    (written from a callback, so lines may be out of order; the reader sorts). Luma only, normalised 0..1, on
+    quarter-size fields so that grain and capture noise (identical-looking in a repeated and a new field) do not
+    swamp the picture motion the test looks for.
+    """
+    lines = [
+        "import threading",
+        "import vapoursynth as vs",
+        "core = vs.core",
+        f"src = core.bs.VideoSource({str(source)!r})",
+        f"src = core.std.Trim(src, {int(pad)}, None)",
+        "src = core.std.SetFrameProps(src, _FieldBased=2)",
+        f"RANGES = {[(int(a), int(b)) for a, b in ranges]!r}",
+        f"OUT = {str(out_txt)!r}",
+        "_lock = threading.Lock()",
+        "parts = []",
+        "for a, b in RANGES:",
+        "    f = core.std.SeparateFields(core.std.Trim(src, a, b - 1), tff=True)",
+        "    # quarter-size area average: grain/noise largely cancels, picture motion does not",
+        "    f = core.resize.Bilinear(f, f.width // 4, f.height // 4)",
+        "    parts.append(core.std.PlaneStats(core.std.Trim(f, 0, f.num_frames - 3), core.std.Trim(f, 2, None), plane=0))",
+        "clip = parts[0] if len(parts) == 1 else core.std.Splice(parts)",
+        "def _log(n, f):",
+        "    with _lock, open(OUT, 'a', encoding='ascii') as fh:",
+        "        fh.write('%d %.6f\\n' % (n, f.props['PlaneStatsDiff']))",
+        "    return f",
+        "clip = core.std.ModifyFrame(clip, clip, _log)",
+        "clip.set_output()",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def read_field_diffs(text: str, ranges: list[tuple[int, int]]) -> list[list[float]]:
+    """Split the logged differences back into one list per range (2·(b−a)−2 values each)."""
+    vals: dict[int, float] = {}
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0].isdigit():
+            vals[int(parts[0])] = float(parts[1])
+    out, i = [], 0
+    for a, b in ranges:
+        n = 2 * (b - a) - 2
+        seg = [vals.get(k) for k in range(i, i + n)]
+        if any(v is None for v in seg):
+            raise ValueError(f"field-difference log is missing values for range {a}..{b}")
+        out.append(seg)
+        i += n
+    return out
+
+
 def parse_info(text: str) -> dict:
     """Parse ``vspipe --info`` output (Frames/FPS/Width/Height/Format lines)."""
     def grab(key: str) -> str | None:

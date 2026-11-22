@@ -30,3 +30,13 @@ def test_moments_are_spread_out_and_ranked():
     fixes = [{"frame": f} for f in (24, 30, 36, 240)]                    # 1.0 s, 1.25 s, 1.5 s, 10 s
     ms = report.pick_moments(None, None, None, fixes, duration_s=100.0, frames=2400)
     assert [m["time_s"] for m in ms] == [1.0, 10.0]
+
+
+def test_operator_fixes_are_listed_and_smoothed_ones_flagged():
+    ops = [{"first": 10, "last": 11, "action": "interpolate", "note": "dropout", "grain_ratio_vs_neighbour": 0.6,
+            "grain_flag": True},
+           {"first": 50, "last": 70, "action": "dvd", "rect": [0, 0, 64, 20], "note": "rot band"}]
+    rep = report.build("e", "", video=_video(), audio={"ld": {}}, qc={"summary": {}}, fixes=[], duration_s=10,
+                       frames=240, operator_fixes=ops)
+    rows = [r for r in rep["rows"] if r["area"] == "Operator fixes"]
+    assert [r["status"] for r in rows] == ["FLAG", "NOTE"] and "DVD" in rows[1]["detail"] and "64x20" in rows[1]["detail"]

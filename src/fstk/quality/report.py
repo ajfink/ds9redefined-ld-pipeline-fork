@@ -53,10 +53,14 @@ def _video_rows(v: dict) -> list[dict]:
                          "; ".join(issues) if issues else "luma bit-identical outside fixes; grain retained"))
     h = v.get("hybrid", {})
     if h:
-        rows.append(_row("Cadence", "video-origin stretches (hybrid plan)",
-                         "NOTE" if h.get("status") == "RECOMMEND" else "PASS",
-                         f"{h.get('status')}: " + (f"{h.get('video_seconds', 0)} s of video-origin material; {h.get('delivery', '')}"
-                                                  if h.get("status") == "RECOMMEND" else h.get("reason", "all film cadence"))))
+        if h.get("status") == "CONVERTED":
+            detail = (f"{h['video_segments']} video-origin stretch(es), {h['video_seconds']} s at constant 23.976p "
+                      f"({h.get('interpolated_segments', 0)} interpolated, rest nearest real field); "
+                      f"{h.get('plate_segments', 0)} film plate(s) under an overlay kept as film")
+        else:
+            detail = h.get("reason", "all film cadence")
+        rows.append(_row("Cadence", "video-origin stretches", "NOTE" if h.get("status") == "CONVERTED" else "PASS",
+                         f"{h.get('status')}: {detail}"))
     return rows
 
 
@@ -130,11 +134,19 @@ def pick_moments(video: dict | None, audio: dict | None, qc: dict | None, fixes:
 
 
 def build(episode: str, title: str, *, video: dict | None, audio: dict | None, qc: dict | None,
-          fixes: list[dict], duration_s: float, frames: int, tags: list[dict] | None = None) -> dict[str, Any]:
+          fixes: list[dict], duration_s: float, frames: int, tags: list[dict] | None = None,
+          operator_fixes: list[dict] | None = None) -> dict[str, Any]:
     rows = (_video_rows(video) if video else [_row("Video", "video-quality", "FLAG", "stage has not run")])
     rows += (_audio_rows(audio) if audio else [_row("Audio", "audio-quality", "FLAG", "stage has not run")])
     rows += (_qc_rows(qc) if qc else [_row("Delivery", "QC gates", "FLAG", "qc-report has not run")])
     rows += _tag_rows(tags or [])
+    for f in operator_fixes or []:
+        src = {"dvd": "DVD frames (operator choice)", "interpolate": "interpolated from LD neighbours",
+               "ld-patch": "region copied from the neighbouring LD frame", "leave": "left as captured"}.get(f["action"], f["action"])
+        grain = (f"; grain {f['grain_ratio_vs_neighbour']} of the neighbour's" if "grain_ratio_vs_neighbour" in f else "")
+        rows.append(_row("Operator fixes", f"frames {f['first']}..{f['last']}", "FLAG" if f.get("grain_flag") else "NOTE",
+                         f"{src}{' in ' + 'x'.join(map(str, f['rect'][2:])) + ' area' if f.get('rect') else ''}{grain}: "
+                         f"{f.get('note', '')}"))
     counts = {s: sum(1 for r in rows if r["status"] == s) for s in ("PASS", "NOTE", "FLAG", "FAIL")}
     verdict = "FAIL" if counts["FAIL"] else ("REVIEW" if counts["FLAG"] else "CLEAN")
     return {"schema": SCHEMA, "episode": episode, "title": title, "verdict": verdict, "counts": counts,

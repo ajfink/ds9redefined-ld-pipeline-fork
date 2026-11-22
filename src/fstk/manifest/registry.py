@@ -187,6 +187,11 @@ FIELDS: tuple[FieldDef, ...] = (
     _F("video.inserts", "measurement", "int", "Hybrid/interlaced inserts", "count", "video.inserts", 0),
     _F("video.repair_frames", "measurement", "int", "Frames repaired", "count", "video.repair_frames", 0),
     _F("video.repair_pct", "measurement", "number", "Repaired share", "%", "video.repair_pct", 0),
+    _F("video.hybrid_seconds", "measurement", "number", "Video-origin stretches converted at 23.976p", "s"),
+    _F("video.manual_fixes", "setting", "list",
+       "Operator frame fixes from the final review [{first, last, action, rect?, src?, note}] (fstk.media.manual_fix)"),
+    _F("video.hybrid_choices", "setting", "dict",
+       "Per-stretch treatment of video-origin stretches {first_cycle: nearest|interpolate} (default nearest)"),
     # ---------------------------------------------------------------- picture quality (video-quality stage)
     _F("quality.crop", "measurement", "dict", "Locked active-area crop {left,top,right,bottom}", "px"),
     _F("quality.sar", "measurement", "str", "Locked sample aspect ratio (num:den)"),

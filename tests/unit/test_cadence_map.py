@@ -46,7 +46,7 @@ def test_repair_ranges_edges():
 
 def test_tail_trim_drops_frames_from_end():
     script = ivtc_vpy_script("/m.mov", 118, 12, 30, [], "none", expected_frames=60000)
-    assert "out = core.std.Trim(out, TRIM_START, out.num_frames - TRIM_END)" in script
+    assert "out = core.std.Trim(out, TRIM_START, out.num_frames - 1 - TRIM_END)" in script
     assert "assert out.num_frames == 60000" in script
     assert "TRIM_END = 30" in script
     no_tail = ivtc_vpy_script("/m.mov", 118, 12, 0, [], "none")

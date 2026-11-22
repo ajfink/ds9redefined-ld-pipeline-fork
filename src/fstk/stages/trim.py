@@ -77,13 +77,26 @@ class VideoTrim(Stage):
         dvd = m.get("mode.dvd_reference_available") is True
         keys = ("stack_master", "di_map") + (("master_descriptors", "alignment_report") if dvd else ())
         inputs = [ctx.artifact_path(k, m) for k in keys]
+        video_cycles, hybrid_info = {}, None
+        if m.artifact("hybrid_plan"):
+            from fstk.media import hybrid
+            doc = read_json(ctx.artifact_path("hybrid_plan", m))
+            try:
+                segs = hybrid.apply_choices([hybrid.Segment.from_dict(x) for x in doc["segments"]],
+                                            m.get("video.hybrid_choices"))
+            except ValueError as exc:
+                raise GateError(f"video.hybrid_choices: {exc}") from None
+            video_cycles = hybrid.cycle_treatments(segs)
+            hybrid_info = hybrid.summary(segs)
+            inputs.append(ctx.artifact_path("hybrid_plan", m))
         return StepPlan(self.id, params, inputs=inputs, outputs=[files["script"], files["probe_json"], files["report"]],
                         input_scope={str(inputs[0]): "head-tail"},
                         summary=f"probe the IVTC frame map, trim, write the encode script (repair {repair})",
                         data={**{k: str(v) for k, v in files.items()}, "repair": repair, "ranges": ranges, "dvd": dvd,
                               "master": str(inputs[0]), "pad": int(m.require("audio.pad_frames")),
                               "chroma": m.get("mode.chroma_output") or DEFAULT_CHROMA,
-                              "stack_frames": int(m.require("stack.frames"))})
+                              "stack_frames": int(m.require("stack.frames")),
+                              "video_cycles": {str(k): v for k, v in video_cycles.items()}, "hybrid": hybrid_info})
 
     def _origin(self, ctx, d, m) -> tuple[int, np.ndarray, int | None, list[str]]:
         """(programme start master frame, flat mask, LD-only tail start, notes) for the episode's route."""
@@ -111,9 +124,10 @@ class VideoTrim(Stage):
         vs = ctx.tool("vapoursynth")
         origin, flat, tail_cut, route_notes = self._origin(ctx, d, m)
         expected_head = max(0, (origin - d["pad"]) * 4 // 5)
+        vc = {int(k): v for k, v in (d.get("video_cycles") or {}).items()}
         script = ivtc_vpy_script(d["master"], d["pad"], 0, 0, [tuple(r) for r in d["ranges"]], d["repair"],
                                  probe_json=d["probe_json"], probe_head=expected_head + HEAD_PROBE_MARGIN,
-                                 probe_tail=TAIL_PROBE, chroma=d["chroma"])
+                                 probe_tail=TAIL_PROBE, chroma=d["chroma"], video_cycles=vc)
         Path(d["probe_script"]).parent.mkdir(parents=True, exist_ok=True)
         atomic_write_bytes(d["probe_script"], script.encode())
         ctx.report(0.05, "probing the IVTC frame map (head and tail)")
@@ -129,7 +143,7 @@ class VideoTrim(Stage):
             raise GateError(f"trim decision: {exc}") from None
         dec.notes = route_notes + dec.notes
         final = ivtc_vpy_script(d["master"], d["pad"], dec.head_trim, dec.tail_trim, [tuple(r) for r in d["ranges"]],
-                                d["repair"], expected_frames=dec.frames, chroma=d["chroma"])
+                                d["repair"], expected_frames=dec.frames, chroma=d["chroma"], video_cycles=vc)
         atomic_write_bytes(d["script"], final.encode())
         ctx.report(0.6, "confirming the trimmed script")
         info2 = vs.info(Path(d["script"]))
@@ -143,7 +157,7 @@ class VideoTrim(Stage):
                 break
         report = {"schema": "fstk-video-trim-v1", "episode": str(ctx.episode), "created_utc": utc_now_iso(),
                   "decision": dec.summary(), "origin_master_frame": origin, "route": "dvd" if d["dvd"] else "no-dvd", "tail_ld_only_from": tail_cut,
-                  "repair": d["repair"], "repair_ranges": len(d["ranges"]), "probe": d["probe_json"],
+                  "repair": d["repair"], "repair_ranges": len(d["ranges"]), "video_stretches": d.get("hybrid"), "probe": d["probe_json"],
                   "script": d["script"], "vspipe_info": info2,
                   "v38_priors": "delta_s 49.5–52.4 s and tail_trim 0 across 12 completed v38 episodes"}
         atomic_write_json(d["report"], report)

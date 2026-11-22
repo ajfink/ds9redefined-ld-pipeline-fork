@@ -20,9 +20,8 @@ from statistics import median
 import numpy as np
 
 from fstk.core.errors import ArtifactError, GateError
-from fstk.core.fsio import atomic_write_bytes, atomic_write_json
+from fstk.core.fsio import atomic_write_bytes, atomic_write_json, read_json
 from fstk.core.timeutil import utc_now_iso, utc_stamp
-from fstk.media import pad_repair
 from fstk.media.finish import finish_script
 from fstk.quality import conceal, geometry, measure
 
@@ -63,12 +62,9 @@ class VideoQuality(Stage):
 
     def plan(self, ctx, params):
         m = ctx.manifest
-        base = ctx.artifact_path("encode_script", m)
-        if m.artifact("padfix_script"):
-            fixed = ctx.artifact_path("padfix_script", m)
-            if not pad_repair.padfix_matches_base(fixed.read_text(encoding="utf-8"), base.read_text(encoding="utf-8")):
-                raise GateError("padfix_script was built from an older encode script; re-run pad-audit and pad-repair")
-            base = fixed
+        from .framefix import resolve_chain
+
+        base = resolve_chain(ctx, m)     # encode script → PAD splice → operator fixes, each verified
         run = utc_stamp()[:15].lower()
         slug = ctx.episode.slug
         outs = {"script": ctx.root("scripts") / f"ivtc-finish-{slug}-{run}.vpy",
@@ -217,25 +213,17 @@ class VideoQuality(Stage):
         return out
 
     def _hybrid(self, ctx, m, report_path: Path) -> dict:
+        """What the delivery does with video-origin stretches (decided in cadence-evidence, applied by video-trim)."""
         from fstk.media import hybrid
-        from fstk.media.cadence import parse_tfm_log
 
-        if not m.artifact("tfm_log"):
-            return {"status": "SKIP", "reason": "no cadence TFM log recorded"}
-        try:
-            rows = parse_tfm_log(ctx.artifact_path("tfm_log", m).read_text(encoding="utf-8", errors="replace"))
-        except (ValueError, OSError) as exc:
-            return {"status": "SKIP", "reason": f"TFM log unreadable: {exc}"}
-        segments = hybrid.plan_segments(hybrid.classify_cycles(rows))
-        info = hybrid.summary(segments)
-        info["status"] = "RECOMMEND" if info["recommend_hybrid"] else "NOT NEEDED"
-        info["delivery"] = ("advisory: the delivered file stays constant 23.976p; hybrid variable-rate delivery "
-                            "(59.94p/29.97p segments + Matroska timecodes) is planned here and needs mkvmerge")
-        if info["recommend_hybrid"]:
-            tc = report_path.with_name(report_path.stem + "-hybrid-timecodes.txt")
-            atomic_write_bytes(tc, hybrid.timecodes_v2(segments).encode("ascii"))
-            info["timecodes_file"] = str(tc)
-        info["segments"] = info["segments"][:200]
+        if not m.artifact("hybrid_plan"):
+            return {"status": "SKIP", "reason": "no hybrid plan recorded (cadence-evidence predates it)"}
+        doc = read_json(ctx.artifact_path("hybrid_plan", m))
+        segs = hybrid.apply_choices([hybrid.Segment.from_dict(x) for x in doc["segments"]],
+                                    m.get("video.hybrid_choices"))
+        info = hybrid.summary(segs)
+        info["status"] = "CONVERTED" if info["video_segments"] else "NOT NEEDED"
+        info["plate_tests"] = doc.get("plate_tests", {})
         return info
 
     def _dvd_samples(self, ctx, vs, ff, indices: list[int], d: dict):

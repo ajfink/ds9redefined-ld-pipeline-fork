@@ -150,6 +150,29 @@ def ld_to_master_frame(out_frame: int, *, head_trim: int, pad: int) -> int:
     return (out_frame + head_trim) * 5 // 4 + pad
 
 
+def dvd_borrow(ctx, work: Path, f: int, ld_prev, ld_next, gap: int, *, head: int, pad: int):
+    """DVD frames standing in for delivered frames ``f``..``f+gap−1``, registered to the LD raster and
+    colour-matched to an LD neighbour → (Borrowed | None, reason). Also used by operator DVD fixes."""
+    m = ctx.manifest
+    rec = m.require("video.dvd_alignment")
+    master = ld_to_master_frame(f, head_trim=head, pad=pad)
+    act = next((a for a in rec["acts"] if a["start_frame"] <= master <= a["end_frame"]), None)
+    if act is None:
+        return None, "no accepted act covers this frame"
+    off = float(np.interp(master, act["knots"], act["values"]))
+    centre = round(master + off)
+    first = max(0, centre - DVD_WINDOW)
+    work.mkdir(parents=True, exist_ok=True)
+    win = work / f"dvd-window-{f}.vpy"
+    atomic_write_bytes(win, _dvd_window_script(ctx.artifact_path("dvd", m), first, centre + DVD_WINDOW + gap).encode())
+    vs = ctx.tool("vapoursynth")
+    info = vs.info(win)
+    frames = vs.frames(win, 0, info["frames"] - 1, width=int(info["width"]), height=int(info["height"]))
+    got = pr.borrow_dvd_frame(ld_prev, ld_next, frames, gap)
+    return got, ("" if got else f"flank frames not found {gap + 1} apart in the aligned DVD window, or the "
+                                "registered DVD frames do not reproduce the LD neighbour")
+
+
 @register
 class PadRepair(Stage):
     id = "pad-repair"
@@ -196,23 +219,7 @@ class PadRepair(Stage):
 
     def _borrow(self, ctx, d, f, ld_prev, ld_next, gap=1):
         """DVD window around the aligned position of output frame ``f`` → Borrowed | None (+reason)."""
-        m = ctx.manifest
-        rec = m.require("video.dvd_alignment")
-        master = ld_to_master_frame(f, head_trim=d["head"], pad=d["pad"])
-        act = next((a for a in rec["acts"] if a["start_frame"] <= master <= a["end_frame"]), None)
-        if act is None:
-            return None, "no accepted act covers this frame"
-        off = float(np.interp(master, act["knots"], act["values"]))
-        centre = round(master + off)
-        first = max(0, centre - DVD_WINDOW)
-        win = Path(d["work"]) / f"dvd-window-{f}.vpy"
-        atomic_write_bytes(win, _dvd_window_script(ctx.artifact_path("dvd", m), first, centre + DVD_WINDOW).encode())
-        vs = ctx.tool("vapoursynth")
-        info = vs.info(win)
-        frames = vs.frames(win, 0, info["frames"] - 1, width=int(info["width"]), height=int(info["height"]))
-        got = pr.borrow_dvd_frame(ld_prev, ld_next, frames, gap)
-        return got, ("" if got else f"flank frames not found {gap + 1} apart in the aligned DVD window, or the "
-                                    "registered DVD frames do not reproduce the LD neighbour")
+        return dvd_borrow(ctx, Path(d["work"]), f, ld_prev, ld_next, gap, head=d["head"], pad=d["pad"])
 
     def _rife_run(self, ctx, rife, work, run, ld_prev, ld_next, w, h):
         """RIFE at t = k/(L+1) between the real neighbours of a run of L PADs → L uint16 images."""

@@ -232,3 +232,98 @@ def test_delivery_review_plays_the_h264_proxy_when_a_chunk_has_one(tmp_path, qtb
     calls.clear()
     dlg.play_chunk(1)                      # no proxy: the deliverable at the chunk start
     assert ("seek", 600.0) in calls
+
+
+def _with_stretches(prof, ws, tmp_path):
+    from fstk.media import hybrid
+
+    probe = prof.root("probe", efm.EP)
+    probe.mkdir(parents=True, exist_ok=True)
+    segs = [hybrid.Segment(hybrid.FILM, 0, 100), hybrid.Segment(hybrid.VIDEO_I, 100, 130),
+            hybrid.Segment(hybrid.VIDEO_I, 200, 220, plate=True)]
+    (probe / "hybrid-plan.json").write_text(json.dumps({"segments": [s.as_dict() for s in segs]}))
+    reports = prof.root("reports", efm.EP)
+    (reports / "video-trim-20261122t000000.json").write_text(json.dumps(
+        {"video_stretches": hybrid.summary(segs), "repair": "qtgmc"}))
+    clip = tmp_path / "stretch-100.mkv"
+    clip.write_bytes(b"x")
+    (reports / "stretch-preview-20261122t000001.json").write_text(json.dumps(
+        {"previews": [{"first_cycle": 100, "clip": str(clip)}]}))
+    with ws.store.transaction(by="t", reason="setup") as m:
+        m.set_artifact("hybrid_plan", root="probe", name="hybrid-plan.json")
+        m.set("video.head_trim", 40, by="t")
+        m.set("video.frames", 50000, by="t")
+    return clip
+
+
+def test_delivery_review_stretch_choice_writes_a_fresh_encode_plan(tmp_path, qtbot, monkeypatch):
+    from fstk.ui import reviews
+
+    prof, ws, report = _delivery_env(tmp_path, {"pass": 2, "fail": 0, "failed_gates": [], "unverified_gates": []},
+                                     no_dvd=True)
+    clip = _with_stretches(prof, ws, tmp_path)
+    dlg = reviews.DeliveryReview(Services(prof), "DS9:S01E20", actor="op")
+    qtbot.addWidget(dlg)
+    assert dlg.stretches.rowCount() == 1                           # the film plate is not offered
+    assert dlg.stretches.item(0, 3).text() == "nearest" and not dlg.stretch_button.isEnabled()
+    assert dlg.stretch_rows[0]["start_s"] == pytest.approx((400 - 40) * 1001 / 24000, abs=0.01)
+    loaded = []
+    monkeypatch.setattr(dlg.media, "load", lambda p, keep_position=True: loaded.append(p))
+    monkeypatch.setattr(dlg.media, "play", lambda: None)
+    dlg.play_stretch(0)
+    assert loaded == [str(clip)]
+    dlg.stretches.cellWidget(0, 4).setCurrentIndex(1)
+    assert dlg.stretch_button.isEnabled()
+    plans = []
+    dlg.plan_ready.connect(plans.append)
+    dlg.apply_stretches(note="the phaser sweep judders on nearest; interpolation is clean")
+    plan = json.loads(Path(plans[0]).read_text())
+    assert [s["stage"] for s in plan["steps"]][:2] == ["video-trim", "pad-audit"]
+    assert "encode-final" in [s["stage"] for s in plan["steps"]]
+    assert ws.store.load().get("video.hybrid_choices") == {"100": "interpolate"}
+
+
+def test_delivery_review_frame_fix_tab_previews_and_applies(tmp_path, qtbot, monkeypatch):
+    from fstk.ui import reviews
+
+    prof, ws, report = _delivery_env(tmp_path, {"pass": 2, "fail": 0, "failed_gates": [], "unverified_gates": []},
+                                     no_dvd=True)
+    reports = prof.root("reports", efm.EP)
+    (reports / "episode-quality-20261122t000000.json").write_text(json.dumps(
+        {"episode": "DS9:S01E20", "verdict": "REVIEW", "counts": {"PASS": 0, "NOTE": 0, "FLAG": 1, "FAIL": 0},
+         "rows": [], "moments": [{"time_s": 10.01, "reason": "dropout left as captured", "score": 100}]}))
+    with ws.store.transaction(by="t", reason="setup") as m:
+        m.set("video.frames", 50000, by="t")
+    dlg = reviews.DeliveryReview(Services(prof), "DS9:S01E20", actor="op")
+    qtbot.addWidget(dlg)
+    assert dlg.moments.count() == 1
+    dlg._add_fix_from_moment(dlg.moments.item(0))
+    combo = dlg.fix_table.cellWidget(0, 2)
+    combo_keys = [combo.itemData(i) for i in range(combo.count())]
+    assert "dvd" not in combo_keys                                  # no DVD route: the DVD option is not offered
+    assert dlg.fix_table.item(0, 0).text() == "240"
+    warnings = []
+    monkeypatch.setattr(reviews.QMessageBox, "warning", lambda *a: warnings.append(a[2]))
+    plans = []
+    dlg.plan_ready.connect(plans.append)
+    dlg.preview_fix()                                              # no note yet → refused
+    assert warnings and "8 characters" in warnings[0] and not plans
+    dlg.fix_table.item(0, 5).setText("dropout streak across the console")
+    dlg.preview_fix()
+    step = json.loads(Path(plans[0]).read_text())["steps"][0]
+    assert step["stage"] == "fix-preview" and step["params"]["fix"]["first"] == 240
+    work = tmp_path / "pv"
+    work.mkdir()
+    from PIL import Image
+    for k in ("captured", "fixed"):
+        Image.new("RGB", (40, 20)).save(work / f"{k}.png")
+    (reports / "fix-preview-20261122t000002.json").write_text(json.dumps(
+        {"fix": step["params"]["fix"], "detail": {"grain_ratio_vs_neighbour": 0.62, "grain_flag": True},
+         "strips": {k: str(work / f"{k}.png") for k in ("captured", "fixed")},
+         "clips": {"captured": "a.mkv", "fixed": "b.mkv"}}))
+    dlg.show_fix_preview()
+    assert "0.62" in dlg.fix_preview_text.text() and dlg.fix_strips.pixmap().height() == 40
+    dlg.apply_fixes()
+    plan = json.loads(Path(plans[-1]).read_text())
+    assert [s["stage"] for s in plan["steps"]][:3] == ["frame-fixes", "video-quality", "encode-final"]
+    assert ws.store.load().get("video.manual_fixes")[0]["first"] == 240

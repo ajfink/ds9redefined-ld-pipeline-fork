@@ -351,6 +351,156 @@ class Services:
         png = Path(rep["contact_sheet"]) if rep.get("contact_sheet") else None
         return render_markdown(rep), (png if png and png.is_file() else None)
 
+    # ---------------------------------------------------------------- video-origin stretches
+    def video_stretches(self, episode: str | EpisodeId) -> list[dict[str, Any]]:
+        """Converted video-origin stretches: timing, current choice, what the latest encode script used, preview."""
+        from fstk.media import hybrid
+
+        ws = self.workspace(episode)
+        m = ws.store.load()
+        if not m.artifact("hybrid_plan"):
+            return []
+        root = self.profile.root("probe", ws.episode)
+        doc = json.loads((root / m.artifact("hybrid_plan")["name"]).read_text(encoding="utf-8"))
+        segs = hybrid.apply_choices([hybrid.Segment.from_dict(x) for x in doc["segments"]],
+                                    m.get("video.hybrid_choices"))
+        reports = self.profile.root("reports", ws.episode)
+        used: dict[str, str] = {}
+        trims = sorted(reports.glob("video-trim-*.json")) if reports.is_dir() else []
+        if trims:
+            vs_ = json.loads(trims[-1].read_text(encoding="utf-8")).get("video_stretches") or {}
+            used = {str(x["first_cycle"]): x["treatment"] for x in vs_.get("segments", []) if x.get("active")}
+        previews: dict[str, dict] = {}
+        found = sorted(reports.glob("stretch-preview-*.json")) if reports.is_dir() else []
+        if found:
+            for p in json.loads(found[-1].read_text(encoding="utf-8")).get("previews", []):
+                previews[str(p["first_cycle"])] = p
+        head = int(m.get("video.head_trim") or 0)
+        out = []
+        for sg in segs:
+            if not sg.active:
+                continue
+            key = str(sg.first_cycle)
+            pv = previews.get(key, {})
+            out.append({"first_cycle": sg.first_cycle, "kind": sg.kind, "seconds": round(sg.seconds, 2),
+                        "start_s": round(max(0, sg.output_frames[0] - head) * 1001 / 24000, 2),
+                        "treatment": sg.treatment, "encoded": used.get(key), "preview": pv.get("clip")})
+        return out
+
+    def write_stretch_plan(self, episode: str | EpisodeId, *, choices: dict[str, str], actor: str,
+                           note: str) -> Path:
+        """Record the per-stretch treatments and plan a fresh encode from the master with them.
+
+        video-trim (new encode script) → pad-audit → pad-repair → frame-fixes → video-quality → encode-final → remux →
+        qc-report → episode-report. Audio, trims and frame numbering are unaffected by the choice.
+        """
+        from fstk.core.fsio import atomic_write_json
+        from fstk.core.timeutil import utc_stamp
+        from fstk.media import hybrid
+        from fstk.workflow.engine import PLAN_SCHEMA, validate_plan
+
+        bad = {v for v in choices.values()} - set(hybrid.TREATMENTS)
+        if bad:
+            raise FstkError(f"unknown treatment(s): {sorted(bad)}")
+        if len(note.strip()) < 8:
+            raise FstkError("say what you saw in the previews (at least 8 characters)")
+        ws = self.workspace(episode)
+        with ws.store.transaction(by=actor, reason="video-origin stretch treatments chosen in the final review") as m:
+            m.set("video.hybrid_choices", dict(sorted(choices.items())), by=actor, note=note.strip())
+        job = f"stretches-{utc_stamp()[:15].lower()}"
+        chain = [("video-trim", "video-trim"), ("pad-audit", "pad-audit"), ("pad-repair", "pad-repair"),
+                 ("frame-fixes", "frame-fixes"), ("video-quality", "video-quality"), ("encode", "encode-final"), ("remux", "remux"),
+                 ("qc", "qc-report"), ("episode-report", "episode-report")]
+        steps, prev = [], None
+        for sid, stage in chain:
+            params: dict[str, Any] = {}
+            if stage == "encode-final":
+                frames = int(ws.store.load().get("video.frames") or 0)
+                params = {"planned_gib": round(frames * 110_000 / 2**30, 2),
+                          "estimate_basis": f"{frames} output frames × 110000 B (v38 deliveries ≈ 72 KB/frame)"}
+            steps.append({"id": sid, "stage": stage, "after": [prev] if prev else [], "params": params})
+            prev = sid
+        plan = {"schema": PLAN_SCHEMA, "episode": ws.episode.canonical, "job": job, "steps": steps}
+        validate_plan(plan)
+        path = ws.state_dir / "plans" / f"{job}.plan.json"
+        atomic_write_json(path, plan)
+        return path
+
+    # ---------------------------------------------------------------- operator frame fixes
+    def fix_context(self, episode: str | EpisodeId) -> dict[str, Any]:
+        """What the frame-fix tab needs: worst moments (as frames), current fixes, whether the DVD route exists."""
+        ws = self.workspace(episode)
+        m = ws.store.load()
+        d = self.profile.root("reports", ws.episode)
+        moments = []
+        found = sorted(d.glob("episode-quality-*.json")) if d.is_dir() else []
+        if found:
+            for mo in json.loads(found[-1].read_text(encoding="utf-8")).get("moments", []):
+                moments.append({**mo, "frame": round(float(mo["time_s"]) * 24000 / 1001)})
+        return {"moments": moments, "fixes": list(m.get("video.manual_fixes") or []),
+                "frames": m.get("video.frames"),
+                "dvd": bool(m.get("mode.dvd_reference_available") is True and m.get("video.dvd_alignment")
+                            and m.artifact("dvd"))}
+
+    def write_fix_preview_plan(self, episode: str | EpisodeId, fix: dict[str, Any]) -> Path:
+        from fstk.core.fsio import atomic_write_json
+        from fstk.core.timeutil import utc_stamp
+        from fstk.media import manual_fix as mf
+        from fstk.workflow.engine import PLAN_SCHEMA, validate_plan
+
+        ws = self.workspace(episode)
+        frames = int(ws.store.load().get("video.frames") or 0)
+        problems = mf.validate([mf.Fix.from_dict(fix)], frames=frames)
+        if problems:
+            raise FstkError("; ".join(problems))
+        job = f"fix-preview-{utc_stamp()[:15].lower()}"
+        plan = {"schema": PLAN_SCHEMA, "episode": ws.episode.canonical, "job": job,
+                "steps": [{"id": "fix-preview", "stage": "fix-preview", "after": [], "params": {"fix": fix}}]}
+        validate_plan(plan)
+        path = ws.state_dir / "plans" / f"{job}.plan.json"
+        atomic_write_json(path, plan)
+        return path
+
+    def latest_fix_preview(self, episode: str | EpisodeId) -> dict[str, Any] | None:
+        d = self.profile.root("reports", self.workspace(episode).episode)
+        found = sorted(d.glob("fix-preview-*.json")) if d.is_dir() else []
+        return json.loads(found[-1].read_text(encoding="utf-8")) if found else None
+
+    def write_fixes_plan(self, episode: str | EpisodeId, *, fixes: list[dict[str, Any]], actor: str) -> Path:
+        """Record the operator's frame fixes and plan a fresh encode from the master with them:
+        frame-fixes → video-quality → encode-final → remux → qc-report → episode-report."""
+        from fstk.core.fsio import atomic_write_json
+        from fstk.core.timeutil import utc_stamp
+        from fstk.media import manual_fix as mf
+        from fstk.workflow.engine import PLAN_SCHEMA, validate_plan
+
+        ws = self.workspace(episode)
+        m = ws.store.load()
+        parsed = [mf.Fix.from_dict(f) for f in fixes]
+        problems = mf.validate(parsed, frames=int(m.get("video.frames") or 0))
+        if problems:
+            raise FstkError("; ".join(problems))
+        with ws.store.transaction(by=actor, reason="frame fixes chosen in the final review") as w:
+            w.set("video.manual_fixes", [f.as_dict() for f in sorted(parsed, key=lambda f: f.first)], by=actor,
+                  note=f"{len(parsed)} fix(es) from the final review")
+        frames = int(m.get("video.frames") or 0)
+        job = f"frame-fixes-{utc_stamp()[:15].lower()}"
+        chain = [("frame-fixes", "frame-fixes"), ("video-quality", "video-quality"), ("encode", "encode-final"),
+                 ("remux", "remux"), ("qc", "qc-report"), ("episode-report", "episode-report")]
+        steps, prev = [], None
+        for sid, stage in chain:
+            params: dict[str, Any] = {}
+            if stage == "encode-final":
+                params = {"planned_gib": round(frames * 110_000 / 2**30, 2),
+                          "estimate_basis": f"{frames} output frames × 110000 B (v38 deliveries ≈ 72 KB/frame)"}
+            steps.append({"id": sid, "stage": stage, "after": [prev] if prev else [], "params": params})
+            prev = sid
+        plan = {"schema": PLAN_SCHEMA, "episode": ws.episode.canonical, "job": job, "steps": steps}
+        validate_plan(plan)
+        path = ws.state_dir / "plans" / f"{job}.plan.json"
+        atomic_write_json(path, plan)
+        return path
+
     def qc_result(self, path: str | Path) -> dict[str, Any]:
         return json.loads(Path(path).read_text(encoding="utf-8"))
 

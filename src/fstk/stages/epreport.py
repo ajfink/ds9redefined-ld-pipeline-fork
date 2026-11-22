@@ -89,7 +89,8 @@ class EpisodeReport(Stage):
                          "value": codec, "expected": "/".join(LOSSLESS_MASTER_CODECS),
                          "status": "PASS" if codec in LOSSLESS_MASTER_CODECS else "FLAG"})
         rep = report.build(str(ctx.episode), m.title or "", video=video, audio=audio, qc=qc,
-                           fixes=_fixes(art("quality_fixes")), duration_s=duration, frames=frames, tags=tags)
+                           fixes=_fixes(art("quality_fixes")), duration_s=duration, frames=frames, tags=tags,
+                           operator_fixes=(_load(art("manualfix_report")) or {}).get("fixes", []))
         rep["delivered_tags"] = tags
         ctx.report(0.3, "contact sheet of the worst moments")
         n = contact.contact_sheet(ctx.tool("ffmpeg"), Path(d["deliverable"]), rep["moments"], Path(d["png"]))

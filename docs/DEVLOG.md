@@ -698,3 +698,27 @@ Owner list implemented under the rule *grain is paramount, DVD is never a pixel 
   and its `prores_profile` dropped), the master is `<code>-stack-master.mkv`, and `stack-render` fails when the
   rendered master's codec is not FFV1. `episode-report` flags an episode whose master is still lossy (re-render).
 - Not verified here: the installed Orc build's acceptance of `mkv-ffv1` (Windows only); the render check fails closed.
+
+## CP20 — 2026-11-22 video-origin stretches at constant 23.976p, operator frame fixes, DVD as opt-in
+Owner decisions: one constant output rate (the 23.976 film rate); video-origin stretches use the nearest real
+frames by default with interpolation as a per-stretch choice; frame fixes chosen from the contact sheet; the DVD
+only as a reviewed, opt-in source with side-by-side and in-context previews.
+- `fstk.media.hybrid` rewritten for CFR (no VFR/timecodes, no mkvmerge). `cadence-evidence` classifies cycles,
+  runs a field-difference pass on candidate stretches and keeps film plates under video overlays as film
+  (telecine field repeats measured on quarter-size fields so grain/noise does not swamp motion; checked on the
+  S01E20 master, a synthetic plate+overlay, telecined film and true 60i). `hybrid_plan` artifact.
+- IVTC script: after TDecimate, video cycles are replaced by bob frames 0,2,5,7 of every 10 (nearest, real
+  pixels; QTGMC bob when QTGMC repair is used, znedi3 otherwise), source frames 0,1,2,4 of every 5 for native
+  29.97p, or MVTools FlowFPS frames (interpolate). Always 4 per cycle; verified on real VapourSynth (exact frame
+  identity, film cycles untouched, probe tags). `video.hybrid_choices` per stretch; `stretch-preview` renders
+  side-by-side clips; GUI tab "Video-origin stretches" records the choice and plans a fresh encode.
+- `frame-fixes` (after pad-repair; chain = encode script → PAD splice → operator fixes → finishing):
+  interpolate (1–3 frames, refused across a cut), ld-patch (region from the neighbouring clean LD frame), dvd
+  (whole frame or region; PAD-borrow registration + colour match), leave. Grain of rebuilt frames is measured
+  and flagged. `fix-preview` renders captured/fixed strips (DVD conformed beside LD) and, up to 2 s, in-context
+  clips. GUI tab "Frame fixes". Verified on real VapourSynth (untouched frames identical, region bounds exact).
+- `encode-final` numbers re-encodes (`-r2`, …) instead of refusing; nothing is overwritten.
+- Bug fixed: the IVTC tail trim kept one frame too many (`std.Trim` last is inclusive). video-trim's count check
+  refused it, so nothing wrong was encoded; every v38 episode had tail_trim 0.
+- Not built: re-stacking a range without the damaged capture (needs Orc on Windows); RIFE for frame fixes and
+  stretches (MVTools is used; RIFE remains the PAD engine).

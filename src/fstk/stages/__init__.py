@@ -10,6 +10,7 @@ from . import (  # noqa: F401
     efm,
     encode,
     epreport,
+    framefix,
     intake,
     pads,
     qc,
@@ -17,6 +18,7 @@ from . import (  # noqa: F401
     remux,
     retime,
     stack,
+    stretchpreview,
     trim,
 )
 from .base import REGISTRY, Stage, get_stage, register  # noqa: F401

@@ -103,3 +103,46 @@ def test_cadence_inside_the_v38_ranges_is_accepted_automatically(env, monkeypatc
     assert ws.store.load().get("video.inserts") == 1
     report = json.loads((prof.root("reports", EP) / "cadence.json").read_text())
     assert report["auto_accept_issues"] == []
+
+
+class FakeVSHybrid(FakeVS):
+    """A 10 s true-video stretch (all fields combed) at frames 1500–1799; the field-difference pass reports
+    a telecine repeat pattern when ``plate`` is set."""
+
+    def __init__(self, plate):
+        super().__init__()
+        self.plate = plate
+
+    def full_decode(self, script, *, name="", cancel=None):
+        text = Path(script).read_text()
+        if name == "field-diff":
+            out = re.search(r"OUT = '([^']+)'", text).group(1)
+            ranges = eval(re.search(r"RANGES = (\[.*\])", text).group(1))
+            n = sum(2 * (b - a) - 2 for a, b in ranges)
+            vals = [(0.001 if self.plate and k % 10 in (3, 8) else 0.02 + (k % 7) * 0.001) for k in range(n)]
+            Path(out).write_text("".join(f"{k} {v:.6f}\n" for k, v in reversed(list(enumerate(vals)))))
+            return FullDecode(n, 0, 0, [])
+        log = re.search(r"output='([^']+)'", text).group(1)
+        lines = synthetic_log().splitlines()
+        for i in range(1500, 1800):
+            lines[i] = f"{i} c [200]"
+        Path(log).write_text("\n".join(lines) + "\n")
+        return FullDecode(self.frames, 0, 0, [])
+
+
+@pytest.mark.parametrize("plate", [False, True])
+def test_video_stretch_gets_a_hybrid_plan_and_plate_test(env, monkeypatch, plate):
+    from fstk.stages import cadence
+
+    monkeypatch.setitem(cadence.AUTO_ACCEPT, "max_repair_pct", 100.0)
+    monkeypatch.setitem(cadence.AUTO_ACCEPT, "max_inserts", 100)
+    monkeypatch.setitem(cadence.AUTO_ACCEPT, "min_period5_pct", 0.0)
+    monkeypatch.setitem(cadence.AUTO_ACCEPT, "max_unmatched", 100)
+    prof, ws = env
+    st = run(env, f"h{int(plate)}", FakeVSHybrid(plate))["steps"]["cad"]
+    assert st["status"] == "passed", st
+    m = ws.store.load()
+    doc = json.loads((prof.root("probe", EP) / m.artifact("hybrid_plan")["name"]).read_text())
+    seg = next(s for s in doc["segments"] if s["kind"] == "video-interlaced")
+    assert seg["source_frames"][0] == 1500 and seg["plate"] is plate and seg["active"] is (not plate)
+    assert m.get("video.hybrid_seconds") == (0.0 if plate else pytest.approx(10.01, abs=0.01))

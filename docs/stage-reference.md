@@ -39,8 +39,8 @@ Full-side VapourSynth TFM log, cadence analysis, and repair ranges; accepted aut
 - resource: compute
 - human review: cadence-review (only when a cadence measurement is outside the v38-calibrated ranges)
 - requires: value:stack.frames, value:audio.pad_frames, artifact:stack_master
-- writes: video.tfm_period5_pct, video.tfm_unmatched, video.tfm_combed_count, video.tfm_combed_spans, video.inserts, video.repair_frames, video.repair_pct
-- artifacts: tfm_log, di_map, cadence_summary
+- writes: video.tfm_period5_pct, video.tfm_unmatched, video.tfm_combed_count, video.tfm_combed_spans, video.inserts, video.repair_frames, video.repair_pct, video.hybrid_seconds
+- artifacts: tfm_log, di_map, cadence_summary, hybrid_plan
 
 ## `capture-inventory` — Inventory captures
 
@@ -146,6 +146,26 @@ Gathers the quality and QC results into one report next to the deliverable, rank
 - writes: quality.verdict
 - artifacts: episode_quality_report, episode_contact_sheet
 
+## `fix-preview` — Preview one operator frame fix
+
+Shows one proposed fix before it is chosen: the frames around it as captured and as fixed (for the DVD, the conformed DVD frames beside the LD ones) and, for fixes up to 2 s, short clips of the shot as captured and with the fix in place. Review-only output.
+
+- resource: compute
+- human review: —
+- requires: artifact:encode_script, value:video.frames, value:video.head_trim, value:audio.pad_frames
+- writes: —
+- artifacts: —
+
+## `frame-fixes` — Operator frame fixes (interpolate / region patch / DVD)
+
+Applies the frame fixes chosen in the final review to the chain the final encode reads (after the PAD splice, before finishing). With none chosen it records an unchanged chain.
+
+- resource: compute
+- human review: —
+- requires: artifact:encode_script, value:video.frames, value:video.head_trim, value:audio.pad_frames
+- writes: —
+- artifacts: manualfix_script, manualfix_report
+
 ## `pad-audit` — PAD audit (which placeholder frames rendered, and where the cuts are)
 
 One pass of the IVTC chain: blackdetect and 48×36 descriptors; every reference-map PAD is accounted for, proved black over the full raster, and classified as cut or non-cut.
@@ -205,6 +225,16 @@ Orc --process with artifact evidence validation; no human review (owner decision
 - requires: value:stack.reference, value:stack.alignment_map, value:stack.frames, artifact:stack_project
 - writes: —
 - artifacts: —
+
+## `stretch-preview` — Preview video-origin stretches (nearest vs interpolated)
+
+Renders one side-by-side clip per video-origin stretch for the final review: nearest real frames (default) against motion-compensated interpolation. Review-only clips; nothing delivered.
+
+- resource: compute
+- human review: —
+- requires: artifact:hybrid_plan, artifact:stack_master, artifact:di_map, value:audio.pad_frames, value:video.head_trim, value:video.tail_trim, value:video.frames
+- writes: —
+- artifacts: stretch_previews
 
 ## `video-quality` — Picture quality: measure, conceal dropouts, crop/aspect lock, optional chroma denoise
 
