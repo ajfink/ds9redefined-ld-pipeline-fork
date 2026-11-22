@@ -43,3 +43,62 @@ def intake_plan(episode: str | EpisodeId, *, download: bool, job: str | None = N
             "job": job or f"intake-{ep.slug}-{utc_stamp()[:15].lower()}", "steps": steps}
     validate_plan(plan)
     return plan
+
+
+#: Disk estimates from real data (owner's Legion): the S01E20 stack master is 287 KB/frame;
+#: delivered v38 episodes are 4.1–4.7 GiB for ~65,200 frames (≈ 72 KB/frame). Margins included.
+MASTER_BYTES_PER_STACK_FRAME = 360_000
+ENCODE_BYTES_PER_OUTPUT_FRAME = 110_000
+
+
+def delivery_plan(manifest, *, job: str | None = None) -> dict[str, Any]:
+    """Everything after intake, in order, for the episode's DVD choice.
+
+    DVD:    stack-render → dvd-probe → dvd-alignment → cadence-evidence → video-trim →
+            dvd-ld-audio → dvd-retime → encode-final → remux → qc-report
+    no DVD: stack-render → cadence-evidence → dvd-free-audio → encode-final → remux → qc-report
+            (needs head/tail trims recorded; automatic no-DVD trims are not built yet)
+
+    Every step's prerequisites are still gated by the engine; finished steps are reused on resume.
+    The only human review left is the A/V check after ``qc-report``.
+    """
+    from fstk.core.errors import FstkError
+
+    ep = manifest.episode
+    dvd = manifest.get("mode.dvd_reference_available")
+    if dvd is None:
+        raise FstkError("record whether a DVD reference exists (mode.dvd_reference_available) first")
+    stack_frames = manifest.get("stack.frames")
+    if not stack_frames:
+        raise FstkError("run intake first: stack.frames is not measured")
+    master_gib = stack_frames * MASTER_BYTES_PER_STACK_FRAME / 2**30
+    out_frames = manifest.get("video.frames") or int(stack_frames * 0.8)
+    encode_gib = out_frames * ENCODE_BYTES_PER_OUTPUT_FRAME / 2**30
+    steps: list[dict[str, Any]] = []
+
+    def add(sid: str, stage: str, after: list[str], **params) -> None:
+        steps.append({"id": sid, "stage": stage, "after": after, "params": params})
+
+    add("stack-render", "stack-render", [], planned_gib=round(master_gib, 2),
+        estimate_basis=f"{stack_frames} stack frames × {MASTER_BYTES_PER_STACK_FRAME} B (S01E20 master: 287 KB/frame)")
+    add("cadence", "cadence-evidence", ["stack-render"])
+    if dvd:
+        add("dvd-probe", "dvd-probe", [])
+        add("dvd-alignment", "dvd-alignment", ["stack-render", "dvd-probe"])
+        add("video-trim", "video-trim", ["cadence", "dvd-alignment"])
+        add("ld-audio", "dvd-ld-audio", ["video-trim"])
+        add("retime", "dvd-retime", ["ld-audio"])
+        audio_done = ["retime"]
+        trim_done = ["video-trim"]
+    else:
+        add("ld-audio", "dvd-free-audio", ["cadence"])
+        audio_done = ["ld-audio"]
+        trim_done = ["cadence"]
+    add("encode", "encode-final", trim_done, planned_gib=round(encode_gib, 2),
+        estimate_basis=f"{out_frames} output frames × {ENCODE_BYTES_PER_OUTPUT_FRAME} B (v38 deliveries ≈ 72 KB/frame)")
+    add("remux", "remux", ["encode", *audio_done])
+    add("qc", "qc-report", ["remux"])
+    plan = {"schema": PLAN_SCHEMA, "episode": ep.canonical,
+            "job": job or f"delivery-{ep.slug}-{utc_stamp()[:15].lower()}", "steps": steps}
+    validate_plan(plan)
+    return plan

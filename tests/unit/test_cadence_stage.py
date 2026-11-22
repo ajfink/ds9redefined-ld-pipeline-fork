@@ -52,7 +52,10 @@ def run(env, job, vs):
     return Engine(prof, plan, actor="op", tool_overrides={"vapoursynth": vs}).run()
 
 
-def test_cadence_measures_and_waits_for_review(env):
+def test_cadence_outside_the_v38_ranges_waits_for_review(env, monkeypatch):
+    from fstk.stages import cadence
+
+    monkeypatch.setitem(cadence.AUTO_ACCEPT, "min_period5_pct", 101.0)   # force "outside the ranges"
     prof, ws = env
     state = run(env, "c1", FakeVS())
     st = state["steps"]["cad"]
@@ -86,3 +89,17 @@ def test_rerun_moves_stale_log_aside(env):
     run(env, "c3", FakeVS())
     stale = list(prof.root("probe", EP).glob("full-tfm-log-ds9-s01e20.superseded-*.txt"))
     assert len(stale) == 1
+
+
+def test_cadence_inside_the_v38_ranges_is_accepted_automatically(env, monkeypatch):
+    from fstk.stages import cadence
+
+    monkeypatch.setitem(cadence.AUTO_ACCEPT, "min_period5_pct", 0.0)
+    monkeypatch.setitem(cadence.AUTO_ACCEPT, "max_repair_pct", 100.0)
+    monkeypatch.setitem(cadence.AUTO_ACCEPT, "max_unmatched", 10**6)       # the fake log is not a real episode
+    prof, ws = env
+    st = run(env, "c9", FakeVS())["steps"]["cad"]
+    assert st["status"] == "passed", st                                   # no human needed
+    assert ws.store.load().get("video.inserts") == 1
+    report = json.loads((prof.root("reports", EP) / "cadence.json").read_text())
+    assert report["auto_accept_issues"] == []

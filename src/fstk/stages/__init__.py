@@ -13,5 +13,6 @@ from . import (  # noqa: F401
     remux,
     retime,
     stack,
+    trim,
 )
 from .base import REGISTRY, Stage, get_stage, register  # noqa: F401

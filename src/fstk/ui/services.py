@@ -137,6 +137,17 @@ class Services:
         atomic_write_json(path, plan)
         return path
 
+    def write_delivery_plan(self, episode: str | EpisodeId) -> Path:
+        """Everything after intake (``workflow.plans.delivery_plan``)."""
+        from fstk.core.fsio import atomic_write_json
+        from fstk.workflow.plans import delivery_plan
+
+        ws = self.workspace(episode)
+        plan = delivery_plan(ws.store.load())
+        path = ws.state_dir / "plans" / f"{plan['job']}.plan.json"
+        atomic_write_json(path, plan)
+        return path
+
     @classmethod
     def load(cls, path: str | Path | None = None) -> Services:
         return cls(Profile.load(path))

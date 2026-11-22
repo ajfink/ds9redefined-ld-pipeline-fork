@@ -33,12 +33,14 @@ Owner's order: alignment → DVD audio rate/origin → retime → PAD; only huma
 | P3 | Exact-ratio resampling: python-soxr VHQ, 24-bit FLAC, one pass (`media/resample.py`, `stages/ldaudio_build.py`) | **done** (CP6) |
 | P4 | `dvd-free-audio` on the exact resampler (retire the 0.5 Hz `asetrate` quantisation); QC accepts 24-bit | **done** (CP6) |
 | P5 | `dvd-ld-audio`: DVD-referenced LD rate + origin (windows of LD vs DVD stereo, mapped to master through the act curves, centre-referenced robust fit, cross-checks vs duration model + picture slope), builds corrected/synced, applies A/V corrections | **done** (CP7), validated on S01E20 M1+P2 |
-| P6 | `video-trim`: DVD-referenced head/tail trims + `video.delta_s` + IVTC encode script + `video.frames` (needs VapourSynth → only runnable on Windows; unit-tested with fakes) | todo |
+| P6 | `video-trim` (DVD episodes): head at the DVD programme's fade-up, tail only for LD-only picture, exact `video.delta_s` via a tagged IVTC probe, verified encode script | **done** (CP9) — needs a first real run on Windows (VapourSynth) |
 | P7 | Rerun plan for DVD episodes (A/V check → av-correction → dvd-ld-audio → remux → QC) | **done** (CP7) |
 | P8 | Retime DVD 5.1 + SRT onto the LD timeline by **audio** (`dvd-retime`, `media/retime_map.py`, `media/retime_render.py`) | **done** (CP8), map verified on real S01E20 audio |
 | P9 | PAD audit/repair port | todo |
-| P10 | `cadence-evidence` still has a human `cadence-review`: make it automatic (review only on failed checks), per the owner's one-review rule | todo |
-| P11 | Import S01E12/17/18/20 from v38 once P5–P6 exist | todo |
+| P10 | `cadence-evidence` accepted automatically inside the v38 ranges (12 episodes), review only outside | **done** (CP9) |
+| P6b | No-DVD head/tail trims (no reference for where the programme starts) | todo |
+| P13 | `delivery_plan` + "Run to delivery" button + `fstk plan delivery` (stack render → … → QC for either route) | **done** (CP9) |
+| P11 | Import S01E12/17/18/20 from v38 once P5–P6 exist | **next** |
 | P12 | Per-capture EFM decode, Orc version in provenance; catalog 30-day refresh; H.264 review proxy fallback | todo |
 
 Validation data on the owner's Legion: `Z:\ld-pipeline-device\{probe,prores,audio}` (S01E20 descriptors,
@@ -170,6 +172,35 @@ validated by the owner running the app.
   `video.delta_s` (P6). Bug caught: `stages/__init__.py` had been reflowed by ruff, so the one-line
   import edit for `dvdaudio` silently failed and `dvd-ld-audio` registered only in tests. Added a
   test that every stage module registers through the package import. 310 tests.
+- **S3-CP9 — trims/DELTA, cadence automation, one-button delivery (P6, P10, P13).**
+
+  `video-trim` replaces v38's visual trim review and the hand-set `delta_s`. It writes the IVTC
+  script untrimmed in **probe mode** (`cadence_map.ivtc_vpy_script(probe_json=…)`): every
+  source frame is tagged `FstkN` before TFM/TDecimate, and evaluating it (`vspipe --info`)
+  dumps the exact master frame of the head/tail output frames. Inferring TDecimate's choices
+  from descriptors would be ambiguous by ±1 frame, i.e. 33 ms of A/V error.
+
+  `media/trim.decide`:
+  - **Head:** the alignment origin, walked back ≤ 15 frames to the first fade-up frame, keeping
+    2 black master frames before it when they are black.
+  - **Tail:** none (as in all 12 v38 episodes) unless ≥ 5 s of textured picture after the last
+    act has no DVD match.
+  - **`delta_s`** = the exact master frame of output frame 0 / FPS.
+
+  Then it writes the final trimmed script with an asserted frame count and confirms it with
+  `vspipe --info`. v38 priors across 12 episodes: `delta_s` 49.5–52.4 s, `tail_trim` 0,
+  `head_trim` 1175–1253. S01E15's `delta_s` is exactly master frame 1515, the same as fstk's
+  S01E20 origin.
+
+  Untested on real VapourSynth. Check on the first Windows run that TIVTC keeps frame
+  properties: the probe fails loudly if `FstkN` is lost.
+
+  `cadence-evidence` is accepted automatically when period-5 ≥ 85%, unmatched = 0, repair ≤ 6%
+  and inserts ≤ 12. Those ranges are calibrated on the 12 v38 episodes (89.9–93.1%, 0,
+  2.2–4.6%, 2–8). `workflow.plans.delivery_plan` chains everything after intake for the
+  episode's route, with disk estimates from real sizes (master 287 KB/frame, delivery
+  ≈ 72 KB/frame, both with margin). It is available as `fstk plan delivery <ep>` and the app's
+  **Run to delivery** button. The no-DVD route still needs trims recorded (P6b).
 
 ---
 

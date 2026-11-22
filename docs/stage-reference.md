@@ -24,10 +24,10 @@ Records one A/V review round (per-chunk in sync / audio early / audio late) and 
 
 ## `cadence-evidence` — Measure cadence (TFM) and build the repair map
 
-Full-side VapourSynth TFM log, cadence analysis, and repair ranges; human review required.
+Full-side VapourSynth TFM log, cadence analysis, and repair ranges; accepted automatically inside the ranges of every completed v38 episode, otherwise held for review.
 
 - resource: compute
-- human review: cadence-review
+- human review: cadence-review (only when a cadence measurement is outside the v38-calibrated ranges)
 - requires: value:stack.frames, value:audio.pad_frames, artifact:stack_master
 - writes: video.tfm_period5_pct, video.tfm_unmatched, video.tfm_combed_count, video.tfm_combed_spans, video.inserts, video.repair_frames, video.repair_pct
 - artifacts: tfm_log, di_map, cadence_summary
@@ -165,3 +165,13 @@ Orc --process with artifact evidence validation; no human review (owner decision
 - requires: value:stack.reference, value:stack.alignment_map, value:stack.frames, artifact:stack_project
 - writes: —
 - artifacts: —
+
+## `video-trim` — Trims, DELTA and the encode script (DVD-referenced)
+
+Exact IVTC frame map (tagged probe), head at the DVD programme's fade-up, tail only if the LD has picture the DVD lacks; writes the verified encode script.
+
+- resource: compute
+- human review: —
+- requires: value:mode.dvd_reference_available==True, dvd-alignment, value:audio.pad_frames, value:stack.frames, value:video.repair_frames, artifact:stack_master, artifact:di_map, artifact:master_descriptors, artifact:alignment_report
+- writes: video.head_trim, video.tail_trim, video.frames, video.duration_s, video.delta_s, video.fade_up_output
+- artifacts: encode_script

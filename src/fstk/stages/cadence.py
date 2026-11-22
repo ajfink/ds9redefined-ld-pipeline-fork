@@ -9,8 +9,11 @@ macOS chain (``generate_cadence_evidence`` + ``build_map_vpy``) with one path:
 3. parse the TFM log, requiring exactly that many contiguous rows (fail closed);
 4. analyse cadence (``fstk.media.cadence``) and build the repair map
    (``fstk.media.cadence_map``, v38 build_map.ps1 rules);
-5. write the report and di-map as evidence. Metrics are proposed but committed only after the
-   ``cadence-review`` approval (v38 recorded cadence metrics only after visual approval).
+5. write the report and di-map as evidence.
+6. **accept automatically** when the measurements look like every episode v38 completed
+   (``AUTO_ACCEPT``, calibrated on 12 v38 episodes: period-5 89.9–93.1%, unmatched 0, repair
+   2.2–4.6%, inserts 2–8). Owner decision 2026-11-21: the only routine human review is the A/V
+   check, so ``cadence-review`` is held only when a measurement falls outside those ranges.
 
 Re-validating this chain on Windows VapourSynth against v38's AviSynth output is still owed
 (REFACTOR-PLAN Phase 4 exit criterion).
@@ -28,18 +31,36 @@ from fstk.tools.vapoursynth import tfm_log_script
 
 from .base import ArtifactExists, Stage, StepOutput, StepPlan, ValueSet, register
 
+#: Automatic acceptance ranges (with margin) from 12 completed v38 episodes (S01E08–S02E02).
+AUTO_ACCEPT = {"min_period5_pct": 85.0, "max_unmatched": 0, "max_repair_pct": 6.0, "max_inserts": 12}
+
+
+def cadence_issues(analysis: dict) -> list[str]:
+    issues = []
+    if float(analysis["period5_agreement_pct"]) < AUTO_ACCEPT["min_period5_pct"]:
+        issues.append(f"period-5 cadence {analysis['period5_agreement_pct']:.2f}% < {AUTO_ACCEPT['min_period5_pct']}%")
+    if int(analysis["unmatched_count"]) > AUTO_ACCEPT["max_unmatched"]:
+        issues.append(f"{analysis['unmatched_count']} unmatched field(s)")
+    if float(analysis["repair_frame_pct"]) > AUTO_ACCEPT["max_repair_pct"]:
+        issues.append(f"repair {analysis['repair_frame_pct']:.2f}% > {AUTO_ACCEPT['max_repair_pct']}%")
+    if int(analysis["insert_count"]) > AUTO_ACCEPT["max_inserts"]:
+        issues.append(f"{analysis['insert_count']} inserts > {AUTO_ACCEPT['max_inserts']}")
+    return issues
+
 
 @register
 class CadenceEvidence(Stage):
     id = "cadence-evidence"
     title = "Measure cadence (TFM) and build the repair map"
-    description = "Full-side VapourSynth TFM log, cadence analysis, and repair ranges; human review required."
+    description = ("Full-side VapourSynth TFM log, cadence analysis, and repair ranges; accepted automatically "
+                   "inside the ranges of every completed v38 episode, otherwise held for review.")
     requires = (ValueSet("stack.frames"), ValueSet("audio.pad_frames"), ArtifactExists("stack_master"))
     writes = ("video.tfm_period5_pct", "video.tfm_unmatched", "video.tfm_combed_count",
               "video.tfm_combed_spans", "video.inserts", "video.repair_frames", "video.repair_pct")
     writes_artifacts = ("tfm_log", "di_map", "cadence_summary")
     resource = "compute"
     review = "cadence-review"
+    review_when = "only when a cadence measurement is outside the v38-calibrated ranges"
 
     def plan(self, ctx, params):
         m = ctx.manifest
@@ -96,8 +117,12 @@ class CadenceEvidence(Stage):
         atomic_write_json(d["report"], {"schema": "fstk-cadence-v1", "created_utc": utc_now_iso(),
                                         "episode": str(ctx.episode), "source_pad": d["pad"],
                                         "decoded_frames": decode.frames, "repair_ranges": ranges,
-                                        "analysis": analysis})
+                                        "analysis": analysis, "auto_accept": AUTO_ACCEPT,
+                                        "auto_accept_issues": cadence_issues(analysis)})
         out = StepOutput(report=Path(d["report"]))
+        issues = cadence_issues(analysis)
+        out.needs_review = bool(issues)
+        out.notes += issues
         out.measure("video.tfm_period5_pct", float(analysis["period5_agreement_pct"]))
         out.measure("video.tfm_unmatched", int(analysis["unmatched_count"]))
         out.measure("video.tfm_combed_count", int(analysis["combed_count"]))

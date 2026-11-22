@@ -389,6 +389,19 @@ def cmd_plan_intake(args) -> int:
     return 0
 
 
+def cmd_plan_delivery(args) -> int:
+    from fstk.core.fsio import atomic_write_json
+    from fstk.workflow.plans import delivery_plan
+
+    ws = _workspace(args, args.episode)
+    plan = delivery_plan(ws.store.load())
+    out = Path(args.out) if args.out else ws.state_dir / "plans" / f"{plan['job']}.plan.json"
+    atomic_write_json(out, plan)
+    _print(args, {"plan": str(out), "steps": [s["stage"] for s in plan["steps"]]},
+           f"wrote {out}: " + " → ".join(s["stage"] for s in plan["steps"]))
+    return 0
+
+
 # ----------------------------------------------------------------------------- parser
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="fstk", description="FromStunToKill LaserDisc pipeline")
@@ -473,6 +486,10 @@ def build_parser() -> argparse.ArgumentParser:
     pi2.add_argument("--no-stack", action="store_true")
     pi2.add_argument("--no-efm", action="store_true", help="leave out EFM decode/selection")
     pi2.set_defaults(func=cmd_plan_intake)
+    pd = pl.add_parser("delivery", help="write the plan from stack render to QC (DVD or no-DVD route)")
+    pd.add_argument("episode")
+    pd.add_argument("--out")
+    pd.set_defaults(func=cmd_plan_delivery)
 
     sub.add_parser("stages", help="list registered stages").set_defaults(func=cmd_stages)
     docs = sub.add_parser("docs").add_subparsers(dest="sub", required=True)

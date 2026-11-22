@@ -132,6 +132,9 @@ class MainWindow(QMainWindow):
         self.pick_button.clicked.connect(self.open_picker)
         self.intake_button = QPushButton("Run intake")
         self.intake_button.clicked.connect(self.run_intake)
+        self.deliver_button = QPushButton("Run to delivery")
+        self.deliver_button.setToolTip("Stack render → … → QC, then the A/V check (DVD or no-DVD route)")
+        self.deliver_button.clicked.connect(self.run_delivery)
         self.efm_button = QPushButton("EFM capture…")
         self.efm_button.clicked.connect(self.open_efm_review)
         self.delivery_button = QPushButton("Delivery review…")
@@ -152,6 +155,7 @@ class MainWindow(QMainWindow):
         bar = QHBoxLayout()
         bar.addWidget(self.pick_button)
         bar.addWidget(self.intake_button)
+        bar.addWidget(self.deliver_button)
         bar.addWidget(self.efm_button)
         bar.addWidget(self.delivery_button)
         bar.addWidget(self.handoff_button)
@@ -204,6 +208,7 @@ class MainWindow(QMainWindow):
         self.title.setToolTip(frozen or "\n".join(p.describe() for p in others))
         self.run_button.setEnabled(not frozen)
         self.intake_button.setEnabled(not frozen)
+        self.deliver_button.setEnabled(not frozen)
         self.handoff_button.setEnabled(not frozen)
         rows = self.services.manifest_rows(episode)
         self.values.setRowCount(len(rows))
@@ -359,6 +364,16 @@ class MainWindow(QMainWindow):
             return
         self.start_plan(str(path))
 
+    def run_delivery(self) -> None:
+        if not self.episode:
+            return
+        try:
+            path = self.services.write_delivery_plan(self.episode)
+        except FstkError as exc:
+            QMessageBox.warning(self, "Cannot plan delivery", str(exc))
+            return
+        self.start_plan(str(path))
+
     # ---------------------------------------------------------------- run
     def choose_and_run(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Workflow plan", str(Path.home()), "Plan (*.json)")
@@ -377,6 +392,7 @@ class MainWindow(QMainWindow):
         self.worker.failed.connect(self.on_failed)
         self.run_button.setEnabled(False)
         self.intake_button.setEnabled(False)
+        self.deliver_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self.append_log(f"running {path}")
         self.thread.start()
@@ -402,6 +418,7 @@ class MainWindow(QMainWindow):
         self.thread, self.worker = None, None
         self.run_button.setEnabled(True)
         self.intake_button.setEnabled(True)
+        self.deliver_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
         self.refresh()
         if self.episode:
