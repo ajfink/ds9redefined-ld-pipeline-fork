@@ -1,6 +1,8 @@
 """Final encode stage (single x265 pass; video only).
 
 ``encode-final`` (v38 ``encode_episode_mac.py --pass final`` + ``validate_encoded_video.py``):
+* when ``pad-repair`` has run, its ``padfix_script`` (the base chain plus the PAD splice) is encoded instead of
+  ``encode_script``, provided it was built from the current base script;
 * the IVTC/PAD-repair script must report exactly the measured ``video.frames``;
 * the encode goes to ``<name>.tmp.mkv`` and is moved into place only after the encoded stream
   passes every check (profile, pixel format, rate, raster, decode-counted frames, a clean full
@@ -17,6 +19,7 @@ from pathlib import Path
 from fstk.core.errors import ArtifactError, GateError
 from fstk.core.fsio import atomic_write_json
 from fstk.core.timeutil import utc_now_iso
+from fstk.media import pad_repair
 from fstk.media.encode import check_encoded_stream, display_aspect, final_encode_args
 
 from .base import ArtifactExists, SpaceNeed, Stage, StepOutput, StepPlan, ValueSet, register
@@ -45,6 +48,12 @@ class EncodeFinal(Stage):
         if tmp.exists():
             raise GateError(f"temporary output exists; inspect it before retrying: {tmp}")
         script = ctx.artifact_path("encode_script", m)
+        if m.artifact("padfix_script"):   # PAD-repaired chain; must have been built from this very base script
+            fixed = ctx.artifact_path("padfix_script", m)
+            if not pad_repair.padfix_matches_base(fixed.read_text(encoding="utf-8"),
+                                                  script.read_text(encoding="utf-8")):
+                raise GateError("padfix_script was built from an older encode script; re-run pad-audit and pad-repair")
+            script = fixed
         master = ctx.artifact_path("stack_master", m)
         report = ctx.root("reports") / "encode-final.json"
         return StepPlan(self.id, params, inputs=[script, master], outputs=[out, report],

@@ -14,6 +14,7 @@ import platform
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from fstk.core.errors import ToolError
 from fstk.tools import process
@@ -91,6 +92,96 @@ class VapourSynth:
                   "-f", "yuv4mpegpipe", "-i", "-", *ffmpeg_output_args]
         return process.run_pipeline([vs_cmd, ff_cmd], env=self.env(), log_path=self._log(name),
                                     cancel=cancel, on_line=on_line)
+
+
+    # ----------------------------------------------------------------- frame access
+    def serve(self, script: Path, first: int | None = None, last: int | None = None) -> list[str]:
+        """First pipeline stage: vspipe writing y4m frames ``first``..``last`` (inclusive) of ``script``."""
+        cmd = [self.vspipe, "-c", "y4m"]
+        if first is not None:
+            cmd += ["-s", str(int(first))]
+        if last is not None:
+            cmd += ["-e", str(int(last))]
+        return [*cmd, str(script), "-"]
+
+    def scan(self, script: Path, *, width: int = 48, height: int = 36, name: str = "pad-scan",
+             cancel=None, blackdetect: str = "blackdetect=d=0:pix_th=0.10:pic_th=0.98") -> ScriptScan:
+        """One sequential pass of ``script``: blackdetect events and grey ``width``×``height`` descriptors.
+
+        v38 ran FFmpeg's blackdetect and the descriptor extraction as two separate decodes of the
+        same (slow) IVTC chain; both filters read the identical frames here, so one pass serves both.
+        """
+        import numpy as np
+
+        events: list[tuple[float, float, float]] = []
+        errors: list[str] = []
+        pat = re.compile(r"black_start:\s*([0-9.]+)\s+black_end:\s*([0-9.]+)\s+black_duration:\s*([0-9.]+)")
+
+        def on_line(stream: str, line: str) -> None:
+            m = pat.search(line)
+            if m:
+                events.append((float(m.group(1)), float(m.group(2)), float(m.group(3))))
+            elif "[error]" in line or "[fatal]" in line:
+                errors.append(line.strip())
+
+        graph = (f"[0:v]split=2[a][b];[a]{blackdetect}[ao];"
+                 f"[b]scale={width}:{height}:flags=area,format=gray[bo]")
+        ff = [self.ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "level+info", "-f", "yuv4mpegpipe", "-i", "-",
+              "-filter_complex", graph, "-map", "[ao]", "-an", "-f", "null", "-",
+              "-map", "[bo]", "-an", "-f", "rawvideo", "-pix_fmt", "gray", "-"]
+        res = process.run_pipeline([self.serve(script), ff], env=self.env(), log_path=self._log(name),
+                                   capture_stdout=True, on_line=on_line, cancel=cancel)
+        data = res.stdout or b""
+        size = width * height
+        if res.returncode != 0 or not data or len(data) % size:
+            raise ToolError(f"scan of {script} failed or was truncated: {res.describe()}")
+        return ScriptScan(np.frombuffer(data, np.uint8).reshape(-1, size).copy(), events, errors)
+
+    def frames(self, script: Path, first: int, last: int, *, width: int, height: int, pix_fmt: str = "rgb24",
+               name: str = "frames", cancel=None):
+        """Frames ``first``..``last`` of ``script``, area-scaled to ``width``×``height`` (the native
+        size for a lossless read), as a numpy array.
+
+        ``rgb24`` → (n, height, width, 3) through an explicit BT.601 limited → full conversion (the
+        matrix the stack master uses and ``build_payload_clip`` converts back with); ``gray`` →
+        (n, height, width). ``vspipe`` is asked for the exact range, so indices are the script's own.
+        """
+        import numpy as np
+
+        first, last = int(first), int(last)
+        n = last - first + 1
+        if n < 1:
+            raise ToolError("empty frame range")
+        if pix_fmt == "rgb24":
+            vf = (f"scale={width}:{height}:in_range=tv:in_color_matrix=bt601:out_range=pc:"
+                  "flags=area+accurate_rnd+full_chroma_int,format=rgb24")
+        elif pix_fmt == "gray":
+            vf = f"scale={width}:{height}:flags=area,format=gray"
+        else:
+            raise ToolError(f"unsupported pix_fmt {pix_fmt!r}")
+        ff = [self.ffmpeg, "-hide_banner", "-nostdin", "-v", "error", "-f", "yuv4mpegpipe", "-i", "-",
+              "-vf", vf, "-f", "rawvideo", "-pix_fmt", pix_fmt, "-"]
+        res = process.run_pipeline([self.serve(script, first, last), ff], env=self.env(), log_path=self._log(name),
+                                   capture_stdout=True, cancel=cancel)
+        data = res.stdout or b""
+        channels = 3 if pix_fmt == "rgb24" else 1
+        per = width * height * channels
+        if res.returncode != 0 or len(data) != per * n:
+            raise ToolError(f"could not read frames {first}..{last} of {script} (got {len(data)} bytes for "
+                            f"{n} frames of {per}): {res.describe()}")
+        arr = np.frombuffer(data, np.uint8)
+        return arr.reshape(n, height, width, 3) if channels == 3 else arr.reshape(n, height, width)
+
+
+@dataclass
+class ScriptScan:
+    thumbs: Any                                  # uint8 (frames, width*height)
+    events: list[tuple[float, float, float]]     # blackdetect (start, end, duration)
+    errors: list[str]
+
+    @property
+    def frames(self) -> int:
+        return len(self.thumbs)
 
 
 def tfm_log_script(source: Path, pad: int, tfm_log: Path | None, *, side_by_side: bool = False) -> str:

@@ -43,8 +43,8 @@ Owner's order: alignment → DVD audio rate/origin → retime → PAD; only huma
 | P11 | Import the v38 episodes: all 13 real device manifests import + round-trip; `--v38-profile` resolves their files to absolute paths so they continue in fstk | **done** (CP10); first real continuation run on Windows still owed |
 | P12 | EFM: every capture decoded even if one fails, failures recorded + excluded from the automatic choice, Orc identity (version if reported + exe SHA-256) in provenance | **done** (CP12) |
 | P14 | Catalog refresh when the snapshot is > 30 days old (`fstk catalog refresh`, startup check) | **done** (CP13) |
-| P15 | H.264 review-proxy fallback in the A/V check window | todo |
-| P9b | PAD audit/repair port (v38 `audit_pads` / cut-PAD stills) | todo |
+| P15 | H.264 review-proxy fallback in the A/V check window | **done** (CP15) |
+| P9b | PAD audit/repair port (v38 `audit_pads` / cut-PAD stills) | **done** (CP14; not yet run on Windows VapourSynth/RIFE) |
 
 Validation data on the owner's Legion: `Z:\ld-pipeline-device\{probe,prores,audio}` (S01E20 descriptors,
 stack master, EFM WAVs), DVDs in `Z:\Video\DS9S1D5`, captures on `X:\`. Windows-only tools
@@ -250,7 +250,37 @@ validated by the owner running the app.
   - GUI: a background check 1.5 s after launch refreshes if stale; offline failures are logged and the
     existing snapshot stays in use.
   - Not exercised against live Archive.org (the container's network is allowlisted): the first run
-    on the owner's machine is the real-network check. Next: P15, P9b.
+    on the owner's machine is the real-network check. Next: P15, P9b (both now done; see CP14/CP15).
+
+- **S3-CP14 — PAD audit and repair (P9b).** Owner rules (2026-11-21): RIFE midpoint for a PAD
+  that is not on a shot cut; on a cut with a DVD the correct frame is **borrowed from the DVD**,
+  scaled to the LD raster and colour-matched to the neighbouring LD frame; on a cut without a
+  DVD the previous frame is held one more frame. New: `media/pads.py` (audit math: blackdetect
+  blips ≤ 0.050 s, v38 `(m−pad)*4//5−head` projection, ±2-frame greedy matching, full accounting
+  trimmed/inside-break/never-rendered/orphans, flank score `1−NCC(i−1,i+1)` on 48×36 descriptors,
+  cut threshold 0.45 with the ambiguous band 0.30–0.75 **treated as a cut**, full-raster
+  near-black check), `media/pad_repair.py` (method choice, DVD flank matching — both flanks must
+  be found uniquely and exactly 2 DVD frames apart — ECC affine registration, robust per-channel
+  gain/offset on stable pixels, post-fit NCC gate, padfix script generator, replacement TSV),
+  `tools/rife.py` (v38 recipe: CPU fp32 + TTA), `tools/vapoursynth.py` `serve/scan/frames`
+  (one decode serves blackdetect and thumbnails; v38 did two), `stages/pads.py` (`pad-audit`,
+  `pad-repair`). `pad-repair` writes `padfix_script` (the base IVTC script plus a Splice; payload
+  is a lossless RGB ffv1 clip; holds use `out[i-1]` in the chain's own 10-bit format; frame count
+  asserted), `pad_repair_frames` (v38 list read by the QC identity gate), `pad_replacements`
+  (TSV), `pad_repair_report`. `encode-final` encodes `padfix_script` when present and **refuses a
+  padfix built from an older base script** (SHA recorded in the script header). Both delivery
+  routes run `pad-audit → pad-repair` before `encode-final`.
+  - Deliberate differences from v38: no curated "Cut Pad Images" stills (owner rule is hold);
+    the arithmetic frame map with ±2 tolerance instead of the FstkN tag map; a DVD borrow that
+    cannot be proven (no unique flank match, registration/colour fit fails the NCC gate) falls
+    back to hold with the reason recorded, never to a guess; the DVD geometry/colour estimate is
+    new (v38 did it by hand per episode) and is **unvalidated on real material**.
+  - Tests: synthetic cut/DVD scenes (borrow error < 6/255 after tint correction), audit
+    accounting, padfix script text, stale-padfix refusal, stage chain with fake VapourSynth/RIFE.
+- **S3-CP15 — H.264 review proxies (P15).** `qc-report` now cuts each A/V-check chunk into an
+  H.264 8-bit + AAC excerpt (`FFmpeg.av_proxy`, best effort, atomic) under `reports/av-proxy-<run>/`;
+  `DeliveryReview.play_chunk` plays the proxy when the chunk has one, else seeks in the
+  deliverable. The deliverable itself is unchanged.
 
 ---
 

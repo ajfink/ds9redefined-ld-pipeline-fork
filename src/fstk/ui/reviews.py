@@ -418,9 +418,15 @@ class DeliveryReview(QDialog):
         chunks = (self.result.get("av_check") or {}).get("chunks", [])
         if not 0 <= row < len(chunks):
             return
-        if self.media.source != self.result.get("deliverable_path"):
-            self.media.load(self.result.get("deliverable_path", ""), keep_position=False)
-        self.media.seek_s(float(chunks[row]["start_s"]))
+        proxy = chunks[row].get("proxy")
+        if proxy and Path(proxy).is_file():
+            # H.264/AAC excerpt of exactly this chunk (plays where HEVC Main 10 does not); starts at 0
+            self.media.load(proxy, keep_position=False)
+            self.media.seek_s(0.0)
+        else:
+            if self.media.source != self.result.get("deliverable_path"):
+                self.media.load(self.result.get("deliverable_path", ""), keep_position=False)
+            self.media.seek_s(float(chunks[row]["start_s"]))
         self.media.play()
 
     def _update_buttons(self) -> None:

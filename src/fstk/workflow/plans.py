@@ -55,9 +55,9 @@ def delivery_plan(manifest, *, job: str | None = None) -> dict[str, Any]:
     """Everything after intake, in order, for the episode's DVD choice.
 
     DVD:    stack-render → dvd-probe → dvd-alignment → cadence-evidence → video-trim →
-            dvd-ld-audio → dvd-retime → encode-final → remux → qc-report
-    no DVD: stack-render → cadence-evidence → video-trim → dvd-free-audio → encode-final → remux
-            → qc-report
+            dvd-ld-audio → dvd-retime → pad-audit → pad-repair → encode-final → remux → qc-report
+    no DVD: stack-render → cadence-evidence → video-trim → dvd-free-audio → pad-audit → pad-repair →
+            encode-final → remux → qc-report
 
     Every step's prerequisites are still gated by the engine; finished steps are reused on resume.
     The only human review left is the A/V check after ``qc-report``.
@@ -95,7 +95,9 @@ def delivery_plan(manifest, *, job: str | None = None) -> dict[str, Any]:
         add("ld-audio", "dvd-free-audio", ["video-trim"])
         audio_done = ["ld-audio"]
         trim_done = ["video-trim"]
-    add("encode", "encode-final", trim_done, planned_gib=round(encode_gib, 2),
+    add("pad-audit", "pad-audit", trim_done)
+    add("pad-repair", "pad-repair", ["pad-audit"] + (["dvd-alignment"] if dvd else []))
+    add("encode", "encode-final", ["pad-repair"], planned_gib=round(encode_gib, 2),
         estimate_basis=f"{out_frames} output frames × {ENCODE_BYTES_PER_OUTPUT_FRAME} B (v38 deliveries ≈ 72 KB/frame)")
     add("remux", "remux", ["encode", *audio_done])
     add("qc", "qc-report", ["remux"])

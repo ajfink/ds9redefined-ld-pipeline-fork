@@ -198,3 +198,37 @@ def _items(tree):
         it = stack.pop()
         yield it
         stack += [it.child(i) for i in range(it.childCount())]
+
+
+def test_delivery_review_plays_the_h264_proxy_when_a_chunk_has_one(tmp_path, qtbot):
+    from fstk.ui import reviews
+
+    prof, ws, report = _delivery_env(tmp_path, {"pass": 2, "fail": 0, "failed_gates": [], "unverified_gates": []})
+    proxy = tmp_path / "chunk-01.mp4"
+    proxy.write_bytes(b"x")
+    doc = json.loads(report.read_text())
+    doc["av_check"]["chunks"][0]["proxy"] = str(proxy)
+    report.write_text(json.dumps(doc))
+    dlg = reviews.DeliveryReview(Services(prof), "DS9:S01E20", actor="op")
+    qtbot.addWidget(dlg)
+    calls = []
+
+    class FakeMedia:
+        source = None
+
+        def load(self, path, keep_position=True):
+            calls.append(("load", path))
+            self.source = path
+
+        def seek_s(self, s):
+            calls.append(("seek", s))
+
+        def play(self):
+            calls.append(("play",))
+
+    dlg.media = FakeMedia()
+    dlg.play_chunk(0)                      # has a proxy: that file, from its start
+    assert calls[:2] == [("load", str(proxy)), ("seek", 0.0)]
+    calls.clear()
+    dlg.play_chunk(1)                      # no proxy: the deliverable at the chunk start
+    assert ("seek", 600.0) in calls

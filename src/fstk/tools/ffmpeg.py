@@ -213,6 +213,29 @@ class FFmpeg:
                 args += ["-t", f"{duration_s:.6f}"]
         return [*args, "-i", str(p)]
 
+    def av_proxy(self, src: str | Path, start_s: float, length_s: float, out: str | Path, *,
+                 audio_map: str = "0:a:0", cancel=None) -> Path:
+        """H.264 8-bit + AAC excerpt of ``src`` for A/V review on machines that cannot play HEVC Main 10.
+
+        Review-only: never a deliverable. Frame accurate (input seek then decode), SAR kept, the audio
+        stream under review copied through AAC at 256 kb/s. Written to a temporary name and renamed,
+        so a half-written proxy is never offered to the player.
+        """
+        out = Path(out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        tmp = out.with_name(out.stem + ".part" + out.suffix)
+        res = process.run([self.ffmpeg, "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
+                           "-ss", f"{float(start_s):.3f}", "-t", f"{float(length_s):.3f}", "-i", str(src),
+                           "-map", "0:v:0", "-map", audio_map, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                           "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart",
+                           "-sn", "-dn", str(tmp)],
+                          log_path=self._log("av-proxy"), cancel=cancel)
+        if res.returncode != 0 or not tmp.is_file() or tmp.stat().st_size == 0:
+            tmp.unlink(missing_ok=True)
+            raise ToolError(f"A/V proxy failed for {out.name}: {res.describe()}")
+        tmp.replace(out)
+        return out
+
     def null_decode(self, path: str | Path, *, map_spec: str = "0:v:0", cancel=None) -> DecodeResult:
         """Decode a whole stream to null, counting frames and decoder error lines."""
         p = Path(path)

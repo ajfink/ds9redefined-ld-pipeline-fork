@@ -408,14 +408,16 @@ class QcReport(Stage):
 
         allowed = allowed_skips(dvd_available=dvd, tracks=tracks)
         summary = summarize(gates, allowed)
+        chunks = av_check_chunks(float(info.format.get("duration") or duration), measured.get("black_events", []))
+        ctx.report(0.9, "H.264 review proxies for the A/V check")
+        self._make_proxies(ctx, ff, deliverable, chunks, d["run"])
         result = {"schema": QC_SCHEMA, "episode": str(ctx.episode), "title": m.title, "created_utc": utc_now_iso(),
                   "run": d["run"], "deliverable_key": d["key"], "deliverable_path": str(deliverable),
                   "deliverable_sha256": sha256_file(deliverable), "deliverable_bytes": size,
                   "duration_s": inventory.metrics.get("duration_s"), "frame_count": measured.get("frames"),
                   "tracks": tracks, "streams": raw, "results": [g.to_dict() for g in gates], "summary": summary,
                   "evidence_paths": evidence, "review_intervals": review, "packet_hashes": hashes,
-                  "av_check": {"chunks": av_check_chunks(float(info.format.get("duration") or duration),
-                                                         measured.get("black_events", [])),
+                  "av_check": {"chunks": chunks,
                                "track": "ld", "applied_correction": m.get("audio.av_correction") or {},
                                "instructions": "Watch each chunk; mark it in sync, audio too early (sound before "
                                                "the lips) or audio too late (sound after the lips)."},
@@ -444,6 +446,21 @@ class QcReport(Stage):
             if size:
                 out.measure("qc.delivered_bytes", size)
         return out
+
+    def _make_proxies(self, ctx, ff, deliverable: Path, chunks: list[dict], run: str) -> None:
+        """Best-effort H.264/AAC excerpts of each A/V chunk (HEVC Main 10 does not play everywhere).
+
+        Review-only copies: a failure never fails QC, the chunk just has no ``proxy`` and the player
+        falls back to the deliverable itself.
+        """
+        folder = ctx.root("reports") / f"av-proxy-{run}"
+        for i, c in enumerate(chunks):
+            try:
+                out = ff.av_proxy(deliverable, c["start_s"], c["end_s"] - c["start_s"], folder / f"chunk-{i + 1:02d}.mp4",
+                                  cancel=ctx.cancel)
+                c["proxy"] = str(out)
+            except FstkError as exc:
+                c["proxy_error"] = str(exc)[:300]
 
     def verify(self, ctx, plan, output):
         s = output.data["summary"]

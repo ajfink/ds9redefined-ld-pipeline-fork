@@ -9,6 +9,7 @@ from . import (  # noqa: F401
     efm,
     encode,
     intake,
+    pads,
     qc,
     remux,
     retime,
