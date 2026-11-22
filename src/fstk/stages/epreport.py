@@ -79,6 +79,15 @@ class EpisodeReport(Stage):
             tags = geometry.check_colour_tags(stream, expect_dar=m.get("quality.dar"), expect_sar=m.get("quality.sar"))
         except Exception as exc:                      # a probe failure is reported, never hidden or fatal here
             tags = [{"check": "ffprobe", "value": str(exc), "expected": "readable", "status": "FAIL"}]
+        if m.artifact("stack_master"):
+            from .stack import LOSSLESS_MASTER_CODECS
+            try:
+                codec = ctx.tool("ffmpeg").probe(ctx.artifact_path("stack_master", m)).only("video").raw.get("codec_name")
+            except Exception as exc:                  # reported, not fatal: the master may have been archived
+                codec = f"unreadable ({exc})"
+            tags.append({"area": "Source chain", "check": "stack master is lossless (single lossy generation)",
+                         "value": codec, "expected": "/".join(LOSSLESS_MASTER_CODECS),
+                         "status": "PASS" if codec in LOSSLESS_MASTER_CODECS else "FLAG"})
         rep = report.build(str(ctx.episode), m.title or "", video=video, audio=audio, qc=qc,
                            fixes=_fixes(art("quality_fixes")), duration_s=duration, frames=frames, tags=tags)
         rep["delivered_tags"] = tags

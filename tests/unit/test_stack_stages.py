@@ -42,7 +42,7 @@ class FakeOrc:
     def process_project(self, project, *, log_name="", cancel=None, on_line=None):
         labels = project_source_labels(project)
         sink = next(line.split("value: ", 1)[1] for line in Path(project).read_text().splitlines()
-                    if line.strip().startswith("value:") and line.strip().endswith(".mov"))
+                    if line.strip().startswith("value:") and line.strip().endswith(".mkv"))
         Path(sink).write_bytes(b"\0" * 1024)
         n = len(labels)
         text = "\n".join([*(f"tbc_source: Loaded TBC Source {x}" for x in labels),
@@ -52,8 +52,16 @@ class FakeOrc:
 
 
 class FakeFF:
+    def __init__(self, codec="ffv1"):
+        self.codec = codec
+
     def count_frames(self, path, stream="v:0"):
         return FRAMES
+
+    def probe(self, path):
+        from types import SimpleNamespace
+        stream = SimpleNamespace(raw={"codec_name": self.codec})
+        return SimpleNamespace(only=lambda kind: stream)
 
 
 Usage = namedtuple("Usage", "total used free")
@@ -120,9 +128,23 @@ def test_render_requires_an_estimate_but_no_review(env):
     state = run(env, [REF, bad], "r0", orc=orc, ffmpeg=FakeFF())
     assert state["steps"]["render"]["status"] == "blocked" and "planned_gib" in state["steps"]["render"]["issues"][0]
     state = run(env, [REF, RENDER], "r1", orc=orc, ffmpeg=FakeFF())
-    assert state["steps"]["render"]["status"] == "passed", state["steps"]["render"]   # owner: no review
+    assert state["steps"]["render"]["status"] == "passed", state["steps"]["render"].get("issues")   # owner: no review
     report = prof.root("reports", EP) / "stack-render.json"
     assert json.loads(report.read_text())["status"] == "PASS"
+
+
+def test_render_rejects_a_lossy_master(env):
+    state = run(env, [REF, RENDER], "r3", orc=FakeOrc(), ffmpeg=FakeFF(codec="prores"))
+    st = state["steps"]["render"]
+    assert st["status"] == "failed" and any("not lossless" in i for i in st["issues"])
+
+
+def test_generated_project_forces_lossless_sink():
+    from fstk.tools.orc_project import build_stack_project, bundled_template
+    tpl = bundled_template().replace("mkv-ffv1", "mov-prores")     # an old ProRes template is corrected
+    text = build_stack_project(tpl, ["A", "B"], {"A": Path("a.tbc"), "B": Path("b.tbc")}, Path("m.mkv"), "x")
+    assert "mkv-ffv1" in text and "mov-prores" not in text and "prores_profile" not in text
+    assert "value: m.mkv" in text
 
 
 def test_render_frame_mismatch_fails_even_with_clean_exit(env):

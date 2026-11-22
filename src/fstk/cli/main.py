@@ -534,7 +534,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sm = sub.add_parser("smoke", help="run the video half of the delivery chain on a short real excerpt")
     sm.add_argument("--episode", required=True)
-    sm.add_argument("--master", required=True, help="existing stack master (.mov)")
+    sm.add_argument("--master", required=True, help="existing stack master (.mkv, FFV1)")
     sm.add_argument("--project", required=True, help="Orc stack project (reference frame map)")
     sm.add_argument("--reference", required=True, help="reference capture label in that project")
     sm.add_argument("--pad-frames", type=int, required=True, help="audio.pad_frames of the selected capture")

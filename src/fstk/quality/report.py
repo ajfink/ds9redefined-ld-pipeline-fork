@@ -98,7 +98,7 @@ def _qc_rows(q: dict) -> list[dict]:
 
 
 def _tag_rows(tags: list[dict]) -> list[dict]:
-    return [_row("Delivered stream", t["check"], "FAIL" if t["status"] == "FAIL" else "PASS",
+    return [_row(t.get("area", "Delivered stream"), t["check"], t["status"] if t["status"] in ("FAIL", "FLAG") else "PASS",
                  f"{t['value']} (expected {t['expected']})") for t in tags]
 
 

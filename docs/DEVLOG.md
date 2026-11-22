@@ -690,3 +690,11 @@ Owner list implemented under the rule *grain is paramount, DVD is never a pixel 
   dropouts, audio defects left). Shown in the delivery review dialog as the "Episode quality report" tab.
 - Not done: hybrid *delivery* (59.94p/29.97p segments + Matroska timecodes) — needs mkvmerge and Windows validation; QC gates assume CFR.
   Encoded-stream colour-tag check (`geometry.check_colour_tags` on the delivered file) is not yet wired into QC.
+
+## CP19 — 2026-11-22 lossless stack master
+- The Orc stack master was ProRes HQ (`mov-prores`). It is not a QA-only copy: cadence, trim, PAD repair, quality and
+  the final encode all read it, so it was a lossy generation ahead of the final x265 encode. The generated Orc project
+  now forces `ffmpeg_format: mkv-ffv1` (decode-orc's lossless FFV1/Matroska sink; an old ProRes template is corrected
+  and its `prores_profile` dropped), the master is `<code>-stack-master.mkv`, and `stack-render` fails when the
+  rendered master's codec is not FFV1. `episode-report` flags an episode whose master is still lossy (re-render).
+- Not verified here: the installed Orc build's acceptance of `mkv-ffv1` (Windows only); the render check fails closed.

@@ -62,6 +62,9 @@ def _downloads_present(ctx, manifest):
     return True, f"{len(paths)} TBC+JSON pairs"
 
 
+LOSSLESS_MASTER_CODECS = ("ffv1",)
+
+
 @register
 class StackReference(Stage):
     id = "stack-reference"
@@ -78,7 +81,7 @@ class StackReference(Stage):
         paths = _capture_paths(ctx, m)
         stack_dir = ctx.root("stack")
         project = stack_dir / f"stack-full-{ctx.episode.slug}.orcprj"
-        master = ctx.root("prores") / f"{ctx.episode.code}-stack-master.mov"
+        master = ctx.root("prores") / f"{ctx.episode.code}-stack-master.mkv"
         report = ctx.root("reports") / "stack-reference.json"
         inputs = [p for label in m.capture_labels for p in (paths[label], Path(str(paths[label]) + ".json"))]
         return StepPlan(self.id, params, inputs=inputs, outputs=[project, report],
@@ -215,6 +218,13 @@ class StackRender(Stage):
         ctx.report(0.9, "decode-counting master frames")
         actual = ff.count_frames(master)
         evidence = validate_render_evidence(text, labels, int(plan.data["frames"]), actual, plan.data["groups"])
+        codec = ff.probe(master).only("video").raw.get("codec_name")
+        evidence["master_codec"] = codec
+        if codec not in LOSSLESS_MASTER_CODECS:
+            evidence["ok"] = False
+            evidence.setdefault("issues", []).append(
+                f"stack master is {codec!r}, not lossless ({', '.join(LOSSLESS_MASTER_CODECS)}): every later picture "
+                "step reads it, so a lossy master would put a second lossy generation before the final encode")
         atomic_write_json(plan.data["report"], {
             "schema": "fstk-stack-render-v1", "created_utc": utc_now_iso(), "episode": str(ctx.episode),
             "orc_exit_code": res.returncode, "project": str(project), "master": str(master),

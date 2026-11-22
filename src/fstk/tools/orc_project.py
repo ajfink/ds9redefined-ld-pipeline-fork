@@ -138,13 +138,34 @@ def clear_alignment(block: list[str]) -> None:
     raise PipelineError("source_align template has no alignment-map value")
 
 
+LOSSLESS_SINK_FORMAT = "mkv-ffv1"
+
+
 def set_sink_path(block: list[str], value: str) -> None:
+    """Point the video sink at ``value`` and force the lossless FFV1/Matroska format.
+
+    The stack master is the source of every later picture step, so it must be lossless (owner rule: grain is
+    paramount, the final encode is the only lossy step). An older template asking for ProRes is corrected here.
+    """
+    path_done = fmt_done = False
     for i, line in enumerate(block):
-        if re.match(r"^\s+value: .*\.mov\s*$", line, re.IGNORECASE):
+        if not path_done and re.match(r"^\s+value: .*\.(mov|mkv)\s*$", line, re.IGNORECASE):
             indent = re.match(r"^\s+", line).group(0)
             block[i] = f"{indent}value: {value}"
-            return
-    raise PipelineError("video_sink template has no .mov output value")
+            path_done = True
+        elif re.match(r"^\s+ffmpeg_format:\s*$", line) and i + 2 < len(block):
+            m = re.match(r"^(\s+value: ).*$", block[i + 2])
+            if m:
+                block[i + 2] = m.group(1) + LOSSLESS_SINK_FORMAT
+                fmt_done = True
+    if not path_done:
+        raise PipelineError("video_sink template has no .mov/.mkv output value")
+    if not fmt_done:
+        raise PipelineError("video_sink template has no ffmpeg_format to set to the lossless format")
+    # a stale ProRes profile parameter is meaningless for FFV1; drop it so the project reads honestly
+    for i in range(len(block) - 3, -1, -1):
+        if re.match(r"^\s+prores_profile:\s*$", block[i]):
+            del block[i:i + 3]
 
 
 def find_capture_file(folder: Path, label: str) -> Path:

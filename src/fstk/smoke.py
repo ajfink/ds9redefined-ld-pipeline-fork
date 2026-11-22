@@ -28,7 +28,7 @@ from fstk.core.timeutil import utc_now_iso
 @dataclass
 class SmokeSpec:
     episode: str
-    master: Path                      # an existing stack master (ProRes .mov)
+    master: Path                      # an existing stack master (FFV1 .mkv; a legacy ProRes .mov is accepted with a warning)
     project: Path                     # the Orc stack project (reference frame map → PAD positions)
     reference: str                    # label of the reference capture in that project
     pad_frames: int                   # audio.pad_frames of the selected capture
@@ -77,7 +77,7 @@ def build_profile(spec: SmokeSpec):
 def make_excerpt(prof, ep: EpisodeId, spec: SmokeSpec) -> tuple[Path, int]:
     import subprocess
 
-    out = prof.root("prores", ep) / f"{ep.code}-stack-master.mov"
+    out = prof.root("prores", ep) / f"{ep.code}-stack-master.mkv"
     out.parent.mkdir(parents=True, exist_ok=True)
     if not out.exists():
         subprocess.run([str(prof.tool("ffmpeg")), "-hide_banner", "-nostdin", "-v", "error", "-i", str(spec.master),

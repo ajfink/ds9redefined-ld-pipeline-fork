@@ -178,16 +178,13 @@ dag:
           value: 4:3
         ffmpeg_format:
           type: string
-          value: mov-prores
+          value: mkv-ffv1
         ntsc_phase_comp:
           type: bool
           value: true
         output_path:
           type: string
-          value: Z:\work\prores\S01E01-stack6-master.mov
-        prores_profile:
-          type: string
-          value: hq
+          value: Z:\work\prores\S01E01-stack6-master.mkv
   edges:
     - from: 1
       to: 7

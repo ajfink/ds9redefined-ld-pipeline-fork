@@ -9,7 +9,7 @@ Shape (schema ``fstk-episode-manifest-v1``)::
                     "provenance": {...}},
       "values":    {"video.head_trim": {"value": 12, "by": "...", "stage": "...", "utc": "...",
                                          "evidence": [...], "note": "...", "origin": "..."}},
-      "artifacts": {"stack_master": {"root": "prores", "name": "S01E20-stack-master.mov"}},
+      "artifacts": {"stack_master": {"root": "prores", "name": "S01E20-stack-master.mkv"}},
       "legacy":    {...}   # unmapped v38 content, preserved verbatim, never read by stages
     }
 
