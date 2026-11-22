@@ -23,6 +23,29 @@ Newest session first. Format and rules: see `AGENTS.md` → "Logging".
 - Space ledger lives beside the machine profile; catalog refreshes when older than 30 days;
   v38 frozen now (`docs/v38-reference.md`); `Z:\FromStunToKill` is a git repo.
 
+### Plan and progress (living; update at every checkpoint — other agents start here)
+Owner's order: alignment → DVD audio rate/origin → retime → PAD; only human review = A/V check.
+
+| # | Item | Status |
+|---|---|---|
+| P1 | DVD picture alignment, automatic acceptance (`dvd-alignment`) | **done**, validated on S01E20 (CP3–CP4) |
+| P2 | A/V check as the only review + self-correcting reruns (`av-correction`) | **done** (CP5); DVD episodes need P5 |
+| P3 | Exact-ratio resampling: python-soxr VHQ, 24-bit FLAC, one pass (`media/resample.py`, `stages/ldaudio_build.py`) | **done** (CP6) |
+| P4 | `dvd-free-audio` on the exact resampler (retire the 0.5 Hz `asetrate` quantisation); QC accepts 24-bit | **done** (CP6) |
+| P5 | **next** — `dvd-ld-audio`: DVD-referenced LD rate + origin (windows of LD vs DVD stereo, mapped to master through the act curves, centre-referenced robust fit, cross-checks vs duration model + picture slope), builds corrected/synced, applies A/V corrections | todo |
+| P6 | `video-trim`: DVD-referenced head/tail trims + `video.delta_s` + IVTC encode script + `video.frames` (needs VapourSynth → only runnable on Windows; unit-tested with fakes) | todo |
+| P7 | Rerun plan for DVD episodes (A/V check → av-correction → dvd-ld-audio → remux → QC) | todo, after P5 |
+| P8 | Retime DVD 5.1 + SRT through the act curves (small breaks measured on audio); 5.1 correctable in the A/V check | todo |
+| P9 | PAD audit/repair port | todo |
+| P10 | `cadence-evidence` still has a human `cadence-review`: make it automatic (review only on failed checks), per the owner's one-review rule | todo |
+| P11 | Import S01E12/17/18/20 from v38 once P5–P6 exist | todo |
+| P12 | Per-capture EFM decode, Orc version in provenance; catalog 30-day refresh; H.264 review proxy fallback | todo |
+
+Validation data on the owner's Legion: `Z:\ld-pipeline-device\{probe,prores,audio}` (S01E20 descriptors,
+stack master, EFM WAVs), DVDs in `Z:\Video\DS9S1D5`, captures on `X:\`. Windows-only tools
+(Orc, VapourSynth) cannot run in the Linux device VM: P6 and anything after encode can only be
+validated by the owner running the app.
+
 ### Checkpoints
 - **S3-CP1 — quick decisions.** Ledger beside the profile (old `data_root` ledger migrated once);
   stage outputs ≥ 1 GiB fingerprinted head+tail (`stages.base.output_scope_for`); v38 freeze
@@ -78,6 +101,19 @@ Newest session first. Format and rules: see `AGENTS.md` → "Logging".
   The no-DVD audio applies the correction: rate ÷ (1 + drift), skip × (1 + drift) − offset. The
   QC DVD-free gate checks it against the manifest. Remux reruns write `-r2`, `-r3` … versions.
   DVD-episode reruns wait for the DVD-referenced LD audio stage. 301 tests.
+- **S3-CP6 — exact-ratio LD audio (P3, P4).** `media/resample.py` resamples the native EFM WAV
+  from the measured rate to 44.1 kHz with python-soxr VHQ at the exact float ratio, in one
+  streaming pass. It writes the whole-side `corrected` and the sample-exact `synced` (lead/tail
+  silence as needed; a negative origin is allowed) as 24-bit FLAC with deterministic TPDF dither,
+  so rebuilds are byte-identical.
+
+  This retires v38's `aresample 88200 → asetrate round(2×rate)` chain, which quantised the rate
+  to 0.5 Hz (≈ ±5.7 ppm, ≈ 16 ms over an episode). Test: a 44144.37 Hz clock is restored to
+  within 10 mHz at 1 kHz. `dvd-free-audio` uses it through `stages/ldaudio_build.py`, and so
+  will `dvd-ld-audio`. `audio.intermediate_asetrate_hz` is no longer written, and
+  `audio.asetrate` holds the exact applied rate. QC accepts 16- or 24-bit LD FLAC and checks the
+  applied rate = duration rate ÷ (1 + drift correction). New runtime dependency: `soxr`
+  (pyproject; `fstk doctor` requires it). **Owner: `pip install soxr` on each machine.** 303 tests.
 
 ---
 

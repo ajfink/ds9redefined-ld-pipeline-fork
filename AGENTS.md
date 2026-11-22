@@ -70,7 +70,8 @@ docs/  REFACTOR-PLAN.md, DEVLOG.md, adr/, v38-inventory.md
 
 ## Logging
 
-`docs/DEVLOG.md` is the running development log, newest session first. Each session entry has:
+`docs/DEVLOG.md` is the running development log, newest session first. The newest session's
+**"Plan and progress"** table is the current work queue: start there, and update it at every checkpoint. Each session entry has:
 date, agent/person, goal, what was done (files/modules), test status (counts), decisions made
 (with reasons), known gaps/risks, and **next steps** precise enough for a cold start.
 Small decisions go in the DEVLOG; anything structural also gets an ADR.

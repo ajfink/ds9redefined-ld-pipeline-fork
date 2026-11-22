@@ -5,8 +5,8 @@ Without a DVD there is no external reference for the LD audio clock or its absol
 validated substitute, ported unchanged:
 
 * **Rate from duration.** The native EFM WAV spans the same disc time as the full stack, so
-  ``rate = 44100 × audio_duration / stack_duration``; applied as ``aresample 88200 → asetrate
-  (2×rate, rounded) → aresample 44100`` (soxr precision 28 when FFmpeg has it).
+  ``rate = 44100 × audio_duration / stack_duration``; applied at the exact ratio with libsoxr
+  VHQ into 24-bit FLAC (``fstk.media.resample``; v38's 0.5 Hz ``asetrate`` quantisation retired).
 * **Endpoint check.** The audio's frame-equivalent length must equal the stack minus the PAD frames
   that land inside the output, within ±1 frame — otherwise the duration model is not trusted and the
   stage stops (blocked) before writing anything.
@@ -26,17 +26,14 @@ from __future__ import annotations
 import secrets
 from pathlib import Path
 
-from fstk.core.errors import ArtifactError, GateError
+from fstk.core.errors import GateError
 from fstk.core.fsio import atomic_write_json, read_json
 from fstk.core.hashing import sha256_file
 from fstk.core.timeutil import utc_now_iso, utc_stamp
 from fstk.media.audio_timing import (
     BASE_RATE,
-    INTERMEDIATE_FACTOR,
     NO_DVD_PAD_TOLERANCE_FRAMES,
     no_dvd_audio_plan_gib,
-    rate_filter,
-    sample_plan,
     summarize_timing,
     wav_info,
 )
@@ -44,13 +41,15 @@ from fstk.qc.dvdfree import (
     RATE_METHOD,
     REPORT_SCHEMA,
     corrected_skip,
-    exact_audio_samples,
     expected_skip,
     ld_correction,
+    start_sample,
+    target_samples,
 )
 from fstk.tools.orc_project import reference_map_ranges, source_id_for_capture
 
 from .base import ArtifactExists, Custom, SpaceNeed, Stage, StepOutput, StepPlan, ValueIs, ValueSet, register
+from .ldaudio_build import build_corrected_and_synced
 
 
 def _ld_only(ctx, manifest):
@@ -78,7 +77,7 @@ class DvdFreeAudio(Stage):
                 ValueSet("stack.reference"), ValueSet("stack.frames"), ValueSet("video.frames"),
                 ValueSet("video.head_trim"), ValueSet("video.delta_s"), ArtifactExists("ld_native"),
                 ArtifactExists("stack_project"))
-    writes = ("audio.rate_method", "audio.duration_candidate_rate_hz", "audio.intermediate_asetrate_hz",
+    writes = ("audio.rate_method", "audio.duration_candidate_rate_hz",
               "audio.asetrate", "audio.resampler", "audio.skip_s", "audio.skip_method", "audio.wav0_master_frame",
               "audio.endpoint_residual_frames", "audio.endpoint_tolerance_frames", "audio.origin_verified_by_duration",
               "audio.absolute_av_reference_available", "audio.dvd_free_approved", "audio.corrected_duration_s",
@@ -112,67 +111,36 @@ class DvdFreeAudio(Stage):
             raise GateError(f"duration rate {rate:.3f} Hz is outside the 2 % sanity range")
         offset_ms, drift_ppm = ld_correction({"audio.av_correction": m.get("audio.av_correction")})
         # a reviewer-driven correction delays the audio by offset + drift·t: stretch by (1 + drift)
-        rate_2x = round(INTERMEDIATE_FACTOR * rate / (1.0 + drift_ppm * 1e-6))
-        skip = corrected_skip(expected_skip(m.require("video.delta_s"), pad_frames), offset_ms, drift_ppm)
-        if skip < 0:
-            raise GateError(f"DVD-free AudioSkip is negative ({skip:.6f}s); inspect the origin convention")
-        start, target = sample_plan(skip, frames)
+        applied_rate = rate / (1.0 + drift_ppm * 1e-6)   # exact; no asetrate quantisation (media/resample.py)
+        base_skip = expected_skip(m.require("video.delta_s"), pad_frames)
+        if base_skip < 0:
+            raise GateError(f"DVD-free AudioSkip is negative ({base_skip:.6f}s); inspect the origin convention")
+        skip = corrected_skip(base_skip, offset_ms, drift_ppm)   # may go negative: lead silence
+        start, target = start_sample(skip), target_samples(frames)
         run = f"{utc_stamp()[:15].lower()}-{secrets.token_hex(3)}"
         audio_dir = ctx.root("audio")
-        corrected = audio_dir / f"{ctx.episode.code}-LD20-dvd-free-{rate_2x}-corrected-{run}.flac"
+        corrected = audio_dir / f"{ctx.episode.code}-LD20-dvd-free-corrected-{run}.flac"
         synced = audio_dir / f"{ctx.episode.code}-LD20-dvd-free-synced-{run}.flac"
         report = ctx.root("reports") / f"dvd-free-audio-timing-{run}.json"
         planned = no_dvd_audio_plan_gib(source.stat().st_size)
         return StepPlan(self.id, params, inputs=[source, project], outputs=[corrected, synced, report],
                         space=SpaceNeed("audio", planned, "3 × native EFM WAV size (corrected + synced + temp)"),
-                        summary=(f"rate {rate:.4f} Hz (2× asetrate {rate_2x}), endpoint residual {residual:+.3f} frames, "
+                        summary=(f"rate {applied_rate:.6f} Hz (exact ratio), endpoint residual {residual:+.3f} frames, "
                                  f"AudioSkip {skip:.6f}s, {target} samples"),
                         data={"source": str(source), "project": str(project), "audio": audio, "pads": pads,
-                              "projection": proj, "timing": timing, "rate_2x": rate_2x, "skip": skip,
+                              "projection": proj, "timing": timing, "rate": applied_rate, "skip": skip,
                               "start": start, "target": target, "corrected": str(corrected), "synced": str(synced),
                               "report": str(report), "run": run, "frames": frames, "head_trim": head_trim,
                               "pad_frames": pad_frames, "source_id": source_id,
                               "av_correction": {"offset_ms": offset_ms, "drift_ppm": drift_ppm}})
 
-    # -- FFmpeg passes
-    @staticmethod
-    def _encode(ff, source: Path, out: Path, af: str, *, compression: list[str], cancel) -> dict:
-        if out.exists():
-            raise ArtifactError(f"refusing to overwrite {out}")
-        tmp = out.with_name(out.stem + ".tmp.flac")
-        if tmp.exists():
-            raise ArtifactError(f"temporary output exists; inspect it before retrying: {tmp}")
-        out.parent.mkdir(parents=True, exist_ok=True)
-        args = ["-n", "-v", "error", "-i", str(source), "-map", "0:a:0", "-af", af, "-c:a", "flac", *compression,
-                "-sample_fmt", "s16", "-ar", str(BASE_RATE), "-f", "flac", str(tmp)]
-        res = ff.run(args, name=out.stem, cancel=cancel)
-        if res.returncode != 0 or not tmp.is_file():
-            raise ArtifactError(f"FFmpeg failed building {out.name} ({res.describe()}); any partial output is kept "
-                                f"at {tmp}")
-        stream = ff.probe(tmp).only("audio").raw
-        if str(stream.get("sample_rate")) != str(BASE_RATE) or int(stream.get("channels") or 0) != 2:
-            raise ArtifactError(f"{tmp.name} has an unexpected stream format: {stream}")
-        tmp.rename(out)
-        return {"path": str(out), "filter": af, "ffmpeg_args": args, "stream": stream,
-                "output_sha256": sha256_file(out)}
-
     def run(self, ctx, plan):
         d = plan.data
-        ff = ctx.tool("ffmpeg")
         source = Path(d["source"])
-        use_soxr = ff.supports_soxr()
-        rate_af, resampler = rate_filter(d["rate_2x"], use_soxr)
-        ctx.report(0.05, f"rate-corrected FLAC ({resampler})")
-        corrected = self._encode(ff, source, Path(d["corrected"]), rate_af, compression=[], cancel=ctx.cancel)
-        ctx.check_cancel()
-        ctx.report(0.5, "sample-synced FLAC")
-        synced_af = (f"{rate_af},atrim=start_sample={d['start']},asetpts=PTS-STARTPTS,"
-                     f"apad=whole_len={d['target']},atrim=end_sample={d['target']}")
-        synced = self._encode(ff, source, Path(d["synced"]), synced_af, compression=["-compression_level", "8"],
-                              cancel=ctx.cancel)
-        actual = exact_audio_samples(synced["stream"])
-        if actual != d["target"]:
-            raise ArtifactError(f"synced audio has {actual} samples; the video needs exactly {d['target']}")
+        built = build_corrected_and_synced(ctx, source, rate_hz=d["rate"], start_sample=d["start"],
+                                           target_samples=d["target"], corrected=Path(d["corrected"]),
+                                           synced=Path(d["synced"]))
+        corrected, synced, resampler = built["corrected"], built["synced"], built["resample"]["resampler"]
         m = ctx.manifest
         report = {
             "schema": REPORT_SCHEMA, "created_utc": utc_now_iso(), "episode": str(ctx.episode), "run": d["run"],
@@ -187,7 +155,7 @@ class DvdFreeAudio(Stage):
             "measured_delta_s": m.get("video.delta_s"), "source_audio": str(source),
             "source_audio_sha256": sha256_file(source), "source_audio_pcm": d["audio"],
             "stack_project": d["project"], "resampler_backend": resampler, "dvd_opened": False,
-            "intermediate_asetrate_hz": d["rate_2x"], "effective_rate_hz": d["rate_2x"] / INTERMEDIATE_FACTOR,
+            "effective_rate_hz": d["rate"], "resample": built["resample"],
             "corrected": corrected,
             "synced": {**synced, "skip_s": d["skip"], "start_sample": d["start"], "target_samples": d["target"],
                        "skip_method": "measured LD output-frame delta minus selected-capture Orc pad_frames/FPS; "
@@ -204,8 +172,7 @@ class DvdFreeAudio(Stage):
         choice = "operator chose the no-DVD route (mode.no_dvd_proceed_approved); stage applied v38's duration/PAD recipe"
         out.measure("audio.rate_method", RATE_METHOD, note=choice)
         out.measure("audio.duration_candidate_rate_hz", d["timing"]["duration_candidate_effective_rate_hz"])
-        out.measure("audio.intermediate_asetrate_hz", float(d["rate_2x"]))
-        out.measure("audio.asetrate", d["rate_2x"] / INTERMEDIATE_FACTOR)
+        out.measure("audio.asetrate", d["rate"], note="exact applied rate (no asetrate quantisation)")
         out.measure("audio.resampler", resampler)
         out.measure("audio.skip_s", d["skip"])
         out.measure("audio.skip_method", "dvd-free capture-pad geometry", note=choice)

@@ -94,6 +94,10 @@ def check_dvd_free(values: dict[str, Any], report: dict, *, native_sha256: str, 
     if abs(float(skip) - want_skip) > 0.5 / SAMPLE_RATE:
         issues.append(f"audio.skip_s {float(skip):.9f} disagrees with capture-pad geometry {want_skip:.9f}s "
                       f"(A/V correction {offset_ms:+.1f} ms, {drift_ppm:+.1f} ppm) by more than half a sample")
+    eff = report.get("effective_rate_hz")
+    if eff is None or abs(float(eff) - rate / (1.0 + drift_ppm * 1e-6)) > 1e-6:
+        issues.append(f"applied rate {eff!r} Hz is not the duration rate {rate:.6f} Hz with the recorded drift "
+                      f"correction ({drift_ppm:+.1f} ppm)")
     applied = report.get("av_correction") or {"offset_ms": 0.0, "drift_ppm": 0.0}
     if (abs(float(applied.get("offset_ms", 0)) - offset_ms) > 1e-6
             or abs(float(applied.get("drift_ppm", 0)) - drift_ppm) > 1e-6):

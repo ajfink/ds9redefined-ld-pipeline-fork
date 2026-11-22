@@ -153,8 +153,9 @@ def stream_inventory(streams: list[dict], fmt: dict, tracks: list[str], duration
     else:
         a0 = aud[0]
         if (a0.get("codec_name") != "flac" or a0.get("channels") != 2 or str(a0.get("sample_rate")) != "44100"
-                or str(a0.get("bits_per_raw_sample")) != "16"):
-            problems.append("LD track is not 44.1 kHz/16-bit FLAC stereo")
+                or str(a0.get("bits_per_raw_sample")) not in ("16", "24")):
+            # 24-bit since the exact-ratio resampler (fstk.media.resample); 16-bit for v38-built tracks
+            problems.append("LD track is not 44.1 kHz 16/24-bit FLAC stereo")
         if disp(a0).get("default") != 1:
             problems.append("LD is not the default track")
         if tags(a0).get("language") != "eng":

@@ -19,7 +19,7 @@ from fstk.tools import process
 
 GIB = 1024 ** 3
 PY_MIN = (3, 12)
-PACKAGES = {"numpy": True, "cv2": True, "PIL": True, "PySide6": False, "vapoursynth": False}
+PACKAGES = {"numpy": True, "cv2": True, "PIL": True, "soxr": True, "PySide6": False, "vapoursynth": False}
 VERSION_ARGS = {"ffmpeg": ["-version"], "ffprobe": ["-version"], "vspipe": ["--version"],
                 "sevenzip": [], "curl": ["--version"]}
 
