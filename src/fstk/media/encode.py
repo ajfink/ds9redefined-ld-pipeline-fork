@@ -52,15 +52,21 @@ def display_aspect(sar: str, width: int, height: int) -> str:
     return f"{num * width}:{den * height}"
 
 
+PRESETS = ("ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow")
+DEFAULT_PRESET = "slow"
+
+
 def final_encode_args(*, aspect: str, frames: int, duration_s: float, capture: str, out: str,
-                      chroma: str | None = None) -> list[str]:
+                      chroma: str | None = None, preset: str = DEFAULT_PRESET) -> list[str]:
     """FFmpeg arguments after the ``-f yuv4mpegpipe -i -`` input (v38 recipe; chroma per episode)."""
     if frames <= 0 or duration_s <= 0:
         raise ArtifactError("measured frames and duration are required for the final encode")
     spec = chroma_spec(chroma)
+    if preset not in PRESETS:
+        raise ArtifactError(f"unknown x265 preset {preset!r}")
     return ["-map", "0:v:0", "-an", "-sn", "-aspect", aspect,
             "-c:v", "libx265", "-profile:v", spec["x265_profile"], "-pix_fmt", spec["pix_fmt"],
-            "-crf", "14", "-preset", "slow", "-tune", "grain", "-x265-params", X265_PARAMS,
+            "-crf", "14", "-preset", preset, "-tune", "grain", "-x265-params", X265_PARAMS,
             "-color_primaries", "smpte170m", "-color_trc", "smpte170m",
             "-colorspace", "smpte170m", "-color_range", "tv",
             "-frames:v", str(frames), "-t", str(duration_s),

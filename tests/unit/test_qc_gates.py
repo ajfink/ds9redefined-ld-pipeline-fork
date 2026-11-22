@@ -99,3 +99,25 @@ def test_summary_counts_unexpected_skips_as_unverified():
     assert "absolute A/V" in s["unverified_gates"]
     with pytest.raises(ValueError):
         Gate("x", "MAYBE")
+
+
+def _av(constant=2.0, slope=1.0, rms=6.0, local=(3.0, -4.0)):
+    rows = [{"out_time_s": 100.0 + 600 * i, "window_duration_s": 20.0, "av_ms": constant + d}
+            for i, d in enumerate(local)]
+    return {"constant_ms": constant, "slope_ppm": slope, "rms_ms": rms, "rows": rows, "pass": True}
+
+
+def test_av_prescreen_is_confident_only_for_a_tight_fit_under_every_chunk():
+    from fstk.qc.gates import av_prescreen
+
+    chunks = [{"start_s": 95.0, "end_s": 110.0}, {"start_s": 695.0, "end_s": 710.0}]
+    ok = av_prescreen(_av(), chunks)
+    assert ok["available"] and ok["confident"]
+    assert not av_prescreen(_av(constant=35.0), chunks)["confident"]            # inside the ±100 ms gate, outside ±20
+    assert not av_prescreen(_av(slope=15.0), chunks)["confident"]
+    drifting = av_prescreen(_av(local=(3.0, 55.0)), chunks)
+    assert not drifting["confident"] and "chunk at 695 s" in drifting["reason"]
+    gap = av_prescreen(_av(), [*chunks, {"start_s": 1500.0, "end_s": 1515.0}])
+    assert not gap["confident"] and "no fit window" in gap["reason"]
+    none = av_prescreen(None, chunks)
+    assert not none["available"] and not none["confident"]                       # no DVD → full manual check

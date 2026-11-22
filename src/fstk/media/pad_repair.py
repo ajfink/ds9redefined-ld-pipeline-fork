@@ -264,7 +264,12 @@ def padfix_script(base_text: str, *, repairs: list[dict], payload: str | None, e
     if needs_payload:
         out += [f"_payload = core.bs.VideoSource({payload!r})",
                 "_payload = core.resize.Spline36(_payload, format=out.format.id, matrix_s='170m', range_s='limited',",
-                "                                chromaloc_s='left', dither_type='error_diffusion')"]
+                "                                chromaloc_s='left', dither_type='error_diffusion')",
+                # The payload container carries its own timebase fps; splicing a clip with another fps
+                # makes the whole output variable-rate, so pin it to the episode's exact rate.
+                "_payload = core.std.AssumeFPS(_payload, fpsnum=out.fps_num, fpsden=out.fps_den)",
+                "assert (_payload.width, _payload.height) == (out.width, out.height), "
+                "('PAD payload size differs from the episode', _payload.width, _payload.height)"]
     out += ["_pieces, _at = [], 0",
             "for _n, _m, _k in PAD_REPAIRS:",
             "    if _n > _at:",

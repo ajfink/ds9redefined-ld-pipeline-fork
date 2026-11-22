@@ -42,6 +42,7 @@ from fstk.qc.gates import (
     Gate,
     allowed_skips,
     av_check_chunks,
+    av_prescreen,
     pad_black_hits,
     pad_review_intervals,
     read_frame_list,
@@ -419,6 +420,7 @@ class QcReport(Stage):
                   "evidence_paths": evidence, "review_intervals": review, "packet_hashes": hashes,
                   "av_check": {"chunks": chunks,
                                "track": "ld", "applied_correction": m.get("audio.av_correction") or {},
+                               "prescreen": av_prescreen(measured.get("av"), chunks),
                                "instructions": "Watch each chunk; mark it in sync, audio too early (sound before "
                                                "the lips) or audio too late (sound after the lips)."},
                   "standing_warnings": STANDING_WARNINGS, "candidate_is_approval": False}

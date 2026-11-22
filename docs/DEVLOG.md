@@ -663,3 +663,8 @@ without owner input. v38 treated as read-only reference.
 2. Wrap them as stages (intake/local-source, stack reference/render via Orc, EFM decode,
    cadence map on VapourSynth, encode/remux, QC).
 3. PySide6 shell over the engine's event stream.
+
+## CP16 — 2026-11-22 S01E20 smoke run (unattended)
+Full no-DVD chain passed on a 100 s real excerpt (4:2:2 10-bit HEVC out). Fixed: PAD payload fps made output variable-rate
+(real bug); QTempGaussMC option spelling is version dependent; smoke auto-approves review gates (labelled) and gained
+`--repair pp2` / `--rife-standin`. Missing on the device VM: `resize2` plugin, RIFE. See `docs/smoke/SMOKE-2026-11-22-S01E20.md`.

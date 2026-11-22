@@ -400,6 +400,13 @@ class DeliveryReview(QDialog):
                 box.addItem(label, value)
             box.currentIndexChanged.connect(self._update_buttons)
             self.chunks.setCellWidget(i, 2, box)
+        pre = (self.result.get("av_check") or {}).get("prescreen") or {}
+        if pre.get("confident"):
+            # advice only: the reviewer still plays each chunk and can change any mark
+            for i in range(len(chunks)):
+                self.set_verdict(i, "ok")
+            self.summary.setText(self.summary.text() + f"\nA/V pre-screen: {pre['reason']} — chunks pre-marked 'in sync'; "
+                                                        "play each to confirm.")
 
     def set_verdict(self, row: int, verdict: str) -> None:
         box = self.chunks.cellWidget(row, 2)

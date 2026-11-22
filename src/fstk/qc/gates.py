@@ -358,3 +358,38 @@ def render_markdown(title: str, deliverable: str, gates: list[Gate], summary: di
                   f"{summary['fail']} fail/unverified**", "", "## Standing warnings", ""]
     lines += [f"- {w}" for w in STANDING_WARNINGS]
     return "\n".join(lines) + "\n"
+
+
+# --------------------------------------------------------------------------- A/V pre-screen
+PRESCREEN = {"constant_ms": 20.0, "slope_ppm": 10.0, "rms_ms": 15.0, "window_ms": 30.0}
+
+
+def av_prescreen(av: dict | None, chunks: list[dict]) -> dict:
+    """Advice for the human A/V check from the DVD cross-correlation (never an approval).
+
+    ``confident`` only when the absolute fit is tight (±20 ms, ±10 ppm, rms ≤ 15 ms — well inside the
+    ±100/±30/≤40 hard gates) **and** every fit window that overlaps a chunk agrees with the fit within
+    30 ms. The review window then pre-marks the chunks "in sync" for the reviewer to confirm by eye; a
+    no-DVD episode (no measurement) always gets the full manual check.
+    """
+    if not av or "rows" not in av:
+        return {"available": False, "confident": False, "reason": "no DVD cross-correlation for this episode"}
+    reasons = []
+    if abs(av["constant_ms"]) > PRESCREEN["constant_ms"]:
+        reasons.append(f"constant {av['constant_ms']:+.1f} ms")
+    if abs(av["slope_ppm"]) > PRESCREEN["slope_ppm"]:
+        reasons.append(f"slope {av['slope_ppm']:+.1f} ppm")
+    if av["rms_ms"] > PRESCREEN["rms_ms"]:
+        reasons.append(f"rms {av['rms_ms']:.1f} ms")
+    per_chunk = []
+    for c in chunks:
+        near = [r for r in av["rows"]
+                if r["out_time_s"] < c["end_s"] and r["out_time_s"] + r["window_duration_s"] > c["start_s"]]
+        worst = max((abs(r["av_ms"] - av["constant_ms"]) for r in near), default=None)
+        per_chunk.append({"start_s": c["start_s"], "windows": len(near), "worst_local_ms": worst})
+        if worst is None:
+            reasons.append(f"no fit window under the chunk at {c['start_s']:.0f} s")
+        elif worst > PRESCREEN["window_ms"]:
+            reasons.append(f"chunk at {c['start_s']:.0f} s: local {worst:.0f} ms from the fit")
+    return {"available": True, "confident": not reasons, "reason": "; ".join(reasons) or "tight fit, every chunk agrees",
+            "chunks": per_chunk, "limits": PRESCREEN}
