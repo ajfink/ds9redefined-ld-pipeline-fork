@@ -42,7 +42,7 @@ Owner's order: alignment → DVD audio rate/origin → retime → PAD; only huma
 | P13 | `delivery_plan` + "Run to delivery" button + `fstk plan delivery` (stack render → … → QC for either route) | **done** (CP9) |
 | P11 | Import the v38 episodes: all 13 real device manifests import + round-trip; `--v38-profile` resolves their files to absolute paths so they continue in fstk | **done** (CP10); first real continuation run on Windows still owed |
 | P12 | EFM: every capture decoded even if one fails, failures recorded + excluded from the automatic choice, Orc identity (version if reported + exe SHA-256) in provenance | **done** (CP12) |
-| P14 | Catalog refresh when the snapshot is > 30 days old (`fstk catalog refresh`, startup check) | **next** |
+| P14 | Catalog refresh when the snapshot is > 30 days old (`fstk catalog refresh`, startup check) | **done** (CP13) |
 | P15 | H.264 review-proxy fallback in the A/V check window | todo |
 | P9b | PAD audit/repair port (v38 `audit_pads` / cut-PAD stills) | todo |
 
@@ -239,6 +239,18 @@ validated by the owner running the app.
     none, and the exe hash identifies the build regardless.
   - **Version policy** (owner: best output): newer Orc is allowed, because the report parser
     fails closed. 321 tests.
+- **S3-CP13 — Catalog refresh (P14).** New `catalog/build.py` (port of v38
+  `build_archive_catalog.py`, metadata only, injectable fetcher so tests run offline).
+  - Snapshots are dated files `<data_root>/catalog/section_31_tree-<UTC stamp>[-n].json.gz`, written
+    atomically and never overwritten. Resolution order: profile `catalog_path` (explicit pin) >
+    newest refreshed snapshot > the packaged one.
+  - Stale = `source.generated_at_utc` older than 30 days (or unreadable).
+  - Any listing/item failure aborts the whole refresh; no partial tree is saved.
+  - CLI: `fstk catalog status`, `fstk catalog refresh [--force]` (no-op unless stale).
+  - GUI: a background check 1.5 s after launch refreshes if stale; offline failures are logged and the
+    existing snapshot stays in use.
+  - Not exercised against live Archive.org (the container's network is allowlisted): the first run
+    on the owner's machine is the real-network check. Next: P15, P9b.
 
 ---
 

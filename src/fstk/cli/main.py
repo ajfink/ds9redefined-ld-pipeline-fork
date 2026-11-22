@@ -243,7 +243,9 @@ def _catalog(args):
 
     path = None
     try:
-        path = getattr(_profile(args), "catalog_path", None)
+        from fstk.catalog.build import resolve_path
+
+        path = resolve_path(_profile(args))
     except FstkError:
         path = None
     return CatalogIndex.load(path or None)
@@ -272,6 +274,31 @@ def cmd_catalog_search(args) -> int:
         f"{r['id']:11} {r['title'][:38]:38} {r['captures']:>2} caps {r['gib']:>7.1f} GiB "
         f"{'' if r['selectable'] else '[lookup-only]'} {r.get('local', '')}" for r in rows) or "no match")
     return 0 if rows else 1
+
+
+def cmd_catalog_status(args) -> int:
+    from fstk.catalog.build import status
+
+    info = status(_profile(args))
+    print(json.dumps(info, indent=2))
+    if info["stale"]:
+        print(f"snapshot is older than {info['max_age_days']} days: run `fstk catalog refresh`", file=sys.stderr)
+    return 0
+
+
+def cmd_catalog_refresh(args) -> int:
+    from fstk.catalog.build import refresh, status
+
+    prof = _profile(args)
+    if not args.force and not status(prof)["stale"]:
+        print("catalog snapshot is fresh (< 30 days); use --force to refresh anyway")
+        return 0
+    path, catalog = refresh(prof.data_root)
+    print(json.dumps({"written": str(path), "uploads": catalog["source"]["upload_count"],
+                      "generated_at_utc": catalog["source"]["generated_at_utc"]}, indent=2))
+    if prof.catalog_path:
+        print("note: the profile pins catalog_path; clear it to use the refreshed snapshot", file=sys.stderr)
+    return 0
 
 
 def cmd_catalog_coverage(args) -> int:
@@ -454,6 +481,10 @@ def build_parser() -> argparse.ArgumentParser:
     cs.add_argument("query", nargs="*")
     cs.set_defaults(func=cmd_catalog_search)
     cat.add_parser("coverage").set_defaults(func=cmd_catalog_coverage)
+    cat.add_parser("status", help="snapshot age and path").set_defaults(func=cmd_catalog_status)
+    cr = cat.add_parser("refresh", help="re-enumerate the Archive account (metadata only) if > 30 days old")
+    cr.add_argument("--force", action="store_true")
+    cr.set_defaults(func=cmd_catalog_refresh)
 
     epi = sub.add_parser("episode").add_subparsers(dest="sub", required=True)
     ec = epi.add_parser("create", help="create an episode workspace")

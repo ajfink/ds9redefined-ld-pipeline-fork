@@ -21,7 +21,7 @@ import socket
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, QThread, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
@@ -73,6 +73,27 @@ class PlanWorker(QObject):
             self.failed.emit(f"internal error: {exc!r}")
 
 
+class CatalogRefreshWorker(QObject):
+    """Owner decision: re-check the Archive catalog when the snapshot is more than 30 days old."""
+
+    done = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, services: Services):
+        super().__init__()
+        self.services = services
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            if self.services.catalog_status()["stale"]:
+                self.done.emit(self.services.refresh_catalog())
+            else:
+                self.done.emit("")
+        except Exception as exc:  # offline etc.: the existing snapshot stays in use
+            self.failed.emit(str(exc))
+
+
 class MainWindow(QMainWindow):
     def __init__(self, services: Services, *, actor: str | None = None):
         super().__init__()
@@ -82,6 +103,8 @@ class MainWindow(QMainWindow):
         self.worker: PlanWorker | None = None
         self.setWindowTitle(f"FromStunToKill — {services.profile.machine}")
         self.resize(1280, 800)
+        self.catalog_thread: QThread | None = None
+        QTimer.singleShot(1500, self.check_catalog_age)
 
         self.episodes = QListWidget()
         self.episodes.currentTextChanged.connect(self.show_episode)
@@ -396,6 +419,34 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(True)
         self.append_log(f"running {path}")
         self.thread.start()
+
+    def check_catalog_age(self) -> None:
+        if self.catalog_thread is not None:
+            return
+        self.catalog_thread = QThread(self)
+        self.catalog_worker = CatalogRefreshWorker(self.services)
+        self.catalog_worker.moveToThread(self.catalog_thread)
+        self.catalog_thread.started.connect(self.catalog_worker.run)
+        self.catalog_worker.done.connect(self._catalog_done)
+        self.catalog_worker.failed.connect(self._catalog_failed)
+        self.catalog_thread.start()
+
+    def _catalog_end(self) -> None:
+        if self.catalog_thread:
+            self.catalog_thread.quit()
+            self.catalog_thread.wait()
+        self.catalog_thread = None
+
+    @Slot(str)
+    def _catalog_done(self, path: str) -> None:
+        if path:
+            self.append_log(f"Archive catalog refreshed: {path}")
+        self._catalog_end()
+
+    @Slot(str)
+    def _catalog_failed(self, message: str) -> None:
+        self.append_log(f"Archive catalog check skipped (keeping current snapshot): {message}")
+        self._catalog_end()
 
     def cancel_run(self) -> None:
         if self.worker and self.worker.engine:

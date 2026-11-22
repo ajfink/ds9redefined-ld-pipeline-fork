@@ -51,8 +51,23 @@ class Services:
         from fstk.catalog.index import CatalogIndex
 
         if self._catalog is None:
-            self._catalog = CatalogIndex.load(self.profile.catalog_path or None)
+            from fstk.catalog.build import resolve_path
+
+            self._catalog = CatalogIndex.load(resolve_path(self.profile))
         return self._catalog
+
+    def catalog_status(self) -> dict:
+        from fstk.catalog.build import status
+
+        return status(self.profile)
+
+    def refresh_catalog(self) -> str:
+        """Fetch a new dated snapshot (network; call from a worker thread) and reload the index."""
+        from fstk.catalog.build import refresh
+
+        path, _ = refresh(self.profile.data_root)
+        self._catalog = None
+        return str(path)
 
     # ---------------------------------------------------------------- shared workspace (ADR 0002)
     def shared_tree(self):
