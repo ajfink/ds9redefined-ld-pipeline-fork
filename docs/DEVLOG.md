@@ -35,7 +35,7 @@ Owner's order: alignment → DVD audio rate/origin → retime → PAD; only huma
 | P5 | `dvd-ld-audio`: DVD-referenced LD rate + origin (windows of LD vs DVD stereo, mapped to master through the act curves, centre-referenced robust fit, cross-checks vs duration model + picture slope), builds corrected/synced, applies A/V corrections | **done** (CP7), validated on S01E20 M1+P2 |
 | P6 | `video-trim`: DVD-referenced head/tail trims + `video.delta_s` + IVTC encode script + `video.frames` (needs VapourSynth → only runnable on Windows; unit-tested with fakes) | todo |
 | P7 | Rerun plan for DVD episodes (A/V check → av-correction → dvd-ld-audio → remux → QC) | **done** (CP7) |
-| P8 | Retime DVD 5.1 + SRT onto the LD timeline. **Use audio-to-audio matching (LD EFM ↔ DVD stereo), not the picture curves**: CP7 showed the picture curves carry ±1-frame local error while the audio relation is ms-precise. 5.1 correctable in the A/V check | todo |
+| P8 | Retime DVD 5.1 + SRT onto the LD timeline by **audio** (`dvd-retime`, `media/retime_map.py`, `media/retime_render.py`) | **done** (CP8), map verified on real S01E20 audio |
 | P9 | PAD audit/repair port | todo |
 | P10 | `cadence-evidence` still has a human `cadence-review`: make it automatic (review only on failed checks), per the owner's one-review rule | todo |
 | P11 | Import S01E12/17/18/20 from v38 once P5–P6 exist | todo |
@@ -142,6 +142,34 @@ validated by the owner running the app.
   is blocked with the numbers. It builds the 24-bit exact-rate track with skip = delta −
   intercept (+ A/V correction) and records cross-checks (origin − pad geometry, rate − 1000:1001)
   and per-act residuals. The A/V-check rerun plan now uses `dvd-ld-audio` for DVD episodes.
+- **S3-CP8 — audio-precise retime (P8).** `dvd-retime` replaces v38's two-review retime chain
+  (prepare breaks → review → measure edges → review → `retime_dvd_assets`).
+
+  `media/retime_map.py` works in LD WAV time, the output's clock. The windows `dvd-ld-audio`
+  matched are split into constant-relation segments wherever `dvd − β·wav` steps by > 15 ms
+  (confirmed by the next window). Each edit is located by a fine scan: 3 s windows every 0.25 s,
+  checking which segment line explains the audio; ties go to the quietest LD point. DVD-only
+  material is dropped; LD-only material becomes LD fill.
+
+  **S01E20, real audio:** 7 edits found, including a 100 ms DVD-only trim at LD 348 s that the
+  picture model had folded into an act, and −67 ms / +65 ms LD- and DVD-only bits at 236 s and
+  2711 s. Act breaks are +235, −100, +534 and +501 ms. LD fill totals 0.19 s. Verified by
+  matching the mapped DVD stereo against the LD audio on 368 ten-second chunks: median −2.5 ms,
+  MAD 1.9 ms, max 6.3 ms (v38's picture-based path had ±1-frame = 33 ms local error).
+
+  `media/retime_render.py` renders the 5.1 in one sequential DVD decode. Each DVD piece is
+  resampled at its exact ratio with soxr VHQ (no `atempo` WSOLA artifacts; 1.7-cent pitch shift).
+  LD-fill pieces copy the time-aligned LD stereo into FL/FR, joins get 2 ms fades, and the length
+  is exactly frames × 2002 samples at 48 kHz, written as 24-bit FLAC. Subtitles come from the
+  `srt_source` artifact or the DVD's English text stream; cues on DVD-only material are reported.
+  The stage then checks the rendered 5.1 against the delivered LD audio (median ≤ 10 ms, ≥ 90%
+  within 20 ms, both sides of every edit) and writes `reports/retime-audio-verification.json` for
+  QC's "retime output gaps" gate. It sets `deliverable.mux_tracks` = ld, 51, srt.
+
+  The full 5.1 render was tested on synthetic media only; the real S01E20 5.1 render needs
+  `video.delta_s` (P6). Bug caught: `stages/__init__.py` had been reflowed by ruff, so the one-line
+  import edit for `dvdaudio` silently failed and `dvd-ld-audio` registered only in tests. Added a
+  test that every stage module registers through the package import. 310 tests.
 
 ---
 

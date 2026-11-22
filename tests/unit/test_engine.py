@@ -309,3 +309,15 @@ def test_large_outputs_are_fingerprinted_head_tail(tmp_path):
     assert output_scope_for(big, {str(big): SCOPE_FULL}) == SCOPE_FULL
     fp = Fingerprint.of(big, scope=output_scope_for(big, {}))
     assert fp.scope == SCOPE_HEAD_TAIL and fp.matches()
+
+
+def test_every_stage_module_is_registered_by_the_package_import():
+    """Guards against a stage module that only registers when a test imports it directly."""
+    import pkgutil
+
+    import fstk.stages as pkg
+    from fstk.stages.base import REGISTRY
+
+    modules = {m.name for m in pkgutil.iter_modules(pkg.__path__)} - {"base", "ldaudio_build"}
+    owners = {cls.__module__.rsplit(".", 1)[-1] for cls in REGISTRY.values()}
+    assert modules <= owners, modules - owners

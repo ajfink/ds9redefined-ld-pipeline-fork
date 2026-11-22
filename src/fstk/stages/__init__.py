@@ -4,12 +4,14 @@ from . import (  # noqa: F401
     avcorrection,
     cadence,
     dvd,
+    dvdaudio,
     dvdfree,
     efm,
     encode,
     intake,
     qc,
     remux,
+    retime,
     stack,
 )
 from .base import REGISTRY, Stage, get_stage, register  # noqa: F401

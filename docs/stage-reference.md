@@ -62,6 +62,16 @@ Operator-chosen no-DVD route: rate from native audio vs stack duration, ±1-fram
 - writes: audio.rate_method, audio.duration_candidate_rate_hz, audio.asetrate, audio.resampler, audio.skip_s, audio.skip_method, audio.wav0_master_frame, audio.endpoint_residual_frames, audio.endpoint_tolerance_frames, audio.origin_verified_by_duration, audio.absolute_av_reference_available, audio.dvd_free_approved, audio.corrected_duration_s, deliverable.ld_audio_source, deliverable.tracks, deliverable.mux_tracks
 - artifacts: ld_corrected, ld_synced, audio_timing_report
 
+## `dvd-ld-audio` — LD stereo timed against the DVD (rate + origin)
+
+Measures the LD audio clock against the DVD stereo through the picture alignment, accepts it automatically when precise, and builds the exact-rate, sample-exact LD track.
+
+- resource: compute
+- human review: —
+- requires: value:mode.dvd_reference_available==True, dvd-alignment, value:audio.capture, value:audio.pad_frames, value:video.frames, value:video.delta_s, artifact:ld_native, artifact:dvd
+- writes: audio.rate_method, audio.asetrate, audio.resampler, audio.skip_s, audio.skip_method, audio.wav0_master_frame, audio.dvd_clock, audio.corrected_duration_s, deliverable.ld_audio_source
+- artifacts: ld_corrected, ld_synced, audio_timing_report
+
 ## `dvd-probe` — Probe DVD reference
 
 Inventory a DVD reference: streams, packet-order (seekability), decoded frame count, hash.
@@ -75,6 +85,16 @@ report; records no manifest values (the DVD's role is an operator choice).
 - requires: artifact:dvd
 - writes: —
 - artifacts: —
+
+## `dvd-retime` — Retime DVD 5.1 + subtitles onto the LD timeline
+
+Audio-precise DVD→LD map (edits located automatically), exact-ratio 5.1 render with LD fill, retimed English subtitles, and a self-check against the LD audio.
+
+- resource: compute
+- human review: —
+- requires: value:mode.dvd_reference_available==True, dvd-ld-audio, value:video.delta_s, value:video.frames, artifact:dvd, artifact:ld_native, artifact:ld_synced
+- writes: retime.srt_cues, deliverable.mux_tracks, deliverable.tracks
+- artifacts: retimed_51, retimed_srt, retime_map
 
 ## `efm-decode` — Decode EFM audio (Orc EFMSink)
 
