@@ -395,6 +395,60 @@ def unique_pareto(quality: dict[str, dict]) -> AutoSelection | None:
                          "samples, or muted samples; strictly better on at least one metric.")
 
 
+#: Audibility order for the least-bad rule (owner decision 2026-11-21: no human EFM choice).
+#: Orc's audio stage *silences* samples it cannot correct (zero amplitude: an audible dropout)
+#: and *conceals* isolated bad samples by averaging their neighbours (rarely audible). So:
+#: silenced samples first, then whole missing sections, then interpolated samples, then the
+#: error-correction rates that predict hidden damage.
+LEAST_BAD_ORDER = ("muted_samples", "missing_sections", "concealed_samples", "post_c2_data_loss_pct",
+                   "c2_uncorrectable_pct", "c1_uncorrectable_pct")
+LEAST_BAD_RULE = "least-audible-damage-v1"
+
+
+def pareto_front(quality: dict[str, dict]) -> list[str]:
+    """Captures that no other capture beats on every metric (all metrics must be present)."""
+    vectors = {label: tuple(float(q[k]) for k in PARETO_METRICS) for label, q in quality.items()}
+
+    def dominates(a, b):
+        return all(x <= y for x, y in zip(a, b, strict=True)) and any(x < y for x, y in zip(a, b, strict=True))
+
+    return [label for label, v in vectors.items()
+            if not any(dominates(ov, v) for other, ov in vectors.items() if other != label)]
+
+
+def least_bad(quality: dict[str, dict]) -> AutoSelection | None:
+    """Automatic choice when no capture wins on every measure.
+
+    Among the Pareto front, take the capture with the least audible damage, comparing
+    ``LEAST_BAD_ORDER`` lexicographically (fewest silenced samples first). Returns None only if
+    a metric is missing from some report — parsing fails closed, so that means a broken decode.
+    """
+    for q in quality.values():
+        for name in PARETO_METRICS:
+            v = q.get(name)
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+                return None
+    if not quality:
+        return None
+    front = pareto_front(quality)
+    ranked = sorted(front, key=lambda c: (tuple(float(quality[c][k]) for k in LEAST_BAD_ORDER), c))
+    best = ranked[0]
+    lines = []
+    for other in ranked[1:]:
+        diffs = [f"{k} {_fmt(quality[best][k])} vs {_fmt(quality[other][k])}"
+                 for k in LEAST_BAD_ORDER if quality[best][k] != quality[other][k]]
+        lines.append(f"{other}: {'; '.join(diffs[:3])}")
+    note = (f"Automatically selected by {LEAST_BAD_RULE}: no capture is best on every measure; among the "
+            f"Pareto front {sorted(front)} {best} has the least audible damage (fewest silenced samples, then "
+            f"missing sections, then interpolated samples, then error-correction rates). "
+            + ("Compared with " + " | ".join(lines) if lines else ""))
+    return AutoSelection(best, note.strip())
+
+
+def _fmt(v) -> str:
+    return f"{v:g}" if isinstance(v, float) else str(v)
+
+
 PAIR_RE = re.compile(r"\s*(\d+)\s*\+\s*(-?\d+)\s*")
 
 

@@ -9,7 +9,7 @@ from fstk.core.fsio import atomic_write_json
 from fstk.core.timeutil import utc_now_iso
 from fstk.media.remux import check_inventory, remux_args, tracks_from_settings
 
-from .base import ApprovalCurrent, ArtifactExists, Stage, StepOutput, StepPlan, ValueSet, register
+from .base import ArtifactExists, Stage, StepOutput, StepPlan, ValueSet, register
 
 
 @register
@@ -18,8 +18,8 @@ class Remux(Stage):
 
     id = "remux"
     title = "Remux (stream copy)"
-    description = "Combine the approved encode with LD stereo and optional retimed DVD 5.1/SRT."
-    requires = (ApprovalCurrent("encode"), ArtifactExists("padfixed_video"), ValueSet("deliverable.mux_tracks"),
+    description = "Combine the verified encode with LD stereo and optional retimed DVD 5.1/SRT."
+    requires = (ArtifactExists("padfixed_video"), ValueSet("deliverable.mux_tracks"),
                 ValueSet("deliverable.ld_audio_source"), ValueSet("video.duration_s"), ValueSet("audio.capture"))
     writes_artifacts = ("padfixed",)
     resource = "prep"

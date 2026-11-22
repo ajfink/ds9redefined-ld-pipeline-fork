@@ -72,7 +72,8 @@ def test_real_x265_encode_passes_every_check(env):
     prof, ws, _ = env
     state = run(env, "e1")
     st = state["steps"]["enc"]
-    assert st["status"] == "awaiting-review", st.get("issues")
+    assert st["status"] == "passed", st.get("issues")                # no human review (owner, 2026-11-21)
+    assert ws.store.load().artifact("padfixed_video")
     out = prof.root("out", EP) / "S01E20-23.976-padfixed-video.mkv"
     assert out.is_file() and not out.with_name(out.stem + ".tmp.mkv").exists()
     info = FFmpeg("ffmpeg", "ffprobe").probe(out).only("video")

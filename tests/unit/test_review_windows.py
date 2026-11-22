@@ -20,7 +20,7 @@ def efm_env(tmp_path):
     return efm.make_env(tmp_path)
 
 
-def test_efm_capture_review_manual_choice(efm_env, qtbot, monkeypatch):
+def test_efm_capture_review_manual_override(efm_env, qtbot, monkeypatch):
     from fstk.ui import reviews
 
     prof, ws, ledger, _ = efm_env
@@ -30,9 +30,9 @@ def test_efm_capture_review_manual_choice(efm_env, qtbot, monkeypatch):
     services = Services(prof)
     dlg = reviews.EfmCaptureReview(services, "DS9:S01E20")
     qtbot.addWidget(dlg)
-    assert dlg.table.rowCount() == 3 and dlg.data["auto"] is None
-    assert not dlg.auto_button.isEnabled() and dlg.choose_button.isEnabled()
-    assert "listen and choose" in dlg.summary.text()
+    assert dlg.table.rowCount() == 3 and dlg.data["auto"] == "P1"          # least-bad: no silenced samples
+    assert dlg.auto_button.isEnabled() and dlg.choose_button.isEnabled()
+    assert "least-audible-damage-v1" in dlg.summary.text()
     assert dlg.data["pads"] == {"P6": 0, "L1": 3, "P1": 12}
     warnings = []
     monkeypatch.setattr(reviews.QMessageBox, "warning", lambda *a: warnings.append(a[2]))

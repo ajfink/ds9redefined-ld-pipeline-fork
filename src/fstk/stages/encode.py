@@ -6,7 +6,8 @@
   passes every check (profile, pixel format, rate, raster, decode-counted frames, a clean full
   decode, duration within 2 ms); an existing deliverable is never overwritten;
 * audio is handled separately (remux), so audio fixes never re-run x265;
-* human ``encode`` review of the result is required before remux.
+* no human review (owner decision 2026-11-21): the settings are fixed and every check above is
+  automatic, so a verified encode goes straight on to remux.
 """
 from __future__ import annotations
 
@@ -30,7 +31,6 @@ class EncodeFinal(Stage):
                 ArtifactExists("encode_script"), ArtifactExists("stack_master"))
     writes_artifacts = ("padfixed_video",)
     resource = "compute"
-    review = "encode"
 
     def plan(self, ctx, params):
         try:

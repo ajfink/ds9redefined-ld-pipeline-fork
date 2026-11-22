@@ -231,7 +231,7 @@ class Services:
         """Everything the EFM capture review shows: metrics, problems, the automatic pick, pads."""
         from fstk.stages.efm import _comparison, efm_captures
         from fstk.tools.orc import project_source_labels
-        from fstk.tools.orc_efm import PARETO_METRICS, parse_alignment_map, unique_pareto
+        from fstk.tools.orc_efm import PARETO_METRICS, least_bad, parse_alignment_map, unique_pareto
 
         ctx = self._ctx(episode)
         m = ctx.manifest
@@ -243,7 +243,7 @@ class Services:
             pads = parse_alignment_map(m.require("stack.alignment_map"), order)
         except FstkError as exc:
             pad_problem = str(exc)
-        auto = unique_pareto(quality) if not problems else None
+        auto = (unique_pareto(quality) or least_bad(quality)) if not problems else None
         best = {}
         for k in PARETO_METRICS:
             vals = [q.get(k) for q in quality.values() if isinstance(q.get(k), (int, float))]

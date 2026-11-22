@@ -169,3 +169,32 @@ def test_unique_pareto_rules():
     assert unique_pareto({"L1": q(), "P1": q(missing_sections=None)}) is None  # missing metric fails closed
     assert unique_pareto({"L1": q(), "P1": q(muted_samples=float("nan"))}) is None
     assert unique_pareto({"L1": q(), "P1": q(muted_samples=True)}) is None
+
+
+# Real S01E20 Orc 2.11.1 metrics (12 captures; validated byte-for-byte against v38's evidence).
+S01E20 = {  # post-C2 %, concealed, muted, C1 unc, C2 unc, missing
+    "L1": (0.0247, 2076, 58416, 13055, 5041, 19), "L2": (0.015, 2256, 34428, 11499, 3057, 10),
+    "L3": (0.0152, 1404, 35916, 11958, 3110, 11), "M1": (0.0101, 1176, 23472, 11062, 2054, 6),
+    "P1": (0.0186, 1932, 43572, 11976, 3792, 16), "P2": (0.011, 756, 26184, 11371, 2245, 9),
+    "P3": (0.0155, 1308, 36528, 12222, 3153, 14), "P4": (0.0176, 1284, 41844, 11736, 3594, 11),
+    "P5": (0.015, 1104, 35640, 12297, 3062, 13), "P6": (0.0114, 792, 27156, 11259, 2329, 8),
+    "P7": (0.017, 1536, 40044, 11522, 3465, 11), "P8": (0.1156, 17868, 265332, 13201, 23600, 23),
+}
+
+
+def test_least_bad_on_real_s01e20_metrics():
+    from fstk.tools.orc_efm import LEAST_BAD_RULE, least_bad, pareto_front
+    keys = ("post_c2_data_loss_pct", "concealed_samples", "muted_samples", "c1_uncorrectable_pct",
+            "c2_uncorrectable_pct", "missing_sections")
+    quality = {label: dict(zip(keys, v, strict=True)) for label, v in S01E20.items()}
+    assert unique_pareto(quality) is None
+    assert sorted(pareto_front(quality)) == ["M1", "P2", "P6"]
+    pick = least_bad(quality)
+    # M1 has the fewest silenced samples and missing sections; P2 (the owner's manual pick on
+    # v38) has the fewest interpolated samples. Silence is the audible defect, so M1.
+    assert pick.capture == "M1" and LEAST_BAD_RULE in pick.note and "P2" in pick.note
+
+
+def test_least_bad_fails_closed_on_missing_metric():
+    from fstk.tools.orc_efm import least_bad
+    assert least_bad({"L1": q(), "P1": q(muted_samples=None)}) is None

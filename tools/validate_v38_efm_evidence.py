@@ -92,7 +92,14 @@ def main() -> int:
         return 2
     auto = unique_pareto(quality)
     print("\n" + render_table([{"capture": k, **v} for k, v in quality.items()]))
-    print(f"\nunique Pareto choice: {auto.capture if auto else 'none (operator must choose)'}")
+    print(f"\nunique Pareto choice: {auto.capture if auto else 'none'}")
+    if auto is None:
+        from fstk.tools.orc_efm import least_bad, pareto_front
+        lb = least_bad(quality)
+        print(f"Pareto front: {sorted(pareto_front(quality))}")
+        print(f"least-bad choice: {lb.capture if lb else 'none (metrics missing)'}")
+        if lb:
+            print(lb.note)
     if problems:
         print("\nPROBLEMS:\n  " + "\n  ".join(problems), file=sys.stderr)
         return 1

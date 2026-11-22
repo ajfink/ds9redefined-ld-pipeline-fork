@@ -28,6 +28,12 @@ Newest session first. Format and rules: see `AGENTS.md` → "Logging".
   stage outputs ≥ 1 GiB fingerprinted head+tail (`stages.base.output_scope_for`); v38 freeze
   recorded (`docs/v38-reference.md`, AGENTS rules 1–2); inventory statuses refreshed for the
   session-2 ports. 277 tests.
+- **S3-CP2 — encode unreviewed; EFM choice automatic.** `encode-final` has no review; `remux`
+  needs only the verified `padfixed_video` artifact. `efm-select` falls back to
+  `least-audible-damage-v1` (finding 0004): Pareto front, then fewest silenced samples →
+  missing sections → interpolated samples → post-C2 → C2 → C1. On real S01E20 data the front is
+  M1/P2/P6 and the rule picks **M1** (v38 manual pick was P2). Finding 0004 also proposes
+  multi-capture repair using the decoder's flagged regions. 279 tests.
 
 ---
 

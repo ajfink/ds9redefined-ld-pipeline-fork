@@ -168,15 +168,16 @@ def test_decode_all_then_auto_select_unique_pareto(env):
     assert "keeping verified" in state["steps"]["efm"]["plan_summary"]
 
 
-def test_ambiguous_quality_blocks_until_operator_chooses(env):
+def test_ambiguous_quality_picks_least_bad_and_operator_can_override(env):
     _, ws, _, _ = env
     _stack(env)
     orc = FakeOrc(quality={"L1": dict(concealed=5, muted=9), "P1": dict(concealed=99), "P6": dict(muted=4)})
     state = run(env, [DECODE, SELECT], "a1", orc=orc)
     sel = state["steps"]["select"]
-    assert sel["status"] == "blocked" and "no unique Pareto-dominant" in sel["issues"][0]
-    assert "post-C2%" in sel["issues"][0]                                  # comparison table shown
-    assert not ws.store.load().is_set("audio.capture")
+    assert sel["status"] == "passed", sel                                   # no human needed
+    m = ws.store.load()
+    assert m.get("audio.capture") == "P1"                                   # zero silenced samples
+    assert m.get("audio.capture_selection")["method"] == "least-audible-damage-v1"
     short = dict(SELECT, params={"capture": "P1", "note": "ok"})
     state = run(env, [DECODE, short], "a2", orc=orc)
     assert state["steps"]["select"]["status"] == "blocked" and "note" in state["steps"]["select"]["issues"][0]

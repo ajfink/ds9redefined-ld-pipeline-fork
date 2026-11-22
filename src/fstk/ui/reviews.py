@@ -246,7 +246,7 @@ class EfmCaptureReview(QDialog):
         if d.get("auto"):
             lines.append(f"Automatic choice: {d['auto']} — {d['auto_note']}")
         elif rows and not d["problems"]:
-            lines.append("No capture is no-worse on every metric: listen and choose one with a note. "
+            lines.append("A report is missing a measure, so nothing can be chosen automatically: re-decode it. "
                          "Green bold = best value in that column.")
         if d.get("current"):
             lines.append(f"Currently recorded: {d['current']}")

@@ -68,7 +68,7 @@ Per-capture Orc/EFMSink decode with log path-binding, PCM format and report chec
 
 ## `efm-select` — Select the EFM audio capture
 
-Unique Pareto-dominant verified decode is chosen automatically; otherwise an operator chooses with a note. Records audio.capture, audio.pad_frames and the decision.
+Chosen automatically: the unique Pareto-dominant verified decode, otherwise the least-bad by audible damage (fewest silenced samples first). An operator may override with a note. Records audio.capture, audio.pad_frames and the decision.
 
 - resource: prep
 - human review: —
@@ -81,7 +81,7 @@ Unique Pareto-dominant verified decode is chosen automatically; otherwise an ope
 CRF 14 / slow / grain / Main 10 single pass from the measured IVTC script; verified before use.
 
 - resource: compute
-- human review: encode
+- human review: —
 - requires: value:video.frames, value:video.duration_s, value:audio.capture, artifact:encode_script, artifact:stack_master
 - writes: —
 - artifacts: padfixed_video
@@ -102,7 +102,7 @@ Stream-copy only; LD stereo default; packet-identity proof per copied stream (v3
 
 - resource: prep
 - human review: remux
-- requires: approval:encode, artifact:padfixed_video, value:deliverable.mux_tracks, value:deliverable.ld_audio_source, value:video.duration_s, value:audio.capture
+- requires: artifact:padfixed_video, value:deliverable.mux_tracks, value:deliverable.ld_audio_source, value:video.duration_s, value:audio.capture
 - writes: —
 - artifacts: padfixed
 

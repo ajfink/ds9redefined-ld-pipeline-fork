@@ -8,7 +8,6 @@ import pytest
 
 from fstk.config.profile import SCHEMA, Profile
 from fstk.core.identity import EpisodeId
-from fstk.evidence.approvals import ApprovalBook
 from fstk.manifest.model import Manifest
 from fstk.tools.ffmpeg import FFmpeg
 from fstk.workflow.engine import PLAN_SCHEMA, Engine, EpisodeWorkspace
@@ -57,12 +56,8 @@ def run(env, job):
     return Engine(prof, plan, actor="op", tool_overrides={"ffmpeg": FFmpeg("ffmpeg", "ffprobe")}).run()
 
 
-def test_remux_requires_encode_approval_then_proves_identity(env):
+def test_remux_needs_no_encode_approval_and_proves_identity(env):
     prof, ws, video = env
-    state = run(env, "m0")
-    assert state["steps"]["mux"]["status"] == "blocked" and "approval:encode" in state["steps"]["mux"]["issues"][0]
-    ApprovalBook(ws.state_dir / "approvals").record(review="encode", decision="APPROVED", note="encode reviewed",
-                                                    actor="op", evidence=[video])
     state = run(env, "m1")
     st = state["steps"]["mux"]
     assert st["status"] == "awaiting-review", st.get("issues")
@@ -78,8 +73,6 @@ def test_overlong_track_is_caught_by_packet_identity(env):
     prof, ws, video = env
     ff("-y", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100", "-t", "3.0", "-ac", "2", "-c:a", "flac",
        str(prof.root("audio", EP) / "S01E20-LD20-synced.flac"))
-    ApprovalBook(ws.state_dir / "approvals").record(review="encode", decision="APPROVED", note="encode reviewed",
-                                                    actor="op", evidence=[video])
     st = run(env, "m2")["steps"]["mux"]
     assert st["status"] == "failed" and any("LD audio packet hash changed" in i for i in st["issues"])
     assert not (prof.root("out", EP) / "S01E20-23.976-padfixed.mkv").exists()

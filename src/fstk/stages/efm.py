@@ -25,8 +25,9 @@
     Ported behaviour of v38 ``record_efm_capture_selection.py`` + the app's unique-Pareto rule.
     Every EFM-bearing capture must have a verified decode whose WAV/report still hash-match.
     If one capture is no worse on all six error-correction metrics and strictly better on one,
-    it is selected automatically; otherwise the stage blocks until an operator chooses (params
-    ``capture`` + ``note``; the EFM capture review window does this). ``audio.pad_frames`` comes
+    it is selected automatically; otherwise ``tools.orc_efm.least_bad`` picks the capture with the
+    least audible damage (owner decision 2026-11-21: no human EFM review). An operator may still
+    override (params ``capture`` + ``note``, e.g. from the EFM capture review window). ``audio.pad_frames`` comes
     from the measured Orc alignment map in the saved stack project's source order.
 """
 from __future__ import annotations
@@ -44,10 +45,12 @@ from fstk.core.hashing import SCOPE_HEAD_TAIL, head_tail_sha256, sha256_file
 from fstk.core.timeutil import utc_now_iso, utc_stamp
 from fstk.tools.orc import project_source_labels
 from fstk.tools.orc_efm import (
+    LEAST_BAD_RULE,
     PARETO_METRICS,
     build_decode_project,
     check_audio_wav,
     decode_text,
+    least_bad,
     parse_alignment_map,
     parse_efm_report,
     project_formats,
@@ -394,8 +397,9 @@ def efm_comparison_rows(ctx, manifest) -> list[dict]:
 class EfmSelect(Stage):
     id = "efm-select"
     title = "Select the EFM audio capture"
-    description = ("Unique Pareto-dominant verified decode is chosen automatically; otherwise an operator "
-                   "chooses with a note. Records audio.capture, audio.pad_frames and the decision.")
+    description = ("Chosen automatically: the unique Pareto-dominant verified decode, otherwise the least-bad "
+                   "by audible damage (fewest silenced samples first). An operator may override with a note. "
+                   "Records audio.capture, audio.pad_frames and the decision.")
     requires = (ValueSet("audio.efm_provenance"), ValueSet("stack.reference"), ValueSet("stack.alignment_map"),
                 ArtifactExists("stack_project"))
     writes = ("audio.capture", "audio.pad_frames", "audio.capture_selection", "audio.capture_selection_history")
@@ -414,7 +418,9 @@ class EfmSelect(Stage):
             raise GateError(f"stack project source order {order} does not match the inventory/reference")
         pads = parse_alignment_map(m.require("stack.alignment_map"), order)
         rows = [{"capture": label, **q} for label, q in quality.items()]
-        auto = unique_pareto(quality)
+        auto, rule = unique_pareto(quality), "unique-pareto"
+        if auto is None:
+            auto, rule = least_bad(quality), LEAST_BAD_RULE
         chosen, note, how = params.get("capture"), str(params.get("note") or "").strip(), "operator"
         if chosen:
             if chosen not in quality:
@@ -422,13 +428,11 @@ class EfmSelect(Stage):
             if len(note) < 8:
                 raise GateError("an operator's capture choice needs a specific note (at least 8 characters)")
         elif auto:
-            chosen, note, how = auto.capture, auto.note, "unique-pareto"
+            chosen, note, how = auto.capture, auto.note, rule
         else:
             missing = sorted({k for q in quality.values() for k in PARETO_METRICS if q.get(k) is None})
-            why = (f"metrics missing from a report: {missing}" if missing
-                   else "no capture is no-worse on every metric")
-            raise GateError(f"no unique Pareto-dominant EFM capture ({why}); choose one in the EFM capture "
-                            "review with a note.\n" + render_table(rows))
+            raise GateError(f"EFM reports are missing metrics {missing}; re-decode those captures.\n"
+                            + render_table(rows))
         report = ctx.root("reports") / "efm-selection.json"
         return StepPlan(self.id, params, inputs=[project], outputs=[report],
                         summary=f"{chosen} ({how}), pad_frames={pads[chosen]}",
