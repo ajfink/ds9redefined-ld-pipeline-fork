@@ -8,9 +8,10 @@ becomes a fallback. Owner decision 2026-11-21: automate DVD picture alignment as
   seek, no ``setpts``/``fps`` filter and no explicit ``-fps_mode``. This is v38's validated
   extraction; those options changed E05's descriptor count. Both grids must be 30000/1001.
   Descriptors of an unchanged source (size, mtime, head+tail hash) are reused.
-* Alignment: ``fstk.media.alignment.measure``. The forward Viterbi path has an unmatched state
-  for LD-only material, each segment is confirmed frame by frame, and a reverse (DVD→LD) path
-  must agree.
+* Alignment: ``fstk.media.alignment.measure``. A forward Viterbi path (with an unmatched state
+  for LD-only material) is modelled as acts. Each act is a continuous offset curve that follows
+  the transfers' speed difference and wander. Every textured frame is checked against the
+  curves, and a reverse (DVD→LD) path must land on them.
 * Decision: ``AUTO-ACCEPTED`` commits at once. ``NEEDS-REVIEW`` holds the values for the
   ``dvd-alignment`` review, with the failed checks listed in the report.
 """
@@ -139,6 +140,9 @@ class DvdAlignment(Stage):
             "rate_mismatch": bool(rate and avg and rate != avg), "descriptor_size": [al.W, al.H],
             "frames": len(arr), "coverage_s": len(arr) / float(GRID), "stream_nb_frames": stream.raw.get("nb_frames"),
             "decode": "ffmpeg -i <src> -map 0:v:0 -vf scale=48:36:flags=area,format=gray -f rawvideo (sequential)",
+            # FFmpeg builds differ in where they place soft-telecine (RFF) duplicates on a 29.97 grid
+            # (S01E20: 4.4 vs the Windows build put the duplicate one frame apart in ~13% of rows).
+            "ffmpeg": ff.version(),
             "created_utc": utc_now_iso()})
         ctx.report(base + span, f"{role}: {len(arr)} descriptors")
         return arr
@@ -152,18 +156,21 @@ class DvdAlignment(Stage):
         res = al.measure(master, dvd, params=d["params"],
                          progress=lambda f, msg: ctx.report(0.35 + 0.6 * f, msg))
         path = al.path_array(res)
-        if len(path) < 2:
+        if len(path) < 2 or not res.acts:
             raise GateError("no DVD picture matched the stack master (is this the right DVD title/episode?); "
                             f"{int(res.matched.sum())}/{len(res.idxs)} samples matched")
         np.save(d["npy"], path)
         with open(d["tsv"], "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f, delimiter="\t")
-            w.writerow(("master_frame", "master_time_s", "dvd_minus_master_frames", "ncc", "local_margin",
-                        "flat", "state"))
-            for i, o, m, n, g, fl in zip(res.idxs, res.offsets, res.matched, res.ncc, res.margin, res.flat,
-                                         strict=True):
-                w.writerow((int(i), f"{i / al.FPS:.6f}", int(o) if m else "", "" if np.isnan(n) else f"{n:.6f}",
-                            "" if np.isnan(g) else f"{g:.6f}", int(fl), "matched" if m else "unmatched"))
+            w.writerow(("master_frame", "master_time_s", "dvd_minus_master_frames", "subframe_offset", "model_offset",
+                        "ncc", "local_margin", "flat", "state"))
+            for i, o, sb, m, n, g, fl in zip(res.idxs, res.offsets, res.sub, res.matched, res.ncc, res.margin,
+                                             res.flat, strict=True):
+                act = res.act_for(int(i))
+                w.writerow((int(i), f"{i / al.FPS:.6f}", int(o) if m else "", "" if np.isnan(sb) else f"{sb:.3f}",
+                            "" if act is None else f"{float(act.offset(float(i))):.3f}",
+                            "" if np.isnan(n) else f"{n:.6f}", "" if np.isnan(g) else f"{g:.6f}", int(fl),
+                            "matched" if m else "unmatched"))
         summary = res.summary()
         names = {role: Path(spec["path"]).name for role, spec in d["desc"].items()}
         report = {"schema": REPORT_SCHEMA, "episode": str(ctx.episode), "created_utc": utc_now_iso(),
@@ -172,10 +179,11 @@ class DvdAlignment(Stage):
                   "alignment_path": Path(d["npy"]).name, "diagnostics": Path(d["tsv"]).name, **summary}
         atomic_write_json(d["json"], report)
         out = StepOutput(report=Path(d["json"]))
-        record = {k: summary[k] for k in ("decision", "reasons", "segments", "offset_range", "reverse_agreement",
-                                          "origin_master_frame", "matched_samples", "samples", "params")}
+        record = {k: summary[k] for k in ("decision", "reasons", "acts", "breaks", "common_slope_ppm", "consistency",
+                                          "reverse_agreement", "origin_master_frame", "matched_samples", "samples",
+                                          "params")}
         record["report"] = Path(d["json"]).name
-        note = (f"{res.decision}: {len([s for s in res.segments if s.offset is not None])} matched segment(s)"
+        note = (f"{res.decision}: {len(res.acts)} act(s), common slope {summary['common_slope_ppm']} ppm"
                 + (f"; {len(res.reasons)} check(s) failed" if res.reasons else ""))
         out.measure("video.dvd_alignment", json.loads(json.dumps(record)), note=note)
         if res.origin_master_frame is not None:

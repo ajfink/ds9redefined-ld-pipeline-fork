@@ -12,18 +12,21 @@ Port of v38 ``measure_dvd_alignment.py`` with three changes made for quality and
    distance-transform identity, max_j(prev_j − λ|i−j|), using prefix maxima instead of a
    states×states matrix. The result is identical to v38's for the same inputs, and the run
    time is linear in the number of states.
-3. **Automatic acceptance.** A path is accepted without a human only if every declared check
-   passes:
-   - no offset sits on a search edge;
-   - the reverse (DVD→LD) alignment agrees within ±1 frame;
-   - a dense frame-by-frame check confirms each segment's offset;
-   - the segment count and lengths are plausible.
-   Anything else is held for the alignment review with the reasons listed.
+3. **An act model and automatic acceptance.** On real episodes the offset is not constant between
+   act breaks: the two transfers run at slightly different speeds (S01E20: −990 ppm, i.e.
+   1000:1001), so the integer path climbs in 1-frame steps, and telecine duplicates make
+   neighbouring offsets tie. The path is therefore modelled as straight lines per act, fitted on
+   sub-frame (parabolic) offsets, with the breaks between them refined by residuals. A path is
+   accepted without a human only if the act lines explain the picture frame by frame (every
+   textured master frame's best DVD match is within tolerance of the line's), the reverse
+   (DVD→LD) path lands on the same lines, the slopes agree, and nothing on the LD between acts
+   lacks a DVD match. Anything else is held for the alignment review, with the reasons listed.
 
 The state convention is v38's: ``offset = DVD index − master index`` on the 30000/1001 grid.
 """
 from __future__ import annotations
 
+import itertools
 import math
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -33,7 +36,6 @@ import numpy as np
 FPS = 30000.0 / 1001.0
 W, H = 48, 36
 FEATURES = W * H
-UNMATCHED = None  # offset value used for the unmatched state in paths/segments
 
 #: Defaults. v38's search range, step and penalty, plus the unmatched-state constants
 #: (provisional until calibrated on real episodes with tools/validate_v38_alignment.py).
@@ -42,14 +44,24 @@ DEFAULTS = {
     "unmatched_score": 0.30, "unmatched_switch": 1.5, "flat_std": 2.0,
 }
 
-#: Automatic-acceptance thresholds (provisional; recorded with every decision).
+#: Act model: breaks are offset jumps of at least ``break_frames`` that persist for
+#: ``break_window_s`` on both sides (robust medians after removing the common slope). Within an
+#: act the offset is a continuous piecewise-linear curve with knots every ``knot_s`` (speed
+#: wander), fitted robustly with a second-difference penalty of weight ``smoothness``.
+MODEL = {"break_frames": 2.5, "break_window_s": 20.0, "knot_s": 30.0, "smoothness": 4.0,
+         "consistency_radius": 8, "consistency_tolerance": 0.02}
+
+#: Automatic-acceptance thresholds. Calibrated on S01E20, whose v38 alignment the owner approved
+#: visually: overall 0.993, worst act 0.99 after break refinement, longest inconsistent span 2.4 s.
 ACCEPT = {
-    "reverse_agreement_min": 0.95,     # fraction of matched samples agreeing within ±1 frame
-    "dense_agreement_min": 0.90,       # per segment, textured frames whose best offset is within ±1
-    "min_segment_s": 4.0,              # shorter matched segments are suspicious
-    "max_segments": 16,
+    "consistency_min": 0.98,           # textured frames the act lines explain (NCC within tolerance of best)
+    "act_consistency_min": 0.95,       # per act of at least 20 s
+    "max_inconsistent_span_s": 3.0,    # longer runs of frames the lines cannot explain
+    "reverse_agreement_min": 0.95,     # reverse-path samples within ±1.5 frames of the act lines
+    "slope_spread_ppm": 2500.0,        # acts ≥ 60 s vs the common slope
     "min_matched_fraction": 0.80,      # of the master's textured samples
-    "max_interior_unmatched_s": 10.0,  # textured LD material with no DVD match between matched segments
+    "max_interior_unmatched_s": 10.0,  # textured LD picture with no DVD match between acts
+    "max_acts": 16,
 }
 
 
@@ -128,100 +140,95 @@ def viterbi(em: np.ndarray, *, penalty: float, unmatched_score: float | None,
 
 
 @dataclass
-class Segment:
-    start_frame: int          # first sampled master frame of the run
-    end_frame: int            # last sampled master frame of the run
-    offset: int | None        # DVD − master frames; None = unmatched
+class Act:
+    """One act: a continuous piecewise-linear offset curve (knots every ``knot_s``)."""
+    start_frame: int          # first sampled master frame of the act
+    end_frame: int            # last sampled master frame of the act
+    knots: list[float]        # master frames
+    values: list[float]       # offset (DVD − master frames) at each knot
     samples: int
-    median_ncc: float | None
-    dense_exact: float | None = None      # textured frames whose best offset == offset
-    dense_within1: float | None = None    # ... within ±1
-    dense_frames: int = 0
-    kind: str = "matched"                 # matched | gap (no evidence between offsets) | unmatched
+    residual_rms: float
+    consistency: float | None = None
+    consistency_frames: int = 0
+    inconsistent_spans: list[list[float]] = field(default_factory=list)   # [start_s, end_s]
 
     @property
     def seconds(self) -> float:
         return (self.end_frame - self.start_frame) / FPS
 
+    @property
+    def slope(self) -> float:
+        """Mean d(offset)/d(master frame) across the act."""
+        span = self.knots[-1] - self.knots[0]
+        return (self.values[-1] - self.values[0]) / span if span > 0 else 0.0
+
+    def offset(self, frame):
+        return np.interp(frame, self.knots, self.values)
+
 
 @dataclass
 class AlignmentResult:
     idxs: np.ndarray
-    offsets: np.ndarray                    # per sample; out-of-range sentinel for unmatched
+    offsets: np.ndarray                    # integer path per sample; sentinel where unmatched
+    sub: np.ndarray                        # sub-frame offset per sample (nan where unknown)
     matched: np.ndarray                    # bool per sample
     ncc: np.ndarray
     margin: np.ndarray
     flat: np.ndarray
     params: dict[str, Any]
-    segments: list[Segment] = field(default_factory=list)
+    acts: list[Act] = field(default_factory=list)
+    breaks: list[dict[str, float]] = field(default_factory=list)
+    common_slope: float | None = None
+    consistency: float | None = None
     reverse_agreement: float | None = None
     decision: str = ""
     reasons: list[str] = field(default_factory=list)
 
     @property
+    def evidenced(self) -> np.ndarray:
+        return (self.matched & ~self.flat & np.isfinite(self.sub)
+                & (np.nan_to_num(self.ncc, nan=-1.0) >= self.params["unmatched_score"]))
+
+    @property
     def origin_master_frame(self) -> int | None:
-        hit = np.flatnonzero(self.matched & ~self.flat)
+        hit = np.flatnonzero(self.evidenced)
         return int(self.idxs[hit[0]]) if len(hit) else None
 
+    def act_for(self, frame: float) -> Act | None:
+        for a in self.acts:
+            if a.start_frame <= frame <= a.end_frame:
+                return a
+        return None
+
     def summary(self) -> dict[str, Any]:
-        seg = [asdict(s) | {"seconds": round(s.seconds, 3)} for s in self.segments]
-        matched = [s for s in self.segments if s.offset is not None]
-        return {"params": self.params, "samples": len(self.idxs),
+        acts = [asdict(a) | {"knots": [round(k, 1) for k in a.knots], "values": [round(v, 3) for v in a.values],
+                             "seconds": round(a.seconds, 3), "slope_ppm": round(a.slope * 1e6, 1)}
+                for a in self.acts]
+        return {"params": self.params, "model": MODEL, "samples": len(self.idxs),
                 "sampled_range": [int(self.idxs[0]), int(self.idxs[-1])],
-                "matched_samples": int(self.matched.sum()), "flat_samples": int(self.flat.sum()),
-                "origin_master_frame": self.origin_master_frame,
-                "offset_range": ([min(s.offset for s in matched), max(s.offset for s in matched)]
-                                 if matched else None),
-                "segments": seg, "reverse_agreement": self.reverse_agreement,
+                "matched_samples": int(self.matched.sum()), "evidenced_samples": int(self.evidenced.sum()),
+                "flat_samples": int(self.flat.sum()), "origin_master_frame": self.origin_master_frame,
+                "acts": acts, "breaks": self.breaks,
+                "common_slope_ppm": None if self.common_slope is None else round(self.common_slope * 1e6, 1),
+                "consistency": self.consistency, "reverse_agreement": self.reverse_agreement,
                 "decision": self.decision, "reasons": self.reasons, "acceptance_thresholds": ACCEPT}
 
 
-def _segments(idxs, offsets, matched, ncc, flat, min_ncc) -> list[Segment]:
-    """Runs of *evidenced* samples (matched, textured, NCC ≥ ``min_ncc``) with one offset.
-
-    Samples without evidence (flat frames, low NCC) never start a segment of their own: inside
-    a run of one offset they are bridged, between runs of different offsets they become a
-    ``gap`` (offset None) whose exact edges the retime stage measures later. Samples the path
-    put in the unmatched state form ``unmatched`` runs.
-    """
-    evid = matched & ~flat & (np.nan_to_num(ncc, nan=-1.0) >= min_ncc)
-    out: list[Segment] = []
-    r, n = 0, len(idxs)
-    while r < n:
-        if evid[r]:
-            off, start, last = int(offsets[r]), r, r
-            k = r + 1
-            while k < n:
-                if evid[k]:
-                    if int(offsets[k]) != off:
-                        break
-                    last = k
-                elif not matched[k]:
-                    break
-                k += 1
-            sel = np.arange(start, last + 1)
-            vals = ncc[sel][evid[sel]]
-            out.append(Segment(int(idxs[start]), int(idxs[last]), off, int(evid[sel].sum()),
-                               float(np.median(vals))))
-            r = last + 1
+def _subframe(em: np.ndarray, path: np.ndarray, offs: np.ndarray) -> np.ndarray:
+    """Parabolic peak of the NCC around each matched state (±0.5 frame)."""
+    states = len(offs)
+    out = np.full(len(path), np.nan)
+    for r, s in enumerate(path):
+        if s >= states:
+            continue
+        if 0 < s < states - 1:
+            a, b, c = float(em[r, s - 1]), float(em[r, s]), float(em[r, s + 1])
+            den = a - 2 * b + c
+            d = 0.5 * (a - c) / den if den < 0 else 0.0
+            out[r] = offs[s] + float(np.clip(d, -0.5, 0.5))
         else:
-            start = r
-            kind_unmatched = not matched[r]
-            while r < n and not evid[r] and (not matched[r]) == kind_unmatched:
-                r += 1
-            seg = Segment(int(idxs[start]), int(idxs[r - 1]), None, r - start, None)
-            seg.kind = "unmatched" if kind_unmatched else "gap"
-            out.append(seg)
-    # merge consecutive no-offset runs
-    merged: list[Segment] = []
-    for seg in out:
-        if merged and seg.offset is None and merged[-1].offset is None:
-            prev = merged[-1]
-            prev.end_frame, prev.samples = seg.end_frame, prev.samples + seg.samples
-            prev.kind = "unmatched" if "unmatched" in (prev.kind, seg.kind) else "gap"
-        else:
-            merged.append(seg)
-    return merged
+            out[r] = float(offs[s])
+    return out
 
 
 def align(master: np.ndarray, dvd: np.ndarray, *, params: dict[str, Any] | None = None,
@@ -241,72 +248,210 @@ def align(master: np.ndarray, dvd: np.ndarray, *, params: dict[str, Any] | None 
     for c in range(0, len(idxs), chunk):
         em[c:c + chunk] = emissions(master, dvd_norm, idxs[c:c + chunk], offs)
         if progress:
-            progress(0.6 * min(1.0, (c + chunk) / len(idxs)), "matching descriptors")
+            progress(0.5 * min(1.0, (c + chunk) / len(idxs)), "matching descriptors")
     flat = flat_rows(np.asarray(master[idxs]), p["flat_std"])
     em[flat] = 0.0                                       # no evidence either way on flat frames
     path = viterbi(em, penalty=p["penalty"], unmatched_score=p["unmatched_score"],
                    unmatched_switch=p["unmatched_switch"])
     states = len(offs)
     matched = path < states
-    offsets = np.where(matched, offs[np.minimum(path, states - 1)], np.iinfo(np.int32).min)
+    st = np.minimum(path, states - 1)
+    offsets = np.where(matched, offs[st], np.iinfo(np.int32).min)
     rows = np.arange(len(idxs))
-    ncc = np.where(matched, em[rows, np.minimum(path, states - 1)], np.nan).astype(np.float32)
+    ncc = np.where(matched, em[rows, st], np.nan).astype(np.float32)
     margin = np.full(len(idxs), np.nan, np.float32)
     for r in np.flatnonzero(matched):
         s = int(path[r])
         alt = np.concatenate((em[r, :max(0, s - 2)], em[r, s + 3:]))
         if alt.size:
             margin[r] = ncc[r] - alt.max()
-    res = AlignmentResult(idxs, offsets, matched, ncc, margin, flat, p)
-    res.segments = _segments(idxs, offsets, matched, ncc, flat, p["unmatched_score"])
-    return res
+    sub = np.where(matched, _subframe(em, path, offs), np.nan)
+    return AlignmentResult(idxs, offsets, sub, matched, ncc, margin, flat, p)
 
 
-def dense_check(master: np.ndarray, dvd: np.ndarray, res: AlignmentResult, *, radius: int = 2) -> None:
-    """Every textured master frame of each matched segment: is its best DVD offset the segment's?"""
-    dvd_norm = normalize_rows(np.asarray(dvd))
-    thr = res.params["flat_std"]
-    for seg in res.segments:
-        if seg.offset is None:
+# ------------------------------------------------------------------------------ act model
+def _robust_line(x: np.ndarray, y: np.ndarray, *, slope: float | None = None) -> tuple[float, float, np.ndarray]:
+    """Huber-weighted least squares (optionally with a fixed slope) → slope, intercept, residuals."""
+    w = np.ones_like(x)
+    if len(x) == 1:
+        sl = slope if slope is not None else 0.0
+        return sl, float(y[0] - sl * x[0]), np.zeros(1)
+    for _ in range(20):
+        if slope is None:
+            A = np.vstack([x, np.ones_like(x)]).T
+            sl, ic = np.linalg.lstsq(A * w[:, None], y * w, rcond=None)[0]
+        else:
+            sl, ic = slope, float(np.sum(w * (y - slope * x)) / np.sum(w))
+        res = y - (sl * x + ic)
+        scale = 1.4826 * float(np.median(np.abs(res))) + 1e-3
+        w = 1.0 / np.maximum(1.0, np.abs(res) / (2 * scale))
+    return float(sl), float(ic), res
+
+
+def _common_slope(x: np.ndarray, y: np.ndarray, bounds: list[int]) -> float:
+    """One slope shared by every act, each act with its own intercept (robust)."""
+    n_acts = len(bounds) - 1
+    A = np.zeros((len(x), n_acts + 1))
+    A[:, 0] = x
+    for i, (a, b) in enumerate(itertools.pairwise(bounds)):
+        A[a:b, i + 1] = 1
+    w = np.ones(len(x))
+    sol = np.zeros(n_acts + 1)
+    for _ in range(20):
+        sol = np.linalg.lstsq(A * w[:, None], y * w, rcond=None)[0]
+        res = y - A @ sol
+        scale = 1.4826 * float(np.median(np.abs(res))) + 1e-3
+        w = 1.0 / np.maximum(1.0, np.abs(res) / (2 * scale))
+    return float(sol[0])
+
+
+def _find_breaks(x: np.ndarray, y: np.ndarray, slope: float) -> list[int]:
+    """Indices k where the detrended offset jumps by ≥ break_frames, persisting on both sides."""
+    win = MODEL["break_window_s"] * FPS
+    yd = y - slope * x
+    jump = np.zeros(len(x))
+    for k in range(1, len(x)):
+        before = yd[(x >= x[k] - win) & (x < x[k])]
+        after = yd[(x >= x[k]) & (x < x[k] + win)]
+        if len(before) >= 5 and len(after) >= 5:
+            jump[k] = float(np.median(after) - np.median(before))
+    out: list[int] = []
+    for k in np.flatnonzero(np.abs(jump) >= MODEL["break_frames"]):
+        if out and x[k] - x[out[-1]] < win:
+            if abs(jump[k]) > abs(jump[out[-1]]):
+                out[-1] = int(k)
+        else:
+            out.append(int(k))
+    return out
+
+
+def _refine(x: np.ndarray, y: np.ndarray, bounds: list[int]) -> list[int]:
+    """Move each break to the split that best separates the two neighbouring act lines."""
+    win = MODEL["break_window_s"] * FPS
+    out = list(bounds)
+    for i in range(1, len(out) - 1):
+        a, k, b = out[i - 1], out[i], out[i + 1]
+        lo = max(a + 1, int(np.searchsorted(x, x[k] - win)))
+        hi = min(b - 1, int(np.searchsorted(x, x[k] + win)))
+        if hi <= lo:
             continue
-        frames = np.arange(seg.start_frame, seg.end_frame + 1, dtype=np.int64)
-        frames = frames[~flat_rows(np.asarray(master[frames]), thr)]
+        s1, i1, _ = _robust_line(x[a:lo], y[a:lo]) if lo - a >= 2 else _robust_line(x[a:k], y[a:k])
+        s2, i2, _ = _robust_line(x[hi:b], y[hi:b]) if b - hi >= 2 else _robust_line(x[k:b], y[k:b])
+        r1 = np.abs(y[lo:hi] - (s1 * x[lo:hi] + i1))
+        r2 = np.abs(y[lo:hi] - (s2 * x[lo:hi] + i2))
+        cost = [np.sum(r1[:j]) + np.sum(r2[j:]) for j in range(hi - lo + 1)]
+        out[i] = lo + int(np.argmin(cost))
+    return out
+
+
+def _robust_curve(x: np.ndarray, y: np.ndarray) -> tuple[list[float], list[float], np.ndarray]:
+    """Continuous piecewise-linear fit (hat basis, Huber IRLS, second-difference penalty)."""
+    k = MODEL["knot_s"] * FPS
+    n = max(2, int(np.ceil((x[-1] - x[0]) / k)) + 1)
+    knots = np.linspace(x[0], x[-1], n) if x[-1] > x[0] else np.array([x[0], x[0] + 1.0])
+    A = np.zeros((len(x), n))
+    pos = np.clip(np.searchsorted(knots, x, side="right") - 1, 0, n - 2)
+    t = (x - knots[pos]) / (knots[pos + 1] - knots[pos])
+    A[np.arange(len(x)), pos] = 1 - t
+    A[np.arange(len(x)), pos + 1] = t
+    D = np.zeros((max(n - 2, 0), n))
+    for i in range(n - 2):
+        D[i, i:i + 3] = (1.0, -2.0, 1.0)
+    lam = MODEL["smoothness"]
+    w = np.ones(len(x))
+    vals = np.zeros(n)
+    for _ in range(20):
+        lhs = (A * w[:, None]).T @ A + lam * D.T @ D
+        vals = np.linalg.solve(lhs + 1e-9 * np.eye(n), (A * w[:, None]).T @ y)
+        res = y - A @ vals
+        scale = 1.4826 * float(np.median(np.abs(res))) + 1e-3
+        w = 1.0 / np.maximum(1.0, np.abs(res) / (2 * scale))
+    return knots.tolist(), vals.tolist(), y - A @ vals
+
+
+def fit_acts(res: AlignmentResult) -> None:
+    """Fill ``res.acts``, ``res.breaks`` and ``res.common_slope`` from the evidenced samples."""
+    e = np.flatnonzero(res.evidenced)
+    res.acts, res.breaks = [], []
+    if len(e) < 2:
+        return
+    x, y = res.idxs[e].astype(float), res.sub[e]
+    bounds = [0, len(e)]
+    slope = _common_slope(x, y, bounds)
+    for _ in range(2):                                   # breaks need the slope; the slope needs the acts
+        bounds = [0, *_find_breaks(x, y, slope), len(e)]
+        slope = _common_slope(x, y, bounds)
+    bounds = _refine(x, y, bounds)
+    bounds = [b for i, b in enumerate(bounds) if i == 0 or b > bounds[i - 1]]
+    res.common_slope = _common_slope(x, y, bounds)
+    for a, b in itertools.pairwise(bounds):
+        knots, vals, r = _robust_curve(x[a:b], y[a:b])
+        res.acts.append(Act(int(x[a]), int(x[b - 1]), knots, vals, b - a, float(np.sqrt(np.mean(r ** 2)))))
+    for prev, nxt in zip(res.acts[:-1], res.acts[1:], strict=True):
+        mid = (prev.end_frame + nxt.start_frame) / 2
+        jump = (nxt.values[0] + nxt.slope * (mid - nxt.knots[0])) - (prev.values[-1] + prev.slope * (mid - prev.knots[-1]))
+        res.breaks.append({"after_frame": prev.end_frame, "before_frame": nxt.start_frame,
+                           "after_s": round(prev.end_frame / FPS, 3), "before_s": round(nxt.start_frame / FPS, 3),
+                           "jump_frames": round(float(jump), 2)})
+
+
+def consistency_check(master: np.ndarray, dvd: np.ndarray, res: AlignmentResult) -> None:
+    """Every textured master frame of every act: does the act line pick (±1) its best DVD match?
+
+    "Best" is searched ±``consistency_radius`` frames around the line; a frame is consistent
+    when the line's NCC is within ``consistency_tolerance`` of that best. Static shots and
+    telecine duplicates tie, which is exactly what the tolerance allows.
+    """
+    dvd_norm = normalize_rows(np.asarray(dvd))
+    R, tol, thr = MODEL["consistency_radius"], MODEL["consistency_tolerance"], res.params["flat_std"]
+    total = good = 0
+    for act in res.acts:
+        frames = np.arange(act.start_frame, act.end_frame + 1, dtype=np.int64)
+        raw = np.asarray(master[frames]).astype(np.float32)
+        tex = raw.std(axis=1) >= thr
+        frames = frames[tex]
         if not len(frames):
             continue
-        q = normalize_rows(np.asarray(master[frames]))
-        deltas = np.arange(-radius, radius + 1)
-        best = np.full(len(frames), -np.inf)
-        arg = np.zeros(len(frames), np.int64)
-        for d in deltas:
-            js = frames + seg.offset + d
+        q = normalize_rows(raw[tex])
+        base = np.round(act.offset(frames)).astype(np.int64)
+        score = np.full((len(frames), 2 * R + 1), -2.0, np.float32)
+        for d in range(-R, R + 1):
+            js = frames + base + d
             ok = (js >= 0) & (js < len(dvd_norm))
-            s = np.full(len(frames), -np.inf)
-            s[ok] = np.einsum("ij,ij->i", q[ok], dvd_norm[js[ok]])
-            upd = s > best
-            best[upd], arg[upd] = s[upd], d
-        seg.dense_frames = len(frames)
-        seg.dense_exact = float(np.mean(arg == 0))
-        seg.dense_within1 = float(np.mean(np.abs(arg) <= 1))
+            score[ok, d + R] = np.einsum("ij,ij->i", q[ok], dvd_norm[js[ok]])
+        cons = score[:, R - 1:R + 2].max(axis=1) >= score.max(axis=1) - tol
+        act.consistency, act.consistency_frames = float(cons.mean()), len(frames)
+        bad = frames[~cons]
+        spans: list[list[float]] = []
+        if len(bad):
+            start = prev = int(bad[0])
+            for f in [*bad[1:].tolist(), None]:
+                if f is None or f - prev > 15:
+                    spans.append([round(start / FPS, 2), round(prev / FPS, 2)])
+                    if f is not None:
+                        start = f
+                if f is not None:
+                    prev = f
+        act.inconsistent_spans = [s for s in spans if s[1] - s[0] >= 0.5]
+        total += len(frames)
+        good += int(cons.sum())
+    res.consistency = good / total if total else None
 
 
 def reverse_agreement(forward: AlignmentResult, reverse: AlignmentResult) -> float | None:
-    """Fraction of textured reverse-matched samples that the forward path confirms within ±1 frame.
+    """Fraction of textured reverse-path samples that land within ±1.5 frames of a forward act line.
 
-    ``reverse`` aligns the DVD (as "master") to the LD, so its offsets are master − DVD. A sample
-    maps to master frame i; the forward offsets of the samples either side of i (matched ones
-    only) must include −offset ± 1. Samples outside the forward path's matched range count as
-    disagreements.
+    ``reverse`` aligns the DVD (as "master") to the LD, so its offsets are master − DVD.
     """
     total = agree = 0
-    n = len(forward.idxs)
-    for j, off, m, flat in zip(reverse.idxs, reverse.offsets, reverse.matched, reverse.flat, strict=True):
-        if not m or flat:
+    ev = reverse.evidenced
+    for j, off, ok in zip(reverse.idxs, reverse.offsets, ev, strict=True):
+        if not ok:
             continue
         total += 1
         i = int(j) + int(off)
-        k = int(np.searchsorted(forward.idxs, i, side="right")) - 1
-        near = [x for x in (k, k + 1) if 0 <= x < n and forward.matched[x]]
-        if any(abs(int(forward.offsets[x]) + int(off)) <= 1 for x in near):
+        act = forward.act_for(i)
+        if act is not None and abs(act.offset(i) + int(off)) <= 1.5:
             agree += 1
     return agree / total if total else None
 
@@ -314,42 +459,46 @@ def reverse_agreement(forward: AlignmentResult, reverse: AlignmentResult) -> flo
 def decide(res: AlignmentResult) -> None:
     """Set ``res.decision`` to AUTO-ACCEPTED or NEEDS-REVIEW, listing every failed check."""
     p, reasons = res.params, []
-    matched = [s for s in res.segments if s.offset is not None]
-    if not matched:
-        reasons.append("no matched segment")
-    for s in matched:
-        if s.offset in (p["min_offset"], p["max_offset"]):
-            reasons.append(f"segment at {s.start_frame / FPS:.1f}s sits on the offset search edge ({s.offset})")
-        k = matched.index(s)
-        neighbours = [x.offset for x in matched[max(0, k - 1):k + 2] if x is not s]
-        jitter = any(abs(s.offset - o) <= 1 for o in neighbours)   # telecine phase, not a break
-        if (s.seconds < ACCEPT["min_segment_s"] and not jitter
-                and s is not matched[0] and s is not matched[-1]):
-            reasons.append(f"short matched segment {s.start_frame / FPS:.1f}–{s.end_frame / FPS:.1f}s "
-                           f"(offset {s.offset:+d})")
-        if s.dense_within1 is not None and s.dense_within1 < ACCEPT["dense_agreement_min"]:
-            reasons.append(f"segment {s.start_frame / FPS:.1f}–{s.end_frame / FPS:.1f}s: only "
-                           f"{s.dense_within1:.0%} of frames confirm offset {s.offset:+d} within ±1")
-    if matched:
-        lo, hi = matched[0].start_frame, matched[-1].end_frame
-        for s in res.segments:
-            if s.offset is None and lo < s.start_frame and s.end_frame < hi:
-                inside = (res.idxs >= s.start_frame) & (res.idxs <= s.end_frame) & ~res.flat
-                textured_s = float(inside.sum() * p["step"] / FPS)
-                if textured_s > ACCEPT["max_interior_unmatched_s"]:
-                    reasons.append(f"{textured_s:.1f}s of LD picture at {s.start_frame / FPS:.1f}–"
-                                   f"{s.end_frame / FPS:.1f}s has no DVD match (edition difference?)")
-    if len(matched) > ACCEPT["max_segments"]:
-        reasons.append(f"{len(matched)} matched segments (> {ACCEPT['max_segments']})")
+    acts = res.acts
+    if not acts:
+        reasons.append("no DVD picture matched")
+    ev = res.evidenced
+    edge = ev & ((res.offsets == p["min_offset"]) | (res.offsets == p["max_offset"]))
+    if edge.any():
+        reasons.append(f"{int(edge.sum())} sample(s) sit on the offset search edge")
+    if len(acts) > ACCEPT["max_acts"]:
+        reasons.append(f"{len(acts)} acts (> {ACCEPT['max_acts']})")
+    if res.consistency is not None and res.consistency < ACCEPT["consistency_min"]:
+        reasons.append(f"act lines explain only {res.consistency:.1%} of textured frames")
+    for a in acts:
+        where = f"act {a.start_frame / FPS:.1f}–{a.end_frame / FPS:.1f}s"
+        if a.seconds >= 20 and a.consistency is not None and a.consistency < ACCEPT["act_consistency_min"]:
+            reasons.append(f"{where}: line explains only {a.consistency:.1%} of frames")
+        for s0, s1 in a.inconsistent_spans:
+            if s1 - s0 >= ACCEPT["max_inconsistent_span_s"]:
+                reasons.append(f"{where}: picture at {s0:.1f}–{s1:.1f}s does not follow the act line")
+        if res.common_slope is not None and a.seconds >= 60 and \
+                abs(a.slope - res.common_slope) * 1e6 > ACCEPT["slope_spread_ppm"]:
+            reasons.append(f"{where}: slope {a.slope * 1e6:+.0f} ppm vs common {res.common_slope * 1e6:+.0f} ppm")
+    if acts:
+        lo, hi = acts[0].start_frame, acts[-1].end_frame
+        unmatched = ~res.matched & ~res.flat & (res.idxs > lo) & (res.idxs < hi)
+        run = longest = 0
+        for u in unmatched:
+            run = run + 1 if u else 0
+            longest = max(longest, run)
+        if longest * p["step"] / FPS > ACCEPT["max_interior_unmatched_s"]:
+            reasons.append(f"{longest * p['step'] / FPS:.1f}s of LD picture between acts has no DVD match "
+                           "(edition difference?)")
     textured = ~res.flat
     if textured.any():
         frac = float((res.matched & textured).sum() / textured.sum())
         if frac < ACCEPT["min_matched_fraction"]:
             reasons.append(f"only {frac:.0%} of textured master samples matched the DVD")
     if res.reverse_agreement is None:
-        reasons.append("reverse alignment not run")
+        reasons.append("reverse alignment found nothing to compare")
     elif res.reverse_agreement < ACCEPT["reverse_agreement_min"]:
-        reasons.append(f"reverse alignment agrees on only {res.reverse_agreement:.1%} of samples")
+        reasons.append(f"reverse alignment lands on the act lines for only {res.reverse_agreement:.1%} of samples")
     if len(reasons) > 12:
         reasons = [*reasons[:12], f"... and {len(reasons) - 12} more"]
     res.reasons = reasons
@@ -358,11 +507,12 @@ def decide(res: AlignmentResult) -> None:
 
 def measure(master: np.ndarray, dvd: np.ndarray, *, params: dict[str, Any] | None = None,
             progress=None) -> AlignmentResult:
-    """Forward path + dense check + reverse check + decision."""
+    """Forward path → act model → frame-by-frame consistency → reverse check → decision."""
     fwd = align(master, dvd, params=params, progress=progress)
+    fit_acts(fwd)
     if progress:
-        progress(0.65, "confirming offsets frame by frame")
-    dense_check(master, dvd, fwd)
+        progress(0.6, "checking every frame against the act lines")
+    consistency_check(master, dvd, fwd)
     rp = {**fwd.params, "min_offset": -fwd.params["max_offset"], "max_offset": -fwd.params["min_offset"]}
     if progress:
         progress(0.75, "reverse alignment")
@@ -373,16 +523,19 @@ def measure(master: np.ndarray, dvd: np.ndarray, *, params: dict[str, Any] | Non
 
 
 def path_array(res: AlignmentResult) -> np.ndarray:
-    """v38 ``align_npy`` layout: rows (master_frame, dvd_minus_master).
+    """v38 ``align_npy`` layout: rows (master_frame, dvd_minus_master), from the act lines.
 
-    Only samples inside matched segments are written. Gaps (no evidence between two offsets)
-    and unmatched material are left out, so no consumer interpolates across an unmeasured edge.
+    One row per sampled master frame inside an act, with the act line rounded to a whole frame.
+    Gaps between acts and unmatched material are left out, so nothing interpolates across an
+    unmeasured break.
     """
-    keep = np.zeros(len(res.idxs), bool)
-    for s in res.segments:
-        if s.offset is not None:
-            keep |= (res.idxs >= s.start_frame) & (res.idxs <= s.end_frame) & res.matched & (res.offsets == s.offset)
-    return np.column_stack((res.idxs[keep], res.offsets[keep])).astype(np.int64)
+    rows = []
+    for a in res.acts:
+        sel = res.idxs[(res.idxs >= a.start_frame) & (res.idxs <= a.end_frame)]
+        rows.append(np.column_stack((sel, np.round(a.offset(sel.astype(float))))))
+    if not rows:
+        return np.zeros((0, 2), np.int64)
+    return np.vstack(rows).astype(np.int64)
 
 
 def offset_at(path: np.ndarray, master_frame: int) -> int:

@@ -66,7 +66,7 @@ def test_alignment_is_measured_and_auto_accepted(env):
     m = EpisodeWorkspace(prof, EP).store.load()
     rec = m.get("video.dvd_alignment")
     assert rec["decision"] == "AUTO-ACCEPTED", rec["reasons"]
-    assert rec["offset_range"] == [-FRONT, -FRONT]
+    assert len(rec["acts"]) == 1 and all(abs(v + FRONT) < 0.6 for v in rec["acts"][0]["values"])
     assert abs(m.get("video.dvd_origin_master_frame") - FRONT) <= 15
     path = np.load(prof.root("probe", EP) / m.artifact("align_npy")["name"])
     assert set(path[:, 1]) == {-FRONT}

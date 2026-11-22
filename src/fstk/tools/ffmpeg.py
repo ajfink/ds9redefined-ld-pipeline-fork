@@ -320,6 +320,12 @@ class FFmpeg:
             raise ArtifactError(f"audio decode failed {path} {selector}: {res.describe()}")
         return np.frombuffer(res.stdout or b"", np.int16).astype(np.float32)
 
+    def version(self) -> str:
+        """First line of ``ffmpeg -version`` (recorded with derived artifacts for traceability)."""
+        res = process.run([self.ffmpeg, "-hide_banner", "-version"], capture_stdout=True, log_path=self._log("version"))
+        text = (res.stdout or b"").decode("utf-8", "replace").strip().splitlines()
+        return text[0] if res.returncode == 0 and text else "unknown"
+
     def supports_soxr(self) -> bool:
         """Whether this FFmpeg build has libsoxr (v38 records the swr fallback rather than failing late)."""
         res = process.run([self.ffmpeg, "-hide_banner", "-buildconf"], capture_stdout=True,

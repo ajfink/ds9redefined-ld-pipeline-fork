@@ -45,7 +45,7 @@ def main() -> int:
     diff = np.array([b[i] - a[i] for i in common.tolist()])
     print(f"\nv38 path: {len(v38)} samples, offsets {v38[:, 1].min()}..{v38[:, 1].max()}, "
           f"from master frame {v38[0, 0]}")
-    print(f"fstk path: {len(ours)} samples in matched segments, origin master frame {res.origin_master_frame}")
+    print(f"fstk path: {len(ours)} samples on act lines, origin master frame {res.origin_master_frame}")
     if len(common):
         print(f"common samples: {len(common)}; exact {np.mean(diff == 0):.2%}, within ±1 {np.mean(abs(diff) <= 1):.2%}; "
               f"max |Δ| {int(abs(diff).max())}")
@@ -53,12 +53,12 @@ def main() -> int:
         if len(bad):
             print("  disagreements (master frame: v38 → fstk):",
                   ", ".join(f"{i}: {a[i]}→{b[i]}" for i in bad[:20].tolist()))
-    print("\nsegments:")
-    for s in res.segments:
-        extra = (f" NCC~{s.median_ncc:.3f} dense±1 {s.dense_within1:.1%}" if s.offset is not None
-                 and s.dense_within1 is not None else "")
-        print(f"  {s.kind:9s} {s.start_frame / al.FPS:8.2f}–{s.end_frame / al.FPS:8.2f}s "
-              f"offset {s.offset if s.offset is not None else '—':>6}{extra}")
+    print(f"\ncommon slope {res.common_slope * 1e6:+.1f} ppm; frame-by-frame consistency {res.consistency:.4f}")
+    print("acts:")
+    for act in res.acts:
+        print(f"  {act.start_frame / al.FPS:8.2f}–{act.end_frame / al.FPS:8.2f}s slope {act.slope * 1e6:+7.0f} ppm "
+              f"knots {len(act.knots)} rms {act.residual_rms:.2f} consistent {act.consistency:.3f} spans {act.inconsistent_spans}")
+    print("breaks:", [(b["after_s"], b["before_s"], b["jump_frames"]) for b in res.breaks])
     print(f"\nreverse agreement: {res.reverse_agreement}")
     print(f"decision: {res.decision}")
     for r in res.reasons:

@@ -48,6 +48,19 @@ Newest session first. Format and rules: see `AGENTS.md` → "Logging".
   reused. `tools/validate_v38_alignment.py` compares against v38's approved S01E20 path, but
   can't run yet: access to `Z:\ld-pipeline-device` and `Z:\Video\DS9S1D5` was refused by the
   session's safety layer. 287 tests.
+- **S3-CP4 — alignment validated on real S01E20; act model (finding 0005).** The owner granted
+  `Z:\` and `X:\`. On S01E20's real descriptors the DVD−LD offset drifts within acts (common
+  slope −988 ppm ≈ 1000:1001, plus wander), and soft-telecine duplicates tie neighbouring
+  offsets. Alignment now fits a continuous curve per act (30 s knots, robust, smoothed) between
+  refined breaks. Acceptance is the frame-by-frame consistency of the curves plus the reverse
+  path.
+
+  S01E20 is **AUTO-ACCEPTED**: consistency 99.69%, reverse 96.5%, origin master frame 1515
+  (= v38's 50.5505 s anchor), 97.5% within ±1 of the approved v38 path, and v38's 38-frame
+  excursion at 347–350 s avoided. It stays accepted when the DVD descriptors come from another
+  FFmpeg build (duplicates placed differently in 13% of rows). Real-sample fixture
+  `tests/fixtures/s01e20-alignment-samples.npz`; FFmpeg version recorded in descriptor
+  metadata. 289 tests.
 
 ---
 

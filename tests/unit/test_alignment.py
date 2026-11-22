@@ -79,20 +79,33 @@ def test_viterbi_without_unmatched_state_equals_v38_matrix_form():
 def test_recovers_origin_offsets_and_break_automatically(episode):
     ld, dvd, info = episode
     res = al.measure(ld, dvd, params=PARAMS)
-    matched = [s for s in res.segments if s.offset is not None]
     first_off = 30 - info["front"]                      # DVD index − LD index for the opening
-    assert matched[0].offset == first_off
-    assert matched[-1].offset == first_off - 25
-    assert {s.offset for s in matched} <= {first_off, first_off - 25}
-    # the LD-only front matter is labelled unmatched, and the origin is measured, not assumed
-    assert res.segments[0].offset is None
+    assert len(res.acts) == 2, [(a.start_frame, a.values) for a in res.acts]
+    one, two = res.acts
+    assert np.allclose(one.values, first_off, atol=0.6) and np.allclose(two.values, first_off - 25, atol=0.6)
+    assert len(res.breaks) == 1 and abs(res.breaks[0]["jump_frames"] + 25) < 1
+    # the LD-only front matter is unmatched, and the origin is measured, not assumed
+    assert not res.matched[0]
     assert abs(res.origin_master_frame - info["front"]) <= PARAMS["step"]
-    assert all(s.dense_within1 >= 0.95 for s in matched if s.dense_frames)
-    assert res.reverse_agreement >= 0.95
+    assert res.consistency >= 0.98 and res.reverse_agreement >= 0.95
     assert res.decision == "AUTO-ACCEPTED", res.reasons
     path = al.path_array(res)
     assert al.offset_at(path, info["front"] + 10) == first_off
     assert al.offset_at(path, len(ld) - 100) == first_off - 25
+
+
+def test_speed_difference_is_followed_not_flagged():
+    """LD repeats one frame in every 500 (2000 ppm slower transfer): the offset drifts by a frame
+    every 500 LD frames. A constant-offset model would see a staircase of short segments; the act
+    curve follows it and every frame stays consistent."""
+    rng = np.random.default_rng(11)
+    dvd = programme(rng, lengths=(150, 120, 180, 140, 160, 130, 170, 150, 140, 160, 150, 130))
+    keep = np.repeat(np.arange(len(dvd)), np.where(np.arange(len(dvd)) % 500 == 250, 2, 1))
+    ld = dvd[keep]
+    res = al.measure(ld, dvd, params={**PARAMS, "min_offset": -100, "max_offset": 100})
+    assert len(res.acts) == 1, res.breaks
+    assert abs(res.acts[0].slope * 1e6 + 2000) < 600
+    assert res.decision == "AUTO-ACCEPTED", res.reasons
 
 
 def test_wrong_dvd_content_is_held_for_review(episode):
@@ -108,4 +121,16 @@ def test_search_edge_is_never_auto_accepted(episode):
     first_off = 30 - info["front"]
     res = al.measure(ld, dvd, params={**PARAMS, "min_offset": first_off})
     assert res.decision == "NEEDS-REVIEW"
-    assert any("search edge" in r or "matched" in r for r in res.reasons)
+
+
+def test_real_s01e20_samples_give_the_act_structure(fixtures):
+    """Forward-path samples from S01E20's real descriptors (owner-approved v38 alignment)."""
+    z = np.load(fixtures / "s01e20-alignment-samples.npz")
+    res = al.AlignmentResult(z["idxs"], z["offsets"], z["sub"].astype(float), z["matched"], z["ncc"], z["margin"],
+                             z["flat"], dict(al.DEFAULTS))
+    al.fit_acts(res)
+    assert res.origin_master_frame == 1515                 # v38 anchor: delta 50.5505 s
+    assert abs(res.common_slope * 1e6 + 988) < 15          # ≈ 1000:1001
+    big = [(round(b["before_s"]), round(b["jump_frames"])) for b in res.breaks if abs(b["jump_frames"]) >= 4]
+    assert [t for t, _ in big] == [283, 664, 971, 1455, 1803]
+    assert [j for _, j in big] == [5, 6, -4, 15, 15]
