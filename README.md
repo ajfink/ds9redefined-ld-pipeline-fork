@@ -8,6 +8,10 @@ is ever defaulted.
 
 Status: early development (see `docs/DEVLOG.md`). The v38 tree remains the production reference.
 
+## Install and run
+`INSTALL.md` — unzip the folder, start `FromStunToKill.cmd` (Windows), `FromStunToKill.command` (Apple Silicon Mac) or
+`FromStunToKill.sh` (Linux); it checks dependencies, asks before installing, and starts the app.
+
 ## Start here
 - `AGENTS.md` — rules and conventions for anyone continuing the work
 - `docs/DEVLOG.md` — what has been built, decisions, and next steps (newest first)

@@ -1,0 +1,119 @@
+{
+  "about": "Pinned VapourSynth + plugin set used by FromStunToKill. Windows/Linux install these exact versions from PyPI; macOS arm64 installs the vendored wheels below after sha256 verification. The wheels are UNMODIFIED upstream releases downloaded from PyPI (built by the upstream projects); nothing here was compiled or patched by FromStunToKill.",
+  "retrieved": "2026-11-23",
+  "macos_min_version": 15,
+  "macos_arch": "arm64",
+  "python_abi": "cp312-abi3 or py3-none (Python 3.12-3.15)",
+  "packages": {
+    "vapoursynth": {
+      "version": "82",
+      "file": "macos-arm64/vapoursynth-82-cp312-abi3-macosx_13_0_arm64.whl",
+      "sha256": "e6f0854e7de85b42426cb0889066c712455b6f1afde8d7328addfb2320bc3e80",
+      "size": 2449211,
+      "license": "LGPL-2.1-or-later",
+      "upstream": "https://github.com/vapoursynth/vapoursynth",
+      "pypi": "https://pypi.org/project/vapoursynth/82/",
+      "pypi_url": "https://files.pythonhosted.org/packages/04/d7/c87d07e85746747a7ce4669b0d491b9dfea9a9c4f7295f43a4f2c5a5003f/vapoursynth-82-cp312-abi3-macosx_13_0_arm64.whl",
+      "platform_tag": "macosx_13_0_arm64"
+    },
+    "vapoursynth-akarin": {
+      "version": "1.5.0",
+      "file": "macos-arm64/vapoursynth_akarin-1.5.0-py3-none-macosx_14_0_arm64.whl",
+      "sha256": "bc5ab5c6629734ebe18d51a3ced79cde8b8ed9a0360506febd060bbb79136d84",
+      "size": 22108555,
+      "license": "LGPL-3.0-only",
+      "upstream": "https://github.com/Jaded-Encoding-Thaumaturgy/akarin-vapoursynth-plugin",
+      "pypi": "https://pypi.org/project/vapoursynth-akarin/1.5.0/",
+      "pypi_url": "https://files.pythonhosted.org/packages/ff/61/9bcb383dc8fdfefe4444801130f40015490227e880873b8d233cd1d4c1cb/vapoursynth_akarin-1.5.0-py3-none-macosx_14_0_arm64.whl",
+      "platform_tag": "macosx_14_0_arm64"
+    },
+    "vapoursynth-bestsource": {
+      "version": "23",
+      "file": "macos-arm64/vapoursynth_bestsource-23-py3-none-macosx_15_0_arm64.whl",
+      "sha256": "61cb508b523e0da1fe7798c8a0b3dae0dd801739cef1ba2062233d34ae12c102",
+      "size": 9073871,
+      "license": "MIT",
+      "upstream": "https://github.com/vapoursynth/bestsource",
+      "pypi": "https://pypi.org/project/vapoursynth-bestsource/23/",
+      "pypi_url": "https://files.pythonhosted.org/packages/97/69/5c721e1324927e07d241e98721df2e4a8a12f29b13f86c4a6b0b8a6ab152/vapoursynth_bestsource-23-py3-none-macosx_15_0_arm64.whl",
+      "platform_tag": "macosx_15_0_arm64"
+    },
+    "vapoursynth-eedi3": {
+      "version": "10.0",
+      "file": "macos-arm64/vapoursynth_eedi3-10.0-py3-none-macosx_11_0_arm64.whl",
+      "sha256": "8c2f3ba76e312ccc434c443a7ea1147effc78cbd4762ec3edd86c58c7da50896",
+      "size": 43333,
+      "license": "GPL-2.0-or-later",
+      "upstream": "https://github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI3",
+      "pypi": "https://pypi.org/project/vapoursynth-eedi3/10.0/",
+      "pypi_url": "https://files.pythonhosted.org/packages/ec/7a/5f7ad99d9086d835d1f81aa7db9dd0eabb761484069d329f8c6060dcb6b4/vapoursynth_eedi3-10.0-py3-none-macosx_11_0_arm64.whl",
+      "platform_tag": "macosx_11_0_arm64"
+    },
+    "vapoursynth-mvtools": {
+      "version": "29",
+      "file": "macos-arm64/vapoursynth_mvtools-29-py3-none-macosx_15_0_arm64.whl",
+      "sha256": "c081fb4b367ebd44f2b56cf38e43ff146dd5f31ec31dacbf6cd8bf6560aa2478",
+      "size": 1026238,
+      "license": "GPL-2.0",
+      "upstream": "https://github.com/dubhatervapoursynth/vapoursynth-mvtools",
+      "pypi": "https://pypi.org/project/vapoursynth-mvtools/29/",
+      "pypi_url": "https://files.pythonhosted.org/packages/78/4a/96b5d75b693c0129535246b1626888695e3d335804d8a00e21e285e8ff18/vapoursynth_mvtools-29-py3-none-macosx_15_0_arm64.whl",
+      "platform_tag": "macosx_15_0_arm64"
+    },
+    "vapoursynth-resize2": {
+      "version": "0.5.1",
+      "file": "macos-arm64/vapoursynth_resize2-0.5.1-py3-none-macosx_13_0_arm64.whl",
+      "sha256": "59be8beef3668dcc5edc6cd80100dedb905e9e6024700f64ff714ddc12d47798",
+      "size": 224448,
+      "license": "LGPL-2.1",
+      "upstream": "https://github.com/Jaded-Encoding-Thaumaturgy/vapoursynth-resize2",
+      "pypi": "https://pypi.org/project/vapoursynth-resize2/0.5.1/",
+      "pypi_url": "https://files.pythonhosted.org/packages/1b/51/eb05589785900e58a1f601039573a10dff4fa4ad7e7c2d9ba4d045d7a98f/vapoursynth_resize2-0.5.1-py3-none-macosx_13_0_arm64.whl",
+      "platform_tag": "macosx_13_0_arm64"
+    },
+    "vapoursynth-tivtc": {
+      "version": "4",
+      "file": "macos-arm64/vapoursynth_tivtc-4-py3-none-macosx_15_0_arm64.whl",
+      "sha256": "485afe299529c906ca02c32c992a22ed0d2d94e7fd90b5a4b137608ccfee7b2c",
+      "size": 187835,
+      "license": "GPL-2.0",
+      "upstream": "https://github.com/dubhatervapoursynth/vapoursynth-tivtc",
+      "pypi": "https://pypi.org/project/vapoursynth-tivtc/4/",
+      "pypi_url": "https://files.pythonhosted.org/packages/d9/25/66e20b9e1720095db810a1ddcec1760fc6e05ba1f373da6dce47dccc96d3/vapoursynth_tivtc-4-py3-none-macosx_15_0_arm64.whl",
+      "platform_tag": "macosx_15_0_arm64"
+    },
+    "vapoursynth-vszip": {
+      "version": "24.0.0",
+      "file": "macos-arm64/vapoursynth_vszip-24.0.0-py3-none-macosx_11_0_arm64.whl",
+      "sha256": "caa5cd40677cdff14d593cf694fbec817f5aa8a1d7e819494bf978f647c7fb8d",
+      "size": 1446981,
+      "license": "MIT",
+      "upstream": "https://github.com/dnjulek/vapoursynth-zip",
+      "pypi": "https://pypi.org/project/vapoursynth-vszip/24.0.0/",
+      "pypi_url": "https://files.pythonhosted.org/packages/c7/17/2a2230a06ef94b2523ba0de863cbbf7a2e0acdcd8938245e1c9fb5bd2fd8/vapoursynth_vszip-24.0.0-py3-none-macosx_11_0_arm64.whl",
+      "platform_tag": "macosx_11_0_arm64"
+    },
+    "vapoursynth-znedi3": {
+      "version": "3.3",
+      "file": "macos-arm64/vapoursynth_znedi3-3.3-py3-none-macosx_15_0_arm64.whl",
+      "sha256": "886af071df4b07254df44be91d6b88c4e489a547a9c34b5f6f1de778881f071d",
+      "size": 12730337,
+      "license": "GPL-2.0",
+      "upstream": "https://github.com/sekrit-twc/znedi3",
+      "pypi": "https://pypi.org/project/vapoursynth-znedi3/3.3/",
+      "pypi_url": "https://files.pythonhosted.org/packages/06/cb/090b6eb10abea0bd0236fe24a4956f217222901b1a55568b4d31eee46c8f/vapoursynth_znedi3-3.3-py3-none-macosx_15_0_arm64.whl",
+      "platform_tag": "macosx_15_0_arm64"
+    },
+    "vsjetpack": {
+      "version": "2.2.7",
+      "file": "macos-arm64/vsjetpack-2.2.7-py3-none-any.whl",
+      "sha256": "2ec71bc8ddacf9daaf724c2ce3b3ae609de3785404901c1cff6df334956374f7",
+      "size": 440604,
+      "license": "MIT",
+      "upstream": "https://github.com/Jaded-Encoding-Thaumaturgy/vs-jetpack",
+      "pypi": "https://pypi.org/project/vsjetpack/2.2.7/",
+      "pypi_url": "https://files.pythonhosted.org/packages/4e/e7/63b370224de373056584873285b07ac1cffe2d6bb72a212255d4a2edfa81/vsjetpack-2.2.7-py3-none-any.whl",
+      "platform_tag": "any"
+    }
+  }
+}

@@ -853,3 +853,31 @@ Source: `DEEP-REVIEW-1` (project doc). Defects A1–A5 reproduced, then fixed wi
 - Episodes with their own output settings show a flag in the main window (what differs, who, when, and whether the
   defaults changed since). Every interactive control now has a hover tooltip (`ui/tips.py`); `tests/unit/test_tooltips.py`
   fails when a new control is added without one.
+
+## CP32 — one folder, three launchers: install, check, start (Windows, Apple Silicon Mac, Linux)
+
+Owner request: unzip the app (or put it on a share several computers use), start the launcher for the system,
+dependencies are checked, installation prompts run, work can begin.
+
+- `src/fstk/install/` (`discover`, `providers`, `wizard`) and `fstk setup [--yes --no-prompt --no-install --check]`:
+  find tools in PATH / known per-OS locations, offer package-manager installs after showing the exact command,
+  never auto-install Orc or RIFE (version-pinned; guidance only, Orc Flatpak wrapper on Linux), choose a libx265 FFmpeg,
+  keep a valid profile and only repair what is missing, check free space with the volume advice, then run the doctor.
+- `tools/fstk_launch.py` (stdlib only) builds a **per-machine** venv outside the app folder (no shared venv across OSes),
+  `PYTHONPATH=APP/src`, bytecode cache per machine; modes gui/setup/check/cli/env/reset-env. Launchers:
+  `FromStunToKill.cmd` + `tools/launch.ps1`, `FromStunToKill.command`, `FromStunToKill.sh` + `tools/launch.sh`; each finds
+  Python 3.12–3.15 or offers a sha256-verified python-build-standalone 3.12 under the machine folder.
+- VapourSynth on Mac: GitHub search showed the plugin work already exists upstream (community build repos archived in
+  favour of PyPI; upstream publishes macOS arm64 wheels, including TIVTC v4). Earlier "no mac wheel" claim was wrong
+  (checked the wrong platform tag). Decision: **no source builds**; the tested set is pinned for all platforms in
+  `vendor/vapoursynth-plugins/LOCK.json` and the ten unmodified macOS arm64 wheels (~49 MB) are vendored with sha256s
+  and provenance (README there). Needs macOS ≥ 15.
+- Tests: `tests/unit/test_install.py` (24). Verified here on Linux: clean-HOME env creation + setup, shell-launcher Python
+  download path (checksum + unpack). **Not verified (no access to the machines):** the PowerShell launcher, any macOS run,
+  installing the vendored wheels on a Mac, Flatpak wrapper, `winget`/`brew` installs, exec bit on SMB shares.
+
+**Repository moved (CP32).** Owner decision: the main git repository is now `W:\FromStunToKill` (= lenovoflex
+`C:\Swap Folder\FromStunToKill`, shared with the Mac and the folder the launchers run from); `Z:\FromStunToKill` is the
+backup copy. Flow: commit in W:, then `git push backup main` (Z: has `receive.denyCurrentBranch=updateInstead`, so its
+working tree follows). GitHub (`fromstuntokill-app`) is pushed from W: when the owner asks. History is preserved (W: was
+cloned from Z: at c4df2da, then the CP32 work was committed on top).

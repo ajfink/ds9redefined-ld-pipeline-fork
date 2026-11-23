@@ -1,0 +1,328 @@
+"""``fstk setup``: a re-runnable first-run wizard.
+
+Finds each external tool, installs what a package manager can install safely (after asking), explains the rest,
+checks the drive space for the work folders, writes this machine's profile and ends with the readiness report.
+Everything the owner types is optional: Enter skips, and every answer can be changed later in Settings.
+
+Re-running never discards a choice: tools already configured and still present are kept, folders of an existing
+profile are left alone, and a profile that cannot be read is replaced only after asking (the old one is kept as
+``.bak``).
+"""
+from __future__ import annotations
+
+import os
+import platform
+import socket
+import subprocess
+import sys
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from fstk.config.profile import KNOWN_TOOLS, SCHEMA, Profile, current_os, default_profile_path
+from fstk.core.errors import ConfigError
+from fstk.core.timeutil import utc_now_iso
+from fstk.install import providers
+from fstk.install.discover import TOOL_ORDER, Found, discover, tools_dir
+
+LABELS = {"vspipe": "VapourSynth (vspipe)", "ffmpeg": "FFmpeg", "ffprobe": "FFprobe",
+          "orc": "Decode-Orc (orc-cli)", "rife_engine": "RIFE engine (rife-ncnn-vulkan)",
+          "rife_model_dir": "RIFE model folder", "sevenzip": "7-Zip", "curl": "curl"}
+
+
+@dataclass
+class Console:
+    """Questions and answers, replaceable in tests. Not interactive = never asks, never installs."""
+
+    interactive: bool = True
+    assume_yes: bool = False
+    ask_fn: Callable[[str], str] = input
+    out: Callable[[str], None] = print
+
+    def say(self, text: str = "") -> None:
+        self.out(text)
+
+    def ask(self, question: str, default: str = "") -> str:
+        if not self.interactive:
+            return default
+        try:
+            answer = self.ask_fn(f"{question} ").strip()
+        except EOFError:
+            return default
+        return answer or default
+
+    def confirm(self, question: str, default: bool = True) -> bool:
+        if self.assume_yes:
+            return True
+        if not self.interactive:
+            return False
+        answer = self.ask(f"{question} [{'Y/n' if default else 'y/N'}]").lower()
+        return default if not answer else answer.startswith("y")
+
+
+@dataclass
+class SetupResult:
+    profile_path: Path | None = None
+    created: bool = False
+    changes: list[str] = field(default_factory=list)
+    problems: list[str] = field(default_factory=list)
+    ok: bool = False
+
+
+def _run(cmd: list[str]) -> int:
+    return subprocess.call(cmd)
+
+
+def _run_text(cmd: list[str]) -> str:
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False).stdout
+
+
+def _clean_path(text: str) -> str:
+    return os.path.expanduser(text.strip().strip('"').strip("'"))
+
+
+def _resolve_user_path(name: str, text: str) -> str | None:
+    """A path the owner typed, made into what the profile needs (an .app bundle becomes its orc-cli)."""
+    p = Path(_clean_path(text))
+    spec = KNOWN_TOOLS[name]
+    if name == "orc" and p.suffix == ".app":
+        p = p / "Contents" / "MacOS" / "orc-cli"
+    if spec["kind"] == "dir":
+        return str(p) if p.is_dir() else None
+    return str(p) if p.is_file() else None
+
+
+def run_setup(console: Console, *, profile_path: str | os.PathLike | None = None, system: str | None = None,
+              env: Mapping[str, str] | None = None, home: Path | None = None,
+              run: Callable[[list[str]], int] = _run, run_text: Callable[[list[str]], str] = _run_text,
+              install: bool = True, check_only: bool = False, venv_bin: Path | None = None,
+              volumes=None, doctor: Callable | None = None) -> SetupResult:
+    system = system or current_os()
+    env = os.environ if env is None else env
+    home = Path.home() if home is None else home
+    if venv_bin is None:
+        venv_bin = Path(sys.prefix) / ("Scripts" if system == "windows" else "bin")
+    path = Path(profile_path) if profile_path else default_profile_path()
+    result = SetupResult(profile_path=path)
+    say = console.say
+    say(f"FromStunToKill setup — {platform.system()} {platform.machine()}, Python {platform.python_version()}")
+
+    profile = _load_or_create(console, path, system, result, check_only=check_only, volumes=volumes)
+    if profile is None:
+        return result
+    _tools(console, profile, system=system, env=env, home=home, run=run, run_text=run_text,
+           install=install and not check_only, venv_bin=venv_bin, result=result)
+    if result.created and not check_only:
+        _sources(console, profile, result)
+    if (result.changes or result.created) and not check_only:
+        for root in (profile.data_root, profile.media_root):
+            try:
+                root.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                result.problems.append(f"could not create {root}: {exc}")
+        profile.notes.append(f"[setup] updated by `fstk setup` {utc_now_iso()} on {platform.system()}")
+        profile.save(path)
+        say(f"\nProfile saved: {path}")
+    if doctor is None:
+        from fstk.tools.doctor import run_doctor as doctor
+    report = doctor(profile)
+    bad = [c for c in report["checks"] if c["status"] in ("FAIL", "WARN")]
+    say("\nReadiness:")
+    for row in bad:
+        say(f"  [{row['status']:4}] {row['name']}: {row['detail']}")
+    fails = sum(1 for c in bad if c["status"] == "FAIL")
+    say(f"  {len(report['checks']) - len(bad)} checks passed, {len(bad) - fails} warnings, {fails} failures")
+    result.ok = bool(report["ok"])
+    return result
+
+
+def _load_or_create(console: Console, path: Path, system: str, result: SetupResult, *, check_only: bool,
+                    volumes) -> Profile | None:
+    if path.exists():
+        try:
+            profile = Profile.load(path)
+            console.say(f"Using the existing profile {path} ({profile.machine}).")
+            return profile
+        except ConfigError as exc:
+            console.say(f"The profile at {path} cannot be used: {exc}")
+            if check_only or not console.confirm("Replace it with a fresh one? (the old file is kept as .bak)",
+                                                 default=False):
+                result.problems.append(f"profile unusable: {exc}")
+                return None
+    if check_only:
+        result.problems.append(f"no profile at {path}")
+        console.say(f"No profile at {path} yet: run setup (without --check) to create one.")
+        return None
+    from fstk.config.profile import default_data_root, default_media_root
+
+    profile = Profile.from_dict({"schema": SCHEMA, "machine": socket.gethostname() or "this-machine",
+                                 "os": system, "data_root": str(default_data_root().absolute()),
+                                 "media_root": str(default_media_root().absolute())}, path=path)
+    result.created = True
+    console.say(f"\nNew profile for {profile.machine}. Work will be kept in:\n  {profile.data_root}\n  "
+                f"{profile.media_root}")
+    _check_space(console, profile, volumes)
+    return profile
+
+
+def _check_space(console: Console, profile: Profile, volumes) -> None:
+    from fstk.workspace.volumes import advise
+
+    try:
+        advice = advise(profile, volumes)
+    except Exception as exc:                        # advice is a courtesy; never stop setup for it
+        console.say(f"(could not measure drive space: {exc})")
+        return
+    for a in advice:
+        if a.level in ("warn", "block"):
+            console.say(f"\n{a.text}")
+            if a.suggestion and console.confirm(f"Use {a.suggestion} instead?"):
+                if a.what == "Data folder":
+                    profile.data_root = Path(a.suggestion).absolute()
+                elif a.what == "Working folder":
+                    profile.media_root = Path(a.suggestion).absolute()
+            elif not a.suggestion:
+                console.say("  No local drive here has more room. The free-space reserve is not lowered "
+                            "automatically (limits.min_free_gb): free some space or attach a larger drive.")
+
+
+def _pick_ffmpeg(found: list[Found], run_text: Callable[[list[str]], str], console: Console) -> Found:
+    verdicts = [(f, providers.ffmpeg_has_x265(f.path, run_text)) for f in found]
+    for f, has in verdicts:
+        if has:
+            return f
+    first = verdicts[0][0]
+    console.say(f"  warning: {first.path} does not list the libx265 encoder; the final encode needs it.")
+    return first
+
+
+def _tools(console: Console, profile: Profile, *, system, env, home, run, run_text, install, venv_bin,
+           result: SetupResult) -> None:
+    say = console.say
+    manager = providers.detect_manager(system, env) if install else None
+    say("\nTools:")
+    for name in TOOL_ORDER:
+        spec = KNOWN_TOOLS[name]
+        label = LABELS[name]
+        configured = profile.tools.get(name) or ""
+        if configured and (Path(configured).is_dir() if spec["kind"] == "dir" else Path(configured).is_file()):
+            say(f"  ok       {label}: {configured}")
+            continue
+        if configured:
+            say(f"  changed  {label}: {configured} is gone; looking again")
+        engine = profile.tools.get("rife_engine")
+        found = discover(name, system=system, env=env, home=home, venv_bin=venv_bin, engine=engine)
+        if not found and install:
+            found = _try_install(console, name, system, env, home, venv_bin, manager, run, engine=engine,
+                                 profile=profile)
+        choice = _choose(console, name, found, run_text, sibling_of=profile.tools.get("ffmpeg"))
+        if choice is None:
+            choice = _ask_path(console, name, label, spec["required"], system)
+        if choice is None:
+            level = "MISSING " if spec["required"] else "optional"
+            say(f"  {level} {label}")
+            if spec["required"]:
+                result.problems.append(f"{label} is required and was not found")
+            continue
+        profile.tools[name] = choice
+        result.changes.append(f"tools.{name} = {choice}")
+        say(f"  found    {label}: {choice}")
+
+
+def _try_install(console: Console, name: str, system: str, env, home: Path, venv_bin, manager, run, *, engine,
+                 profile: Profile) -> list[Found]:
+    flatpak_orc = name == "orc" and system == "linux" and providers.flatpak_has_orc(run)
+    if flatpak_orc and console.confirm("  Decode-Orc is installed as a Flatpak. Create an `orc-cli` wrapper for it?"):
+        providers.write_orc_flatpak_wrapper(tools_dir(system, env, home) / "bin")
+        return discover(name, system=system, env=env, home=home, venv_bin=venv_bin, engine=engine)
+    cmd = providers.install_command(name, manager)
+    if cmd:
+        pretty = " ".join(cmd)
+        if console.confirm(f"  {LABELS[name]} is missing. Install it now with `{pretty}`?"):
+            rc = run(cmd)
+            if rc != 0:
+                console.say(f"  the installer exited with code {rc}")
+            return discover(name, system=system, env=env, home=home, venv_bin=venv_bin, engine=engine)
+        return []
+    if name not in ("vspipe", "rife_model_dir", "ffprobe"):
+        console.say("  " + providers.guidance(name, system))
+    return []
+
+
+def _choose(console: Console, name: str, found: list[Found], run_text, sibling_of: str | None = None) -> str | None:
+    if not found:
+        return None
+    if name == "ffmpeg":
+        return _pick_ffmpeg(found, run_text, console).path
+    if name == "ffprobe":
+        # the probe that belongs to the chosen FFmpeg (same folder) beats one from another build
+        same = [f for f in found if sibling_of and Path(f.path).parent == Path(sibling_of).parent]
+        return (same or found)[0].path
+    if name == "rife_model_dir" and len(found) > 1:
+        console.say("  Several RIFE models were found; the model changes the repaired frames, so choose:")
+        for i, f in enumerate(found, 1):
+            console.say(f"    {i}. {f.path}")
+        answer = console.ask("  Number (Enter to skip):")
+        if answer.isdigit() and 1 <= int(answer) <= len(found):
+            return found[int(answer) - 1].path
+        return None
+    return found[0].path
+
+
+def _ask_path(console: Console, name: str, label: str, required: bool, system: str) -> str | None:
+    if not console.interactive:
+        return None
+    if name in ("vspipe", "curl", "sevenzip", "ffprobe"):
+        return None                                  # found with their package, or optional enough to skip
+    if name == "rife_model_dir":
+        return None
+    typed = console.ask(f"  Path to {label}{'' if required else ' (optional)'} if you have it (Enter to skip):")
+    if not typed:
+        return None
+    resolved = _resolve_user_path(name, typed)
+    if resolved is None:
+        console.say(f"  {typed} is not a {'folder' if KNOWN_TOOLS[name]['kind'] == 'dir' else 'file'}; skipped.")
+    return resolved
+
+
+def _sources(console: Console, profile: Profile, result: SetupResult) -> None:
+    if not console.interactive:
+        return
+    console.say("\nWhere your material is (all optional; change later in Settings → Folders):")
+    for key, question in (("downloads_root", "Folder holding your LaserDisc capture folders"),
+                          ("dvd_root", "Folder holding your DVD rips")):
+        typed = console.ask(f"  {question} (Enter to skip):")
+        if not typed:
+            continue
+        p = Path(_clean_path(typed))
+        if p.is_dir():
+            profile.sources[key] = str(p)
+            result.changes.append(f"sources.{key} = {p}")
+        else:
+            console.say(f"  {p} is not reachable from here; skipped (set it later in Settings).")
+    typed = console.ask("  Shared workspace folder, to hand episodes between your machines "
+                        "(Enter = work alone on this machine):")
+    if typed:
+        p = Path(_clean_path(typed))
+        if p.is_dir():
+            profile.shared_root = p
+            result.changes.append(f"shared_root = {p}")
+        else:
+            console.say(f"  {p} is not reachable from here; skipped.")
+
+
+def check_environment() -> list[str]:
+    """Problems that stop the app starting at all (Python version, GUI libraries); empty means fine."""
+    problems = []
+    try:
+        from PySide6 import QtWidgets  # noqa: F401
+    except ImportError as exc:
+        hint = ""
+        if current_os() == "linux":
+            hint = (" On Debian/Ubuntu: sudo apt install libxcb-cursor0 libegl1 libgl1 libxkbcommon-x11-0 "
+                    "libdbus-1-3 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0")
+        problems.append(f"the window toolkit (PySide6) cannot load: {exc}.{hint}")
+    return problems
+
+
+__all__ = ["Console", "SetupResult", "check_environment", "run_setup"]

@@ -274,6 +274,19 @@ def cmd_bundle(args) -> int:
     return 0
 
 
+def cmd_setup(args) -> int:
+    """First-run / repair wizard: find tools, offer installs, write this machine's profile, run the readiness report."""
+    from fstk.install.wizard import Console, check_environment, run_setup
+
+    console = Console(interactive=not args.no_prompt and sys.stdin.isatty(), assume_yes=args.yes)
+    for problem in check_environment():
+        print(f"problem: {problem}")
+    result = run_setup(console, profile_path=args.profile, install=not args.no_install, check_only=args.check)
+    for problem in result.problems:
+        print(f"problem: {problem}")
+    return 0 if result.ok and not result.problems else 1
+
+
 def cmd_doctor(args) -> int:
     from fstk.tools.doctor import run_doctor
 
@@ -674,6 +687,12 @@ def build_parser() -> argparse.ArgumentParser:
     bd.add_argument("--out", help="zip file to write (default: <FromStunToKill home>\\bundles)")
     bd.add_argument("--no-profile", action="store_true")
     bd.set_defaults(func=cmd_bundle)
+    st = sub.add_parser("setup", help="first-run wizard: find tools, offer installs, write this machine's profile")
+    st.add_argument("--yes", action="store_true", help="answer yes to install offers (still asks for paths)")
+    st.add_argument("--no-prompt", action="store_true", help="never ask anything (CI / scripts)")
+    st.add_argument("--no-install", action="store_true", help="find and report only; install nothing")
+    st.add_argument("--check", action="store_true", help="change nothing: report what setup would do")
+    st.set_defaults(func=cmd_setup)
     d = sub.add_parser("doctor", help="read-only readiness report")
     d.add_argument("--no-profile", action="store_true", help="check the Python environment only")
     d.set_defaults(func=cmd_doctor)

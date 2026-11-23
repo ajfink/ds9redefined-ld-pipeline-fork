@@ -17,9 +17,11 @@ replacing or improving components (including Orc) is allowed.
    `.fstk-local/v38-now-20261121.tgz` (sha256 `8a010d58…7dac`). See `docs/v38-reference.md`.
    Never modify, commit to, or attach either tree. Behaviour differences found later are judged
    against that reference, not against whatever the trees contain now.
-2. **Commits.** `Z:\FromStunToKill` is a git repo (branch `main`, no remote). Agents commit there
-   after each verified sync, with the session trailers; they never push, rewrite history, or
-   commit anywhere else.
+2. **Commits.** The main repository is `W:\FromStunToKill` (branch `main`; the same folder is what the launchers run
+   from, see `INSTALL.md`). `Z:\FromStunToKill` is the **backup copy**: it receives `git push backup main` from W:
+   (`receive.denyCurrentBranch=updateInstead` there), so never commit in Z: directly. Agents commit in W: after each
+   verified sync, with the session trailers; they never rewrite history and push to GitHub only when the owner has
+   said so.
 3. **Measured, not assumed.** Unknown values stay unset. Never default, never copy another
    episode's numbers, never infer a convention the runbook does not define. See the ten
    invariants in `docs/REFACTOR-PLAN.md` §2; each must end up enforced by code + a test.
@@ -78,7 +80,7 @@ Small decisions go in the DEVLOG; anything structural also gets an ADR.
 
 ## Syncing a dev container to the owner's machine
 
-Session 1 developed in a cloud container and synced to `Z:\FromStunToKill` by writing one
+Session 1 developed in a cloud container and synced to the repo (since CP32: `W:\FromStunToKill`) by writing one
 tarball to the gitignored `.fstk-local/fstk-sync.tar` and extracting it in place with
 `tar --overwrite` (the device bridge cannot delete files, so nothing is ever removed this way;
 renamed/deleted files must be cleaned up by the owner). **Always compare the tarball's SHA-256

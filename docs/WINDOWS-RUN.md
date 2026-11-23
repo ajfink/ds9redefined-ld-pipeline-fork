@@ -1,5 +1,8 @@
 # First real Windows run — DS9:S01E20 (2026-11-22)
 
+> Installing and starting on a new computer is now `FromStunToKill.cmd` (see `INSTALL.md`); the setup steps below
+> that use `tools\windows\setup-fstk.ps1` are superseded.
+
 The first full fstk run on the Legion. The aim is a finished episode and the A/V review in the app.
 Several parts have only run on Linux so far, so this run's second job is to show where Windows breaks.
 **If a step fails, stop there, note what the table at the end asks for, and send it back.** Everything
