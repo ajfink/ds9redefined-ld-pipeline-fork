@@ -282,32 +282,32 @@ class ProgressTracker:
                         now - self.started, state, self.paused_at is not None)
 
     def _overall_eta(self, steps: list[StepProgress], now: float) -> float | None:
-        """Remaining machine time for the whole plan. Needs a basis: history for the unfinished stages, or a
-        speed observed on this run's own finished steps. Time a person takes to review is not counted."""
+        """Remaining machine time for the whole plan, or None when it cannot be estimated honestly.
+
+        Each unfinished step needs a basis of its own: its running rate (fraction and elapsed time), or the median
+        of earlier runs of that stage on this machine. A step with neither makes the whole estimate unknown, and so
+        does a failed or blocked step (the run cannot finish as it stands). The time a person spends reviewing is
+        not counted. Defaults and other stages' speeds are deliberately NOT used: a fast stage says nothing about a
+        slow one (an inventory that takes seconds would make a multi-hour render look nearly done)."""
+        if any(s.status in ("failed", "blocked", "stale", "interrupted") for s in steps):
+            return None
         todo = [s for s in steps if not s.done and s.status != WAITING]
         if not todo:
             return 0.0
-        # observed speed on this run: actual / expected over finished steps long enough to measure
-        actual = expected = 0.0
-        for s in steps:
-            if (s.done or s.status == WAITING) and s.started is not None and s.finished is not None:
-                took = s.finished - s.started
-                if took >= MIN_SECONDS_FOR_ETA:
-                    actual += took
-                    expected += s.weight
-        ratio = actual / expected if expected else None
-        have_history = all(self.timings.has_history(s.stage) for s in todo)
-        if ratio is None and not have_history:
-            running_eta = [self._eta_step(s, now) for s in steps if s.status == RUNNING]
-            if len(todo) == 1 and running_eta and running_eta[0] is not None:
-                return running_eta[0]
-            return None
-        scale = ratio if (ratio is not None and not have_history) else 1.0
         remaining = 0.0
         for s in todo:
             own = self._eta_step(s, now)
             if own is not None:
                 remaining += own
+                continue
+            median = self.timings.median(s.stage)
+            if median is None:
+                return None
+            elapsed = s.elapsed(now) or 0.0 if s.status == RUNNING else 0.0
+            if s.status == RUNNING and s.fraction is not None:
+                remaining += median * (1.0 - s.credit())
+            elif elapsed >= median:
+                return None                              # already slower than ever before: no honest figure
             else:
-                remaining += s.weight * (1.0 - s.credit()) * scale
+                remaining += median - elapsed
         return remaining

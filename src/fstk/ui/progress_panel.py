@@ -87,7 +87,7 @@ class ProgressPanel(QWidget):
         if snap.state == "running" and snap.overall_eta is not None:
             parts.append(f"about {format_duration(snap.overall_eta)} left (rough)")
         elif snap.state == "running":
-            parts.append("time left: measuring (shown once there is a basis)")
+            parts.append("time left: not known yet (needs timings from earlier runs)")
         if snap.paused:
             parts.append("PAUSED: tools are frozen and resume exactly where they stopped")
         self.detail.setText("   ·   ".join(parts))

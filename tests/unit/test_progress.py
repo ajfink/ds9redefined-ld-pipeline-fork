@@ -51,22 +51,39 @@ def test_step_eta_needs_basis():
     assert t.step_eta("b") is None                      # indeterminate step: never an invented ETA
 
 
-def test_overall_eta_from_history_and_from_this_run(tmp_path):
+def test_overall_eta_needs_history_and_ignores_other_stages_speed(tmp_path):
     clk = Clock()
     tm = Timings(tmp_path / "t.json")
     for stage in ("capture-inventory", "stack-render", "encode-final", "efm-select"):
         tm.record(stage, 1000)
     t = ProgressTracker(plan(), timings=tm, clock=clk)
-    assert t.snapshot().overall_eta == 4000             # history basis
-    # without history: nothing until a step has run long enough to measure the machine's speed
+    assert t.snapshot().overall_eta == 4000             # history for every unfinished step
+    # no history: unknown, and a fast finished step must not make the rest look quick
     t2 = ProgressTracker(plan(), clock=clk)
     assert t2.snapshot().overall_eta is None
     t2.on_event({"kind": "step-start", "step": "a"})
-    clk.t += DEFAULT_SECONDS["capture-inventory"] * 2     # twice as slow as the default
+    clk.t += 24                                          # a 24 s inventory against a 600 s default
     t2.on_event({"kind": "step-passed", "step": "a"})
-    eta = t2.snapshot().overall_eta
-    assert abs(eta - 2 * (DEFAULT_SECONDS["stack-render"] + DEFAULT_SECONDS["encode-final"]
-                          + DEFAULT_SECONDS["efm-select"])) < 1e-6
+    t2.on_event({"kind": "step-start", "step": "b"})
+    t2.on_event({"kind": "progress", "step": "b", "fraction": 0.0, "message": "pass 1"})
+    clk.t += 400
+    assert t2.snapshot().overall_eta is None
+    # a failed/blocked step makes the run unable to finish: no ETA
+    t.on_event({"kind": "step-blocked", "step": "b", "issues": ["space"]})
+    assert t.snapshot().overall_eta is None
+
+
+def test_running_step_slower_than_history_gives_no_figure(tmp_path):
+    clk = Clock()
+    tm = Timings(tmp_path / "t.json")
+    tm.record("stack-render", 100)
+    p = {"steps": [{"id": "b", "stage": "stack-render"}]}
+    t = ProgressTracker(p, timings=tm, clock=clk)
+    t.on_event({"kind": "step-start", "step": "b"})
+    clk.t += 50
+    assert t.snapshot().overall_eta == 50
+    clk.t += 100
+    assert t.snapshot().overall_eta is None
 
 
 def test_timings_persist_median_and_ignore_instant_steps(tmp_path):
