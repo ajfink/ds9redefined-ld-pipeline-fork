@@ -785,3 +785,6 @@ only as a reviewed, opt-in source with side-by-side and in-context previews.
   engine launches them straight away; otherwise the next run does); still-short ones get the new numbers in their message.
   With no run active it edits the saved job state under the job lock (`recheck_space_offline`). Steps blocked for other reasons
   are untouched. Events `step-unblocked` / `space-rechecked`.
+- CP26 follow-up (first real use): refresh icons showed on every row (Qt force-shows direct cell widgets: now inside a
+  container); "lock held" when the job is running in another window: friendly message, saved state followed live
+  (`job_runner`, 3 s watch, running steps shown as running instead of interrupted).

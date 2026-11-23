@@ -6,6 +6,7 @@ from typing import ClassVar
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QHBoxLayout,
     QHeaderView,
     QLabel,
     QProgressBar,
@@ -88,7 +89,13 @@ class ProgressPanel(QWidget):
             btn.setToolTip("Re-check free disk space now (applies to every step blocked by disk space)")
             btn.clicked.connect(self.space_refresh.emit)
             btn.setVisible(False)
-            self.table.setCellWidget(row, 4, btn)
+            # the button sits in a plain container: the table force-shows its direct cell widgets on every layout
+            # pass, which would defeat hiding the icon on rows that are not blocked
+            holder = QWidget()
+            hl = QHBoxLayout(holder)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.addWidget(btn)
+            self.table.setCellWidget(row, 4, holder)
             self.refresh_buttons[step.id] = btn
         self.refresh()
 

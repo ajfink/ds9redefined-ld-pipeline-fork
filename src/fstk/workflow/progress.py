@@ -198,8 +198,9 @@ class ProgressTracker:
         self.paused_at: float | None = None
 
     # ------------------------------------------------------------- inputs
-    def load_state(self, state: Mapping[str, Any]) -> None:
-        """Start from a job's saved state (a resumed run shows what is already done)."""
+    def load_state(self, state: Mapping[str, Any], *, live: bool = False) -> None:
+        """Start from a job's saved state (a resumed run shows what is already done). ``live``: the run that saved
+        it is still going in another process, so its "running" steps really are running."""
         for sid, st in (state.get("steps") or {}).items():
             step = self.steps.get(sid)
             if step is None:
@@ -207,7 +208,7 @@ class ProgressTracker:
             status = st.get("status", "pending")
             # a saved "running" belongs to a run that is no longer going (the engine marks it interrupted on the next
             # start): showing it as running would make a dead run look alive
-            step.status = "interrupted" if status == RUNNING else status
+            step.status = "interrupted" if (status == RUNNING and not live) else status
             if step.status in SETTLED or step.status == WAITING:
                 step.detail = "; ".join(st.get("issues") or [])
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import getpass
+import os
 import socket
 import sys
 from pathlib import Path
@@ -195,6 +196,9 @@ class MainWindow(QMainWindow):
         self.notify_button.setChecked(True)
         self.notify_button.setToolTip("Desktop notification when a step needs you, a step fails, or the run ends")
         self.tray = QSystemTrayIcon(self.windowIcon() or QApplication.windowIcon(), self)
+        self.watch = QTimer(self)                         # follows a run that another window/process is doing
+        self.watch.setInterval(3000)
+        self.watch.timeout.connect(lambda: self.episode and self.thread is None and self.show_episode(self.episode))
         self.tick = QTimer(self)
         self.tick.setInterval(1000)
         self.tick.timeout.connect(self.update_progress)
@@ -579,6 +583,7 @@ class MainWindow(QMainWindow):
         except FstkError:
             self.tracker = None
             return
+        self.watch.stop()
         self.tracker = ProgressTracker(plan, timings=self.services.timings())
         with contextlib.suppress(OSError, ValueError, KeyError):   # first run of this job: nothing to resume
             self.tracker.load_state(self.services.job_state(plan["episode"], plan["job"]))
@@ -602,11 +607,19 @@ class MainWindow(QMainWindow):
             if best is None or state.get("created_utc", "") >= best[1].get("created_utc", ""):
                 best = (job, state)
         job, state = best
-        self.status_line.setText(f"{job}: {describe_job_state(state)}")
+        runner = self.services.job_runner(episode, job)
+        if runner == os.getpid():
+            runner = None
+        note = f" · running in another window (pid {runner})" if runner else ""
+        self.status_line.setText(f"{job}: {describe_job_state(state)}{note}")
+        if runner:
+            self.watch.start()                          # follow the other window's progress from the saved state
+        else:
+            self.watch.stop()
         plan = self.services.job_plan(episode, job)
         if plan:
             self.tracker = ProgressTracker(plan, timings=self.services.timings())
-            self.tracker.load_state(state)
+            self.tracker.load_state(state, live=bool(runner))
             self.progress_panel.set_tracker(self.tracker)
         else:
             self.progress_panel.set_tracker(None)

@@ -154,3 +154,51 @@ def test_refresh_icon_appears_for_space_blocked_steps_and_applies_to_all(service
     p.refresh()
     assert p.refresh_buttons["a"].isHidden() and p.refresh_buttons["b"].isHidden()
     assert p.table.item(0, 1).text() == "waiting"
+
+
+def test_a_job_running_in_another_process_is_reported_not_edited(services, tmp_path):
+    import os
+    import socket
+
+    import pytest as _pytest
+
+    from fstk.core.errors import FstkError
+
+    services.run_plan(review_plan(tmp_path), actor="op")
+    lock = services.workspace("DS9:S01E20").job_dir("rv") / ".job.lock"
+    assert services.job_runner("DS9:S01E20", "rv") is None
+    lock.write_text(f"pid={os.getpid()} host={socket.gethostname()} started_utc=2026-01-01T00:00:00+00:00 purpose=x\n")
+    assert services.job_runner("DS9:S01E20", "rv") == os.getpid()
+    with _pytest.raises(FstkError, match="another FromStunToKill window"):
+        services.recheck_space("DS9:S01E20", "rv")
+
+
+def test_live_foreign_run_keeps_running_steps_running():
+    from fstk.workflow.progress import ProgressTracker
+
+    t = ProgressTracker({"steps": [{"id": "a", "stage": "capture-inventory"}]})
+    t.load_state({"steps": {"a": {"status": "running"}}}, live=True)
+    assert t.steps["a"].status == "running"
+    t.load_state({"steps": {"a": {"status": "running"}}})
+    assert t.steps["a"].status == "interrupted"
+
+
+@pytest.mark.gui
+def test_refresh_icons_stay_hidden_on_unblocked_rows_when_the_window_is_shown(services, qtbot):
+    from fstk.ui.app import MainWindow
+    from fstk.workflow.progress import ProgressTracker
+
+    w = MainWindow(services, actor="op")
+    qtbot.addWidget(w)
+    w.show()
+    plan = {"job": "jx", "episode": "DS9:S01E20",
+            "steps": [{"id": "a", "stage": "efm-decode"}, {"id": "b", "stage": "capture-inventory"}]}
+    t = ProgressTracker(plan)
+    w.tracker = t
+    w.progress_panel.set_tracker(t)
+    t.on_event({"kind": "step-blocked", "step": "a", "issues": ["SPACE FAIL | x"]})
+    t.on_event({"kind": "step-passed", "step": "b"})
+    w.progress_panel.refresh()
+    qtbot.wait(200)                                     # let the table run its layout passes
+    p = w.progress_panel
+    assert p.refresh_buttons["a"].isVisible() and not p.refresh_buttons["b"].isVisible()

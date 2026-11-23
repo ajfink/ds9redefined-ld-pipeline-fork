@@ -14,6 +14,7 @@ from typing import Any
 
 from fstk.config.profile import Profile
 from fstk.core.errors import FstkError
+from fstk.core.fsio import LockHeldError
 from fstk.core.identity import EpisodeId
 from fstk.manifest.registry import FIELDS, field_def
 from fstk.stages.base import get_stage
@@ -535,7 +536,23 @@ class Services:
         if plan is None:
             raise FstkError(f"no saved plan for job {job}")
         eng = Engine(self.profile, plan, actor="space-recheck", events=events)
-        return eng.recheck_space_offline()
+        try:
+            return eng.recheck_space_offline()
+        except LockHeldError as exc:
+            pid = self.job_runner(episode, job)
+            raise FstkError(
+                "This job is running in another FromStunToKill window or process"
+                + (f" (pid {pid})" if pid else "") + ", so its steps cannot be changed from here. Use the Refresh icon "
+                "in that window, or close it (or wait for it to finish) and try again.") from exc
+
+    def job_runner(self, episode: str | EpisodeId, job: str) -> int | None:
+        """pid of a live process on this machine that is running ``job`` (its lock is held), else None."""
+        from fstk.core.fsio import read_lock
+
+        info = read_lock(self.workspace(episode).job_dir(job) / ".job.lock")
+        if info and info.pid and info.local_process_alive:
+            return info.pid
+        return None
 
     def removal_plan(self, episode: str | EpisodeId):
         from fstk.workspace.removal import plan_removal
