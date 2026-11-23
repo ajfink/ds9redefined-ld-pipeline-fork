@@ -257,8 +257,11 @@ class EfmDecode(Stage):
                               "formats_from": formats_from, "audio_dir": str(audio_dir)})
 
     # -- one capture
-    def _decode_one(self, ctx, plan, item: dict) -> dict:
+    def _decode_one(self, ctx, plan, item: dict, position: tuple[int, int] = (1, 1)) -> dict:
         label = item["label"]
+        number, count = position
+        tag = f"{number} of {count}" if count > 1 else ""
+        lead = f"[{tag}] " if tag else ""
         video, source, amplitude = plan.data["formats"]
         tbc, meta, efm = Path(item["tbc"]), Path(item["json"]), Path(item["efm"])
         wav, report = Path(item["wav"]), Path(item["report"])
@@ -267,7 +270,7 @@ class EfmDecode(Stage):
             if p.exists() or p.is_symlink():
                 raise ArtifactError(f"refusing to overwrite existing EFM decode artifact: {p}")
         specs = item["specs"]
-        ctx.report(None, f"{label}: verifying sources")
+        ctx.report((number - 1) / count, f"{lead}{label}: verifying sources")
         src_tbc = _verify_source(tbc, specs["tbc"], f"{label} TBC", full_hash=False)
         src_json = _verify_source(meta, specs["json"], f"{label} TBC JSON", full_hash=True)
         src_efm = _verify_source(efm, specs["efm"], f"{label} EFM", full_hash=True)
@@ -283,7 +286,7 @@ class EfmDecode(Stage):
             if free < size + reserve:
                 raise GateError(f"not enough work space to unpack {efm.name}: need {size / GIB:.2f} GiB plus "
                                 f"{reserve / GIB:.1f} GiB reserve, free {free / GIB:.2f} GiB")
-            ctx.report(None, f"{label}: extracting {member}")
+            ctx.report((number - 1) / count, f"{lead}{label}: extracting {member}")
             zipper.extract_member(efm, member, size, target)
             decode_input, decoded_root = target, "work"
         input_sha = (src_efm["sha256"] if decode_input == efm else sha256_file(decode_input))
@@ -296,11 +299,12 @@ class EfmDecode(Stage):
             stream.write(text)
         wav.parent.mkdir(parents=True, exist_ok=True)
         orc_log.parent.mkdir(parents=True, exist_ok=True)
-        ctx.report(None, f"{label}: Orc EFMSink decode")
+        ctx.report((number - 1) / count, f"{lead}{label}: Orc EFMSink decode")
         from fstk.tools.progress_lines import LineProgress
 
         res = ctx.tool("orc").decode_efm(project, orc_log, log_name=f"orc-efm-{label}", cancel=ctx.cancel,
-                                         on_line=LineProgress(ctx.report, label=f"{label}: Orc EFM decode"))
+                                         on_line=LineProgress(ctx.report, base=(number - 1) / count, span=1 / count,
+                                                              label=f"{lead}{label}: Orc EFM decode"))
         ctx.check_cancel()
 
         wav_info = check_audio_wav(wav)
@@ -353,9 +357,9 @@ class EfmDecode(Stage):
         added, failed = {}, {}
         for n, item in enumerate(todo):
             ctx.check_cancel()
-            ctx.report(n / max(1, len(todo)), f"capture {item['label']} ({n + 1}/{len(todo)})")
+            ctx.report(n / max(1, len(todo)), f"[{n + 1} of {len(todo)}] {item['label']}: starting")
             try:
-                entry = self._decode_one(ctx, plan, item)
+                entry = self._decode_one(ctx, plan, item, (n + 1, len(todo)))
             except (ArtifactError, GateError, ToolError) as exc:
                 failed[item["label"]] = {"run": plan.data["run"], "reason": str(exc)[:2000],
                                          "efm_bytes": item["specs"]["efm"].get("bytes"), "utc": utc_now_iso()}

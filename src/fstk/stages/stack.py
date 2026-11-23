@@ -112,7 +112,9 @@ class StackReference(Stage):
         for n in range(1, MAX_REFERENCE_PASSES + 1):
             ctx.check_cancel()
             order = [first, *[c for c in labels if c != first]]
-            ctx.report((n - 1) / MAX_REFERENCE_PASSES, f"refresh pass {n}: reference candidate {first}")
+            where = sorted(labels).index(first) + 1 if first in labels else 0
+            ctx.report((n - 1) / MAX_REFERENCE_PASSES,
+                       f"[capture {where} of {len(labels)}] refresh pass {n}: reference candidate {first}")
             text = build_stack_project(template, order, paths, Path(plan.data["master"]),
                                        f"{ctx.episode.code} weighted stack (pass {n})")
             project = scratch / f"pass{n}.orcprj"
