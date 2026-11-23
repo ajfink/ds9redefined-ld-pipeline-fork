@@ -286,7 +286,10 @@ class MainWindow(QMainWindow):
         job_rows = []
         for job in self.services.jobs(episode):
             for sid, st in self.services.job_state(episode, job)["steps"].items():
-                job_rows.append((job, sid, st.get("status", ""), "; ".join(st.get("issues") or [])))
+                status = st.get("status", "")
+                if status in ("running", "interrupted") and self.thread is None:
+                    status = "pending"          # saved by a run that is no longer going: it will start again
+                job_rows.append((job, sid, status, "; ".join(st.get("issues") or [])))
         self.jobs.setRowCount(len(job_rows))
         for i, row in enumerate(job_rows):
             for j, text in enumerate(row):

@@ -102,3 +102,19 @@ def test_pause_button_drives_the_engine(services, tmp_path, qtbot):
         assert not PAUSE.is_paused
     qtbot.waitUntil(lambda: w.thread is None, timeout=10000)
     assert not PAUSE.is_paused
+
+
+@pytest.mark.gui
+def test_dead_runs_show_pending_not_running(services, tmp_path, qtbot):
+    from fstk.ui.app import MainWindow
+
+    plan = review_plan(tmp_path)
+    services.run_plan(plan, actor="op")
+    state_path = services.workspace("DS9:S01E20").job_dir("rv") / "state.json"
+    state = json.loads(state_path.read_text())
+    state["steps"]["r"]["status"] = "running"            # as left behind by a closed app
+    state_path.write_text(json.dumps(state))
+    w = MainWindow(services, actor="op")
+    qtbot.addWidget(w)
+    assert w.jobs.item(0, 2).text() == "pending"
+    assert w.progress_panel.table.item(0, 1).text() == "pending"

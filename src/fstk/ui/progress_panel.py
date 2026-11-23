@@ -19,7 +19,7 @@ from fstk.workflow.progress import ProgressTracker, Snapshot, StepProgress, form
 
 STATUS_TEXT = {"pending": "waiting", "running": "running", "passed": "done", "failed": "FAILED",
                "blocked": "blocked", "awaiting-review": "needs your review", "stale": "out of date",
-               "cancelled": "cancelled", "interrupted": "interrupted"}
+               "cancelled": "cancelled", "interrupted": "pending"}
 STATUS_COLOUR = {"passed": "#2e7d32", "failed": "#c62828", "blocked": "#ef6c00", "awaiting-review": "#1565c0",
                  "running": "#6a1b9a", "stale": "#ef6c00", "cancelled": "#616161", "interrupted": "#ef6c00"}
 SCALE = 1000
