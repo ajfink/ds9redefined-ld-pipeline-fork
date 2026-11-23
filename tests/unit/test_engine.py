@@ -321,3 +321,34 @@ def test_every_stage_module_is_registered_by_the_package_import():
     modules = {m.name for m in pkgutil.iter_modules(pkg.__path__)} - {"base", "ldaudio_build"}
     owners = {cls.__module__.rsplit(".", 1)[-1] for cls in REGISTRY.values()}
     assert modules <= owners, modules - owners
+
+
+def test_recheck_space_unblocks_every_space_blocked_step_when_room_appears(env, tmp_path):
+    prof, ws, src, _ = env
+    free = {"gib": 50}
+    ledger = SpaceLedger(tmp_path / "ledger2.json", reserve_gib=10,
+                         disk_usage=lambda p: Usage(0, 0, int(free["gib"] * GIB)))
+    p = plan("jr", step("a", "t-space", gib=45.0), step("b", "t-space", gib=45.0),
+             step("g", "t-needs-frames"))
+    events = []
+    eng = Engine(prof, p, actor="t", ledger=ledger, events=events.append)
+    state = eng.run()
+    assert state["steps"]["a"]["status"] == "blocked" and state["steps"]["b"]["status"] == "blocked"
+    assert state["steps"]["g"]["status"] == "blocked" and "SPACE" not in state["steps"]["g"]["issues"][0]
+    # still short: stays blocked, the message is refreshed with the new numbers
+    free["gib"] = 52
+    res = eng.recheck_space_offline()
+    assert set(res) == {"a", "b"} and not any(c.ok for c in res.values())
+    assert eng.state["steps"]["a"]["status"] == "blocked"
+    # room appears: both space-blocked steps clear; the gate-blocked one is untouched
+    free["gib"] = 80
+    events.clear()
+    eng2 = Engine(prof, p, actor="t", ledger=ledger, events=events.append)
+    res = eng2.recheck_space_offline()
+    assert all(c.ok for c in res.values())
+    assert eng2.state["steps"]["a"]["status"] == "pending" and eng2.state["steps"]["b"]["status"] == "pending"
+    assert eng2.state["steps"]["g"]["status"] == "blocked"
+    assert [e["step"] for e in events if e["kind"] == "step-unblocked"] == ["a", "b"]
+    # the saved state agrees, and the next run now executes them
+    state = Engine(prof, p, actor="t", ledger=ledger).run()
+    assert state["steps"]["a"]["status"] == "passed" and state["steps"]["b"]["status"] == "passed"

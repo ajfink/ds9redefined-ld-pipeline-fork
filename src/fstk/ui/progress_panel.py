@@ -3,19 +3,21 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QProgressBar,
+    QStyle,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from fstk.workflow.progress import ProgressTracker, Snapshot, StepProgress, format_duration
+from fstk.workflow.progress import ProgressTracker, Snapshot, StepProgress, format_duration, is_space_block
 
 STATUS_TEXT = {"pending": "waiting", "running": "running", "passed": "done", "failed": "FAILED",
                "blocked": "blocked", "awaiting-review": "needs your review", "stale": "out of date",
@@ -26,7 +28,9 @@ SCALE = 1000
 
 
 class ProgressPanel(QWidget):
-    COLUMNS: ClassVar[list[str]] = ["Step", "Status", "Progress", "Time", "What it is doing"]
+    space_refresh = Signal()            # the Refresh icon on a step blocked by disk space was clicked
+
+    COLUMNS: ClassVar[list[str]] = ["Step", "Status", "Progress", "Time", "", "What it is doing"]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -48,7 +52,10 @@ class ProgressPanel(QWidget):
         head.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         head.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         head.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        head.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        head.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(4, 34)
+        head.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        self.refresh_buttons: dict[str, QToolButton] = {}
         self.bars: dict[str, QProgressBar] = {}
         lay = QVBoxLayout(self)
         lay.addWidget(self.headline)
@@ -60,6 +67,7 @@ class ProgressPanel(QWidget):
     def set_tracker(self, tracker: ProgressTracker | None) -> None:
         self.tracker = tracker
         self.bars.clear()
+        self.refresh_buttons.clear()
         self.table.setRowCount(0)
         if tracker is None:
             self.headline.setText("No run yet")
@@ -74,6 +82,14 @@ class ProgressPanel(QWidget):
             bar.setTextVisible(True)
             self.table.setCellWidget(row, 2, bar)
             self.bars[step.id] = bar
+            btn = QToolButton()
+            btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
+            btn.setAutoRaise(True)
+            btn.setToolTip("Re-check free disk space now (applies to every step blocked by disk space)")
+            btn.clicked.connect(self.space_refresh.emit)
+            btn.setVisible(False)
+            self.table.setCellWidget(row, 4, btn)
+            self.refresh_buttons[step.id] = btn
         self.refresh()
 
     def refresh(self) -> Snapshot | None:
@@ -120,10 +136,11 @@ class ProgressPanel(QWidget):
         if step.status == "running" and eta is not None and not snap.paused:
             label += f"  (≈{format_duration(eta)} left)"
         self.table.setItem(row, 3, QTableWidgetItem(label))
+        self.refresh_buttons[step.id].setVisible(is_space_block(step.status, step.detail))
         msg = step.message if step.status == "running" else step.detail
         item = QTableWidgetItem(msg)
         item.setToolTip(msg)
-        self.table.setItem(row, 4, item)
+        self.table.setItem(row, 5, item)
         if step.status in ("failed", "blocked", "stale"):
             self.table.item(row, 0).setForeground(QColor(STATUS_COLOUR["failed"]))
         else:

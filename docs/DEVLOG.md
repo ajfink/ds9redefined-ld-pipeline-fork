@@ -778,3 +778,10 @@ only as a reviewed, opt-in source with side-by-side and in-context previews.
   Project record goes last; every path is checked to sit inside its base (data_root, media_root or the output override,
   downloads_root) before anything is deleted. Captures chosen with "From local folder…" and the DVD are never deleted
   (Everything only removes a download fstk made in downloads_root). Refused while a plan runs or the episode is handed off.
+
+## CP26 — disk-space Refresh
+- Progress table: a Refresh icon (between Time and "What it is doing") on every step blocked by the disk-space check.
+  One click re-measures free space for ALL such steps (`Engine.recheck_space`): those that now fit go back to pending (a running
+  engine launches them straight away; otherwise the next run does); still-short ones get the new numbers in their message.
+  With no run active it edits the saved job state under the job lock (`recheck_space_offline`). Steps blocked for other reasons
+  are untouched. Events `step-unblocked` / `space-rechecked`.

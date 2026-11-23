@@ -148,6 +148,7 @@ class MainWindow(QMainWindow):
         rl.addLayout(review_buttons)
 
         self.progress_panel = ProgressPanel()
+        self.progress_panel.space_refresh.connect(self.recheck_space)
         self.status_line = QLabel("")
         self.tracker: ProgressTracker | None = None
         self.tabs = QTabWidget()
@@ -548,6 +549,26 @@ class MainWindow(QMainWindow):
             engine.pause()
             self.pause_button.setText("Resume")
         self.update_progress()
+
+    def recheck_space(self) -> None:
+        """Refresh icon: re-measure disk space for every step blocked by it; clear the ones that now fit."""
+        if self.tracker is None or not self.episode:
+            return
+        job = self.tracker.plan["job"]
+        engine = self.worker.engine if (self.thread is not None and self.worker) else None
+        try:
+            results = self.services.recheck_space(self.episode, job, events=self.on_event, engine=engine)
+        except FstkError as exc:
+            QMessageBox.warning(self, "Cannot re-check space", str(exc))
+            return
+        if not results:
+            self.append_log("space re-check: no step is blocked by disk space")
+        for sid, check in results.items():
+            self.append_log(f"space re-check {sid}: " + ("enough space now, step is pending again" if check.ok
+                                                          else check.describe()))
+        self.update_progress()
+        if self.thread is None:
+            self.show_episode(self.episode)
 
     # ---------------------------------------------------------------- progress
     def _begin_progress(self, plan_path: str) -> None:

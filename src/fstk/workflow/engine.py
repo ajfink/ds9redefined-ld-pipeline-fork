@@ -166,6 +166,53 @@ class Engine:
             PAUSE.resume()
             self._emit("resumed")
 
+    # ---------------------------------------------------------------- disk-space recheck
+    @staticmethod
+    def blocked_by_space(st: dict[str, Any]) -> bool:
+        return st.get("status") == "blocked" and any("SPACE FAIL" in str(i) for i in st.get("issues") or [])
+
+    def recheck_space(self) -> dict[str, Any]:
+        """Re-measure free space for every step blocked by the disk-space check; a step that now fits goes back to
+        pending (a running engine launches it at once; otherwise the next run does). Returns {step: SpaceCheck}.
+        Steps blocked for any other reason are left alone."""
+        results: dict[str, Any] = {}
+        for s in self.plan["steps"]:
+            sid = s["id"]
+            st = self.state["steps"][sid]
+            if not self.blocked_by_space(st):
+                continue
+            stage = get_stage(s["stage"])
+            ctx = StageContext(self.profile, self.episode, self.ws.store, self.actor, cancel=self.cancel,
+                               log_dir=self.ws.log_dir(self.job) / sid, tool_overrides=self.tool_overrides)
+            try:
+                splan = stage.plan(ctx, dict(s.get("params") or {}))
+            except FstkError as exc:
+                self._emit("space-rechecked", step=sid, detail=f"cannot re-plan: {exc}", ok=False)
+                continue
+            if splan.space is None:
+                continue
+            target = splan.space.target or ctx.root(splan.space.root)
+            check = self.ledger.check(target, splan.space.planned_gib)
+            results[sid] = check
+            if check.ok:
+                with self._state_lock:
+                    st.update(status="pending", issues=[])
+                    st.pop("finished_utc", None)
+                self._emit("step-unblocked", step=sid, detail=check.describe())
+            else:
+                with self._state_lock:
+                    st["issues"] = [check.describe() + " — make space or move the work root; the reserve is never "
+                                    "lowered and nothing is deleted without the operator's authorization"]
+                self._emit("space-rechecked", step=sid, detail=st["issues"][0], ok=False)
+        self._save()
+        return results
+
+    def recheck_space_offline(self) -> dict[str, Any]:
+        """The same recheck when no run is active here: edits the saved job state under the job lock."""
+        with exclusive_lock(self.lock_path, purpose=f"recheck-space:{self.job}"):
+            self._load_or_init()
+            return self.recheck_space()
+
     # ---------------------------------------------------------------- state
     def _emit(self, kind: str, **data) -> None:
         if self.events:

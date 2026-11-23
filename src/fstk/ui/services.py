@@ -524,6 +524,19 @@ class Services:
             on_engine(engine)
         return engine, engine.run()
 
+    def recheck_space(self, episode: str | EpisodeId, job: str, *, events=None, engine=None) -> dict[str, Any]:
+        """Re-measure free space for the steps of ``job`` blocked by it and unblock those that now fit.
+
+        Uses the running engine when one is passed (it launches an unblocked step at once); otherwise edits the
+        saved job state under the job lock."""
+        if engine is not None:
+            return engine.recheck_space()
+        plan = self.job_plan(episode, job)
+        if plan is None:
+            raise FstkError(f"no saved plan for job {job}")
+        eng = Engine(self.profile, plan, actor="space-recheck", events=events)
+        return eng.recheck_space_offline()
+
     def removal_plan(self, episode: str | EpisodeId):
         from fstk.workspace.removal import plan_removal
 

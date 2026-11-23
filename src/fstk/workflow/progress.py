@@ -117,6 +117,10 @@ class Timings:
             pass                                 # timings are a convenience; never fail a run over them
 
 
+def is_space_block(status: str, detail: str) -> bool:
+    return status == "blocked" and "SPACE FAIL" in detail
+
+
 @dataclass
 class StepProgress:
     id: str
@@ -242,6 +246,10 @@ class ProgressTracker:
             if step.started is not None:
                 self.timings.record(step.stage, now - step.started)
             step.status, step.finished, step.detail = WAITING, now, str(event.get("detail", ""))
+        elif kind == "step-unblocked":
+            step.status, step.finished, step.detail, step.fraction = "pending", None, "", None
+        elif kind == "space-rechecked":
+            step.detail = str(event.get("detail", ""))
         elif kind in ("step-failed", "step-blocked", "step-stale", "step-cancelled", "step-interrupted"):
             step.status = kind.removeprefix("step-")
             step.finished = now

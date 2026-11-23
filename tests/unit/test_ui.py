@@ -118,3 +118,39 @@ def test_dead_runs_show_pending_not_running(services, tmp_path, qtbot):
     qtbot.addWidget(w)
     assert w.jobs.item(0, 2).text() == "pending"
     assert w.progress_panel.table.item(0, 1).text() == "pending"
+
+
+@pytest.mark.gui
+def test_refresh_icon_appears_for_space_blocked_steps_and_applies_to_all(services, tmp_path, qtbot):
+    from fstk.ui.app import MainWindow
+    from fstk.workflow.progress import ProgressTracker
+
+    w = MainWindow(services, actor="op")
+    qtbot.addWidget(w)
+    plan = {"job": "jx", "episode": "DS9:S01E20",
+            "steps": [{"id": "a", "stage": "efm-decode"}, {"id": "b", "stage": "stack-reference"},
+                      {"id": "c", "stage": "efm-select"}]}
+    t = ProgressTracker(plan)
+    calls = []
+    services.recheck_space = lambda ep, job, **kw: calls.append((ep, job)) or {}
+    w.tracker = t
+    w.progress_panel.set_tracker(t)
+    space = "SPACE FAIL | target=Z:\\x | free=88.7 GiB"
+    t.on_event({"kind": "step-blocked", "step": "a", "issues": [space]})
+    t.on_event({"kind": "step-blocked", "step": "b", "issues": [space]})
+    t.on_event({"kind": "step-blocked", "step": "c", "issues": ["needs video.frames"]})
+    w.progress_panel.refresh()
+    p = w.progress_panel
+    assert p.table.columnCount() == 6 and p.table.horizontalHeaderItem(5).text() == "What it is doing"
+    assert not p.refresh_buttons["a"].isHidden() and not p.refresh_buttons["b"].isHidden()
+    assert p.refresh_buttons["c"].isHidden()
+    got = []
+    p.space_refresh.connect(lambda: got.append(1))
+    p.refresh_buttons["b"].click()
+    assert got == [1] and calls == [("DS9:S01E20", "jx")]     # one recheck covers every blocked step
+    p.set_tracker(t)                    # (the app reloads saved state after an offline recheck)
+    t.on_event({"kind": "step-unblocked", "step": "a"})
+    t.on_event({"kind": "step-unblocked", "step": "b"})
+    p.refresh()
+    assert p.refresh_buttons["a"].isHidden() and p.refresh_buttons["b"].isHidden()
+    assert p.table.item(0, 1).text() == "waiting"
