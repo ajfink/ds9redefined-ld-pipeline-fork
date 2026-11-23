@@ -224,3 +224,33 @@ def build_local_source_report(scan: dict[str, Any], *, policy: str = "balanced")
         "raw_rf_files": scan.get("raw_rf_files", []),
         "ignored_files": scan.get("ignored_files", []),
     }
+
+
+def find_capture_folders(root: str | Path, *, depth: int = 2, limit: int = 400) -> list[Path]:
+    """Folders at or under ``root`` (to ``depth`` levels) that hold at least one ``.tbc`` file.
+
+    Works on mapped drives and UNC shares (``\\\\nas\\share``); unreadable folders are skipped.
+    """
+    base = Path(root)
+    found: list[Path] = []
+
+    def walk(folder: Path, level: int) -> None:
+        if len(found) >= limit:
+            return
+        try:
+            entries = sorted(folder.iterdir(), key=lambda p: p.name.casefold())
+        except OSError:
+            return
+        if any(p.suffix.casefold() == ".tbc" for p in entries if not p.is_dir()):
+            found.append(folder)
+            return
+        if level < depth:
+            for p in entries:
+                try:
+                    if p.is_dir() and not p.name.startswith(("$", ".")):
+                        walk(p, level + 1)
+                except OSError:
+                    continue
+
+    walk(base, 0)
+    return found

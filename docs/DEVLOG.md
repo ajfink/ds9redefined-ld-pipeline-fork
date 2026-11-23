@@ -749,3 +749,8 @@ only as a reviewed, opt-in source with side-by-side and in-context previews.
 - setup-fstk.ps1: first Windows run failed (`py` not on PATH right after the winget install); now locates a real
   CPython 3.12 by full path (py launcher, then the standard install folders, PATH refreshed), and uses it for the venv.
 - 414 tests, ruff clean.
+
+## CP23 — From local folder… reaches shares
+- Picker's "From local folder…" is now a dialog: type/paste any path (mapped drive, `\\server\share`), Browse, or start from
+  `sources.downloads_root`; a folder of episodes lists the capture folders (≤2 levels) under it to choose from.
+  `find_capture_folders` in `workspace/local_source.py`. Validation itself never blocked network paths.

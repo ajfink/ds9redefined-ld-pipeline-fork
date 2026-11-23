@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from fstk.config.profile import SCHEMA, Profile
@@ -81,3 +83,22 @@ def test_picker_local_folder_and_main_window_integration(services, qtbot, tmp_pa
     dlg2.only_local.setChecked(True)
     dlg2.search.setText("VOY S01E01")
     assert _find(dlg2.tree, "S01E01", "VOY").text(5) == "workspace"
+
+
+def test_local_folder_dialog_finds_episode_folders_below_a_share(tmp_path, qtbot):
+    from fstk.ui.localfolder import LocalFolderDialog
+    from fstk.workspace.local_source import find_capture_folders
+
+    root = tmp_path / "share"
+    ep = _local_folder(root)
+    assert find_capture_folders(root) == [ep] or ep in find_capture_folders(root)
+    dlg = LocalFolderDialog(str(root))
+    qtbot.addWidget(dlg)
+    dlg.scan()
+    assert dlg.found.count() >= 1
+    dlg.accept_selection()
+    assert Path(dlg.chosen).is_dir()
+    dlg2 = LocalFolderDialog(str(tmp_path / "nope"))
+    qtbot.addWidget(dlg2)
+    dlg2.scan()
+    assert "cannot be reached" in dlg2.status.text()

@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
-    QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -225,9 +224,12 @@ class EpisodePicker(QDialog):
         self.accept()
 
     def from_local(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Folder with TBC/JSON captures")
-        if folder:
-            self.create_local(folder)
+        from fstk.ui.localfolder import LocalFolderDialog
+
+        start = str(self.services.profile.sources.get("downloads_root") or "")
+        dlg = LocalFolderDialog(start, self)
+        if dlg.exec() and dlg.chosen:
+            self.create_local(dlg.chosen)
 
     def create_local(self, folder: str) -> None:
         try:
