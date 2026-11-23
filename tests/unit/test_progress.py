@@ -84,11 +84,13 @@ def test_timings_persist_median_and_ignore_instant_steps(tmp_path):
 def test_failure_waiting_and_resume_state():
     clk = Clock()
     t = ProgressTracker(plan(), clock=clk)
-    t.load_state({"steps": {"a": {"status": "passed"}, "b": {"status": "interrupted"},
-                            "d": {"status": "awaiting-review"}}})
+    t.load_state({"steps": {"a": {"status": "passed"}, "d": {"status": "awaiting-review"}}})
     snap = t.snapshot()
-    assert snap.done == 1 and t.steps["b"].status == "pending" and snap.state == "waiting"
-    assert snap.headline() == "Waiting for you: d"
+    assert snap.done == 1 and snap.state == "waiting" and snap.headline() == "Waiting for you: d"
+    t.load_state({"steps": {"b": {"status": "running"}}})      # a dead run's "running" is shown as interrupted
+    snap = t.snapshot()
+    assert t.steps["b"].status == "interrupted" and not snap.current and snap.state == "failed"
+    assert "interrupted" in snap.headline()
     t.on_event({"kind": "step-failed", "step": "b", "issues": ["boom"]})
     snap = t.snapshot()
     assert snap.state == "failed" and "boom" in snap.failed[0].detail

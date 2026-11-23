@@ -182,8 +182,8 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.cancel_run)
         self.pause_button = QPushButton("Pause")
-        self.pause_button.setToolTip("Freeze the running tools where they are and start nothing new; "
-                                     "Resume continues exactly from here")
+        self.pause_button.setToolTip("Available while a plan is running in this window. Freezes the running tools "
+                                     "where they are and starts nothing new; Resume continues exactly from here")
         self.pause_button.setEnabled(False)
         self.pause_button.clicked.connect(self.toggle_pause)
         self.notify_button = QPushButton("Notifications")

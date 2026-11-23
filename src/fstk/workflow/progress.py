@@ -65,7 +65,7 @@ def describe_job_state(state: Mapping[str, Any]) -> str:
     done = sum(1 for st in steps.values() if st.get("status") == "passed")
     line = f"{done} of {len(steps)} steps done"
     waiting = [k for k, st in steps.items() if st.get("status") == WAITING]
-    failed = [k for k, st in steps.items() if st.get("status") in ("failed", "blocked", "stale")]
+    failed = [k for k, st in steps.items() if st.get("status") in ("failed", "blocked", "stale", "interrupted")]
     if failed:
         line += f" · needs attention: {failed[0]}"
     elif waiting:
@@ -168,7 +168,7 @@ class Snapshot:
         if self.state == "finished":
             return f"All {self.total} steps done"
         if self.state == "failed" and self.failed:
-            return f"Stopped at step {self.failed[0].id}: needs attention"
+            return f"Stopped at step {self.failed[0].id}: " + ("run was interrupted; run again to continue" if self.failed[0].status == "interrupted" else "needs attention")
         if self.state == "waiting" and self.waiting:
             return f"Waiting for you: {self.waiting[0].id}"
         if self.current:
@@ -201,7 +201,9 @@ class ProgressTracker:
             if step is None:
                 continue
             status = st.get("status", "pending")
-            step.status = "pending" if status == "interrupted" else status
+            # a saved "running" belongs to a run that is no longer going (the engine marks it interrupted on the next
+            # start): showing it as running would make a dead run look alive
+            step.status = "interrupted" if status == RUNNING else status
             if step.status in SETTLED or step.status == WAITING:
                 step.detail = "; ".join(st.get("issues") or [])
 
@@ -264,7 +266,7 @@ class ProgressTracker:
         overall = sum(s.weight * s.credit() for s in steps) / total_w
         current = [s for s in steps if s.status == RUNNING]
         waiting = [s for s in steps if s.status == WAITING]
-        failed = [s for s in steps if s.status in ("failed", "blocked", "stale")]
+        failed = [s for s in steps if s.status in ("failed", "blocked", "stale", "interrupted")]
         done = sum(1 for s in steps if s.done)
         if done == len(steps):
             state = "finished"
