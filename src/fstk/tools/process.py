@@ -68,6 +68,79 @@ def _popen_kwargs() -> dict:
     return {"start_new_session": True}
 
 
+class PauseControl:
+    """Pause/resume every tool this process runs: running trees are suspended (SIGSTOP / NtSuspendProcess via
+    psutil) and continued exactly where they stopped. Python-side stages wait at ``StageContext.report`` /
+    ``check_cancel``. One switch for the whole run (the GUI runs one plan at a time)."""
+
+    def __init__(self) -> None:
+        self._flag = threading.Event()
+        self._lock = threading.Lock()
+        self._suspended: dict[int, list] = {}          # pid -> psutil processes suspended for this pause
+        self.paused_total = 0.0
+        self._since = 0.0
+
+    @property
+    def is_paused(self) -> bool:
+        return self._flag.is_set()
+
+    def pause(self) -> None:
+        if not self._flag.is_set():
+            self._since = time.monotonic()
+            self._flag.set()
+
+    def resume(self) -> None:
+        if self._flag.is_set():
+            self.paused_total += time.monotonic() - self._since
+            self._flag.clear()
+
+    def wait_while_paused(self, cancel: threading.Event | None = None, poll: float = 0.2) -> None:
+        while self._flag.is_set() and not (cancel is not None and cancel.is_set()):
+            time.sleep(poll)
+
+    def sync(self, procs: Sequence[subprocess.Popen]) -> None:
+        """Called by each running pipeline's monitor loop: bring its processes in line with the flag."""
+        try:
+            import psutil
+        except ImportError:                            # pragma: no cover - psutil is a dependency
+            return
+        with self._lock:
+            for p in procs:
+                if p.poll() is not None:
+                    self._suspended.pop(p.pid, None)
+                    continue
+                if self._flag.is_set() and p.pid not in self._suspended:
+                    self._suspended[p.pid] = self._tree(psutil, p.pid, suspend=True)
+                elif not self._flag.is_set() and p.pid in self._suspended:
+                    for q in self._suspended.pop(p.pid):
+                        with contextlib.suppress(psutil.Error):
+                            q.resume()
+
+    @staticmethod
+    def _tree(psutil, pid: int, *, suspend: bool) -> list:
+        try:
+            root = psutil.Process(pid)
+            tree = [root, *root.children(recursive=True)]
+        except psutil.Error:
+            return []
+        done = []
+        for q in tree:
+            with contextlib.suppress(psutil.Error):
+                q.suspend()
+                done.append(q)
+        return done
+
+    def release(self, p: subprocess.Popen) -> None:
+        """Continue ``p`` if it is suspended (before stopping it: a stopped process cannot handle a signal)."""
+        with self._lock:
+            for q in self._suspended.pop(p.pid, []):
+                with contextlib.suppress(Exception):
+                    q.resume()
+
+
+PAUSE = PauseControl()
+
+
 def stop_tree(proc: subprocess.Popen, *, grace: float = STOP_GRACE_SECONDS) -> None:
     """Stop ``proc`` and its descendants. Safe to call on an exited process."""
     if proc.poll() is not None:
@@ -255,15 +328,19 @@ def run_pipeline(commands: Sequence[Sequence[str | os.PathLike]], *, log_path: P
             finally:
                 procs[0].stdin.close()
         cancelled = timed_out = False
+        paused_before = PAUSE.paused_total
         while any(p.poll() is None for p in procs):
             if cancel is not None and cancel.is_set():
                 cancelled = True
-            elif timeout is not None and time.monotonic() - started > timeout:
+            elif (timeout is not None and not PAUSE.is_paused
+                  and time.monotonic() - started - (PAUSE.paused_total - paused_before) > timeout):
                 timed_out = True
             if cancelled or timed_out:
                 for p in reversed(procs):
+                    PAUSE.release(p)
                     stop_tree(p)
                 break
+            PAUSE.sync(procs)
             time.sleep(poll_interval)
         for p in procs:
             p.wait()

@@ -297,7 +297,10 @@ class EfmDecode(Stage):
         wav.parent.mkdir(parents=True, exist_ok=True)
         orc_log.parent.mkdir(parents=True, exist_ok=True)
         ctx.report(None, f"{label}: Orc EFMSink decode")
-        res = ctx.tool("orc").decode_efm(project, orc_log, log_name=f"orc-efm-{label}", cancel=ctx.cancel)
+        from fstk.tools.progress_lines import LineProgress
+
+        res = ctx.tool("orc").decode_efm(project, orc_log, log_name=f"orc-efm-{label}", cancel=ctx.cancel,
+                                         on_line=LineProgress(ctx.report, label=f"{label}: Orc EFM decode"))
         ctx.check_cancel()
 
         wav_info = check_audio_wav(wav)

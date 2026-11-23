@@ -87,10 +87,13 @@ class EncodeFinal(Stage):
                                                        int(src.raw["height"]))
         Path(d["tmp"]).parent.mkdir(parents=True, exist_ok=True)
         ctx.report(0.0, f"encoding {d['frames']} frames")
+        from fstk.tools.progress_lines import LineProgress
+
+        encode_progress = LineProgress(ctx.report, total_frames=d["frames"], span=0.88, label="encoding")
         res = vs.encode(Path(d["script"]), final_encode_args(aspect=aspect, frames=d["frames"],
                                                              duration_s=d["duration"], capture=d["capture"],
                                                              out=d["tmp"], chroma=d["chroma"], preset=d["preset"]),
-                         cancel=ctx.cancel)
+                         cancel=ctx.cancel, on_line=encode_progress)
         ctx.check_cancel()
         tmp = Path(d["tmp"])
         if not tmp.is_file() or tmp.stat().st_size == 0:
@@ -98,7 +101,8 @@ class EncodeFinal(Stage):
         ctx.report(0.9, "verifying encoded stream (full decode)")
         info_out = ff.probe(tmp)
         stream = info_out.only("video")
-        decode = ff.null_decode(tmp)
+        decode = ff.null_decode(tmp, progress=LineProgress(ctx.report, total_frames=d["frames"], base=0.9, span=0.09,
+                                                           label="verifying"))
         issues = check_encoded_stream(stream.raw, probe_frames=ff.count_frames(tmp), decoded_frames=decode.frames,
                                       decode_errors=decode.errors, duration_s=info_out.duration_s,
                                       expected_frames=d["frames"], expected_duration_s=d["duration"],

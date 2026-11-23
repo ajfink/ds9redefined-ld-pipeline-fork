@@ -28,6 +28,7 @@ from fstk.core.timeutil import utc_now_iso, utc_stamp
 from fstk.media import hybrid
 from fstk.media.cadence import analyze_tfm_rows, load_motion_trace, parse_tfm_log
 from fstk.media.cadence_map import di_map_text, repair_mask, repair_ranges
+from fstk.tools.progress_lines import LineProgress
 from fstk.tools.vapoursynth import field_diff_script, read_field_diffs, tfm_log_script
 
 from .base import ArtifactExists, Stage, StepOutput, StepPlan, ValueSet, register
@@ -99,7 +100,8 @@ class CadenceEvidence(Stage):
             log.rename(log.with_name(f"{log.stem}.superseded-{utc_stamp()}{log.suffix}"))
         atomic_write_bytes(d["script"], tfm_log_script(Path(d["master"]), d["pad"], log).encode())
         ctx.report(0.02, "evaluating every frame through TFM")
-        decode = vs.full_decode(Path(d["script"]), name="cadence-tfm", cancel=ctx.cancel)
+        decode = vs.full_decode(Path(d["script"]), name="cadence-tfm", cancel=ctx.cancel,
+                                progress=LineProgress(ctx.report, base=0.02, span=0.85, label="TFM"))
         ctx.check_cancel()
         if not decode.clean or decode.frames != d["expected"]:
             raise ArtifactError(f"TFM full decode incomplete: frames={decode.frames} expected={d['expected']} "
@@ -159,7 +161,9 @@ class CadenceEvidence(Stage):
                 fd_log.rename(fd_log.with_name(f"{fd_log.stem}.superseded-{utc_stamp()}{fd_log.suffix}"))
             atomic_write_bytes(d["fd_script"], field_diff_script(Path(d["master"]), d["pad"], ranges, fd_log).encode())
             ctx.report(0.9, f"film-plate test on {len(cand)} video-origin stretch(es)")
-            dec = ctx.tool("vapoursynth").full_decode(Path(d["fd_script"]), name="field-diff", cancel=ctx.cancel)
+            dec = ctx.tool("vapoursynth").full_decode(Path(d["fd_script"]), name="field-diff", cancel=ctx.cancel,
+                                                      progress=LineProgress(ctx.report, base=0.9, span=0.09,
+                                                                            label="film-plate test"))
             if not dec.clean or not fd_log.is_file():
                 raise ArtifactError(f"field-difference pass failed: vspipe={dec.vspipe_rc} ffmpeg={dec.ffmpeg_rc} "
                                     f"errors={dec.errors[:5]}")

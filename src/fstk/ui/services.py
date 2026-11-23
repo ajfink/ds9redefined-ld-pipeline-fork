@@ -514,10 +514,28 @@ class Services:
 
     # ---------------------------------------------------------------- run
     def run_plan(self, plan_path: str | Path, *, actor: str,
-                 events: Callable[[dict], None] | None = None) -> tuple[Engine, dict[str, Any]]:
-        """Run a plan synchronously (call from a worker thread). Returns the engine and state."""
+                 events: Callable[[dict], None] | None = None,
+                 on_engine: Callable[[Engine], None] | None = None) -> tuple[Engine, dict[str, Any]]:
+        """Run a plan synchronously (call from a worker thread). Returns the engine and state.
+
+        ``on_engine`` is called with the engine before it starts, so the caller can pause or cancel it."""
         engine = Engine(self.profile, load_plan(plan_path), actor=actor, events=events)
+        if on_engine:
+            on_engine(engine)
         return engine, engine.run()
+
+    def job_plan(self, episode: str | EpisodeId, job: str) -> dict[str, Any] | None:
+        """The plan a job ran (copy saved beside its state), or None."""
+        for path in (self.workspace(episode).job_dir(job) / "plan.json",
+                     self.workspace(episode).state_dir / "plans" / f"{job}.plan.json"):
+            if path.is_file():
+                return json.loads(path.read_text(encoding="utf-8"))
+        return None
+
+    def timings(self):
+        from fstk.workflow.progress import Timings
+
+        return Timings(self.profile.data_root / "timings.json")
 
 
 def describe_field(key: str) -> str:

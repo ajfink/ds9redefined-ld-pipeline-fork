@@ -754,3 +754,20 @@ only as a reviewed, opt-in source with side-by-side and in-context previews.
 - Picker's "From local folder…" is now a dialog: type/paste any path (mapped drive, `\\server\share`), Browse, or start from
   `sources.downloads_root`; a folder of episodes lists the capture folders (≤2 levels) under it to choose from.
   `find_capture_folders` in `workspace/local_source.py`. Validation itself never blocked network paths.
+
+## CP24 — progress, pause/resume
+- `workflow/progress.py`: `ProgressTracker` (per-step %, weighted overall %, ETA only with a basis: the step's own rate,
+  recorded history, or speed measured on this run), `Timings` (median of the last 9 durations per stage, `<data>/timings.json`),
+  `describe_job_state`. Weights default to rough per-stage seconds until real timings exist.
+- GUI: **Progress** tab (overall bar, per-step checklist with bars/time/message, indeterminate "working…" where no honest %
+  exists), window title "% — step", Windows taskbar progress (ctypes ITaskbarList3; yellow paused, red failed),
+  desktop notifications (tray) for review-needed / failed / complete (toggle), saved-state status line so progress survives
+  closing the app.
+- **Pause/Resume**: `tools/process.PAUSE` suspends running tool trees (psutil: SIGSTOP / NtSuspendProcess) and Python stages
+  wait at `ctx.report`/`check_cancel`; the engine starts no new step while paused; paused time is excluded from elapsed/ETA;
+  cancel while paused releases and stops. `psutil` is now a dependency.
+- Bug fixed: `PlanWorker.engine` was only set after the run finished, so Cancel never reached a running plan. `run_plan(on_engine=)`.
+- Real fractions: `tools/progress_lines.LineProgress` parses vspipe `Frame: n/total` (vspipe now run with `-p`; format confirmed on
+  the device VM), ffmpeg `frame=`/`time=`/`out_time_us` and generic `NN%`; wired into encode, encode verification,
+  cadence TFM + film-plate, QC decode, stack render and EFM decode (Orc's own output format is unconfirmed: best effort, otherwise
+  the bar stays indeterminate).

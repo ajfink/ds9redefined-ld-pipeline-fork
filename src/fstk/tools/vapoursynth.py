@@ -54,19 +54,22 @@ class VapourSynth:
     def _log(self, name: str) -> Path | None:
         return self.log_dir / f"{name}.log" if self.log_dir else None
 
-    def full_decode(self, script: Path, *, name: str = "vspipe-full-decode", cancel=None) -> FullDecode:
+    def full_decode(self, script: Path, *, name: str = "vspipe-full-decode", cancel=None,
+                    progress=None) -> FullDecode:
         """Evaluate every frame of ``script`` (vspipe → FFmpeg null) and count them."""
         frames: list[int] = []
         errors: list[str] = []
 
         def on_line(stream: str, line: str) -> None:
+            if progress:
+                progress(stream, line)
             m = re.fullmatch(r"frame=(\d+)\s*", line)
             if stream == "stdout" and m:
                 frames.append(int(m.group(1)))
             elif stream.startswith("ffmpeg") and line.strip():
                 errors.append(line.strip())
 
-        vs_cmd = [self.vspipe, "-c", "y4m", str(script), "-"]
+        vs_cmd = [self.vspipe, "-p", "-c", "y4m", str(script), "-"]         # -p: "Frame: n/total" on stderr
         ff_cmd = [self.ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-progress", "pipe:1",
                   "-stats_period", "5", "-f", "yuv4mpegpipe", "-i", "-", "-map", "0:v:0", "-an",
                   "-f", "null", "-"]
@@ -87,7 +90,7 @@ class VapourSynth:
     def encode(self, script: Path, ffmpeg_output_args: list[str], *, name: str = "encode",
                cancel=None, on_line=None) -> process.ProcessResult:
         """vspipe y4m → FFmpeg with the given output arguments (both stages monitored)."""
-        vs_cmd = [self.vspipe, "-c", "y4m", str(script), "-"]
+        vs_cmd = [self.vspipe, "-p", "-c", "y4m", str(script), "-"]
         ff_cmd = [self.ffmpeg, "-y", "-hide_banner", "-nostdin", "-stats_period", "30",
                   "-f", "yuv4mpegpipe", "-i", "-", *ffmpeg_output_args]
         return process.run_pipeline([vs_cmd, ff_cmd], env=self.env(), log_path=self._log(name),

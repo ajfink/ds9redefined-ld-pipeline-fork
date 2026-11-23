@@ -236,13 +236,15 @@ class FFmpeg:
         tmp.replace(out)
         return out
 
-    def null_decode(self, path: str | Path, *, map_spec: str = "0:v:0", cancel=None) -> DecodeResult:
+    def null_decode(self, path: str | Path, *, map_spec: str = "0:v:0", cancel=None, progress=None) -> DecodeResult:
         """Decode a whole stream to null, counting frames and decoder error lines."""
         p = Path(path)
         errors: list[str] = []
         frames: list[int] = []
 
         def on_line(stream: str, line: str) -> None:
+            if progress:
+                progress(stream, line)
             m = re.fullmatch(r"frame=(\d+)\s*", line)
             if stream == "stdout" and m:
                 frames.append(int(m.group(1)))
@@ -256,7 +258,7 @@ class FFmpeg:
         return DecodeResult(frames[-1] if frames else None, errors, res.returncode)
 
     def blackdetect_decode(self, path: str | Path, *, cancel=None,
-                           vf: str = "blackdetect=d=0:pix_th=0.10:pic_th=0.98") -> BlackScan:
+                           vf: str = "blackdetect=d=0:pix_th=0.10:pic_th=0.98", progress=None) -> BlackScan:
         """One full sequential decode of v:0 with blackdetect (v38 ``scan_padfixed_black``).
 
         Frame count comes from ``-progress`` (final ``frame=``); decoder problems are lines that
@@ -269,6 +271,8 @@ class FFmpeg:
         pat = re.compile(r"black_start:\s*([0-9.]+)\s+black_end:\s*([0-9.]+)\s+black_duration:\s*([0-9.]+)")
 
         def on_line(stream: str, line: str) -> None:
+            if progress:
+                progress(stream, line)
             if stream == "stdout":
                 m = re.fullmatch(r"frame=(\d+)\s*", line)
                 if m:

@@ -16,6 +16,7 @@ workbenches remain the reference (docs/v38-inventory.md).
 """
 from __future__ import annotations
 
+import contextlib
 import getpass
 import socket
 import sys
@@ -36,6 +37,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSplitter,
+    QSystemTrayIcon,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -44,7 +46,9 @@ from PySide6.QtWidgets import (
 )
 
 from fstk.core.errors import FstkError
+from fstk.ui.progress_panel import ProgressPanel
 from fstk.ui.services import Services, describe_field
+from fstk.workflow.progress import ProgressTracker, describe_job_state
 
 STATUS_COLOURS = {"passed": "#2e7d32", "failed": "#c62828", "blocked": "#ef6c00",
                   "awaiting-review": "#1565c0", "running": "#6a1b9a", "pending": "#616161",
@@ -64,8 +68,8 @@ class PlanWorker(QObject):
     @Slot()
     def run(self) -> None:
         try:
-            engine, state = self.services.run_plan(self.plan_path, actor=self.actor, events=self.event.emit)
-            self.engine = engine
+            _engine, state = self.services.run_plan(self.plan_path, actor=self.actor, events=self.event.emit,
+                                                   on_engine=lambda e: setattr(self, "engine", e))
             self.finished.emit(state)
         except FstkError as exc:
             self.failed.emit(str(exc))
@@ -143,7 +147,11 @@ class MainWindow(QMainWindow):
         rl.addWidget(self.review_detail, 1)
         rl.addLayout(review_buttons)
 
+        self.progress_panel = ProgressPanel()
+        self.status_line = QLabel("")
+        self.tracker: ProgressTracker | None = None
         self.tabs = QTabWidget()
+        self.tabs.addTab(self.progress_panel, "Progress")
         self.tabs.addTab(self.values, "Manifest")
         self.tabs.addTab(self.jobs, "Jobs")
         self.tabs.addTab(review_page, "Reviews")
@@ -173,10 +181,25 @@ class MainWindow(QMainWindow):
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.cancel_run)
+        self.pause_button = QPushButton("Pause")
+        self.pause_button.setToolTip("Freeze the running tools where they are and start nothing new; "
+                                     "Resume continues exactly from here")
+        self.pause_button.setEnabled(False)
+        self.pause_button.clicked.connect(self.toggle_pause)
+        self.notify_button = QPushButton("Notifications")
+        self.notify_button.setCheckable(True)
+        self.notify_button.setChecked(True)
+        self.notify_button.setToolTip("Desktop notification when a step needs you, a step fails, or the run ends")
+        self.tray = QSystemTrayIcon(self.windowIcon() or QApplication.windowIcon(), self)
+        self.tick = QTimer(self)
+        self.tick.setInterval(1000)
+        self.tick.timeout.connect(self.update_progress)
+        self._taskbar = None
 
         centre = QWidget()
         cl = QVBoxLayout(centre)
         cl.addWidget(self.title)
+        cl.addWidget(self.status_line)
         cl.addWidget(self.tabs, 1)
         bar = QHBoxLayout()
         bar.addWidget(self.pick_button)
@@ -186,8 +209,10 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.delivery_button)
         bar.addWidget(self.handoff_button)
         bar.addWidget(self.run_button)
+        bar.addWidget(self.pause_button)
         bar.addWidget(self.cancel_button)
         bar.addStretch(1)
+        bar.addWidget(self.notify_button)
         bar.addWidget(self.folders_button)
         cl.addLayout(bar)
 
@@ -260,11 +285,12 @@ class MainWindow(QMainWindow):
                     item.setForeground(Qt.GlobalColor.white)
                     item.setBackground(self._colour(text))
                 self.jobs.setItem(i, j, item)
+        self._show_saved_progress(episode)
         self._pending = self.services.pending_reviews(episode)
         self.reviews.clear()
         for p in self._pending:
             self.reviews.addItem(f"{p.review}  ({p.job} / {p.step})")
-        self.tabs.setTabText(2, f"Reviews ({len(self._pending)})")
+        self.tabs.setTabText(3, f"Reviews ({len(self._pending)})")
         self.show_review(self.reviews.currentRow())
 
     @staticmethod
@@ -418,6 +444,7 @@ class MainWindow(QMainWindow):
     def start_plan(self, path: str) -> None:
         if self.thread is not None:
             return
+        self._begin_progress(path)
         self.thread = QThread(self)
         self.worker = PlanWorker(self.services, path, self.actor)
         self.worker.moveToThread(self.thread)
@@ -429,8 +456,11 @@ class MainWindow(QMainWindow):
         self.intake_button.setEnabled(False)
         self.deliver_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
+        self.pause_button.setEnabled(True)
+        self.pause_button.setText("Pause")
         self.append_log(f"running {path}")
         self.thread.start()
+        self.update_progress()
 
     def check_catalog_age(self) -> None:
         if self.catalog_thread is not None:
@@ -463,10 +493,103 @@ class MainWindow(QMainWindow):
     def cancel_run(self) -> None:
         if self.worker and self.worker.engine:
             self.worker.engine.cancel.set()
+            self.worker.engine.resume()                  # a paused run must wake up to cancel
         self.append_log("cancel requested")
+
+    def toggle_pause(self) -> None:
+        engine = self.worker.engine if self.worker else None
+        if engine is None:
+            return
+        from fstk.tools.process import PAUSE
+
+        if PAUSE.is_paused:
+            engine.resume()
+            self.pause_button.setText("Pause")
+        else:
+            engine.pause()
+            self.pause_button.setText("Resume")
+        self.update_progress()
+
+    # ---------------------------------------------------------------- progress
+    def _begin_progress(self, plan_path: str) -> None:
+        from fstk.workflow.engine import load_plan
+
+        try:
+            plan = load_plan(plan_path)
+        except FstkError:
+            self.tracker = None
+            return
+        self.tracker = ProgressTracker(plan, timings=self.services.timings())
+        with contextlib.suppress(OSError, ValueError, KeyError):   # first run of this job: nothing to resume
+            self.tracker.load_state(self.services.job_state(plan["episode"], plan["job"]))
+        self.progress_panel.set_tracker(self.tracker)
+        self.tabs.setCurrentWidget(self.progress_panel)
+        self.tick.start()
+        self.update_progress()
+
+    def _show_saved_progress(self, episode: str) -> None:
+        """Between runs: the latest job's saved state, so progress survives closing the app."""
+        if self.thread is not None:
+            return
+        jobs = self.services.jobs(episode)
+        if not jobs:
+            self.status_line.setText("")
+            self.progress_panel.set_tracker(None)
+            return
+        best = None
+        for job in jobs:
+            state = self.services.job_state(episode, job)
+            if best is None or state.get("created_utc", "") >= best[1].get("created_utc", ""):
+                best = (job, state)
+        job, state = best
+        self.status_line.setText(f"{job}: {describe_job_state(state)}")
+        plan = self.services.job_plan(episode, job)
+        if plan:
+            self.tracker = ProgressTracker(plan, timings=self.services.timings())
+            self.tracker.load_state(state)
+            self.progress_panel.set_tracker(self.tracker)
+        else:
+            self.progress_panel.set_tracker(None)
+
+    def update_progress(self) -> None:
+        snap = self.progress_panel.refresh()
+        if snap is None:
+            return
+        name = f"{self.episode or ''} — {snap.overall:.0%} — {snap.headline()}" if self.thread else ""
+        self.setWindowTitle(f"{name} · FromStunToKill" if name else f"FromStunToKill — {self.services.profile.machine}")
+        self._taskbar_update(snap)
+
+    def _taskbar_update(self, snap) -> None:
+        from fstk.ui import taskbar
+
+        if self._taskbar is None:
+            self._taskbar = taskbar.TaskbarProgress(int(self.winId()))
+        if self.thread is None:
+            self._taskbar.set(taskbar.NOPROGRESS)
+        elif snap.paused:
+            self._taskbar.set(taskbar.PAUSED, snap.overall)
+        elif snap.state == "failed":
+            self._taskbar.set(taskbar.ERROR, snap.overall)
+        else:
+            self._taskbar.set(taskbar.NORMAL, snap.overall)
+
+    def notify(self, title: str, text: str) -> None:
+        if not self.notify_button.isChecked() or not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        self.tray.show()
+        self.tray.showMessage(title, text, QSystemTrayIcon.MessageIcon.Information, 15000)
 
     @Slot(dict)
     def on_event(self, event: dict) -> None:
+        if self.tracker is not None:
+            self.tracker.on_event(event)
+            if event["kind"] != "progress":
+                self.update_progress()
+        kind = event["kind"]
+        if kind == "step-awaiting-review":
+            self.notify("Needs your review", f"{self.episode}: {event.get('step')} is ready for you")
+        elif kind in ("step-failed", "step-blocked"):
+            self.notify("Step failed", f"{self.episode}: {event.get('step')} {'; '.join(event.get('issues') or [])}"[:200])
         if event["kind"] == "progress":
             frac = event.get("fraction")
             self.append_log(f"  [{event['step']}] {'' if frac is None else f'{frac:5.0%} '}{event.get('message', '')}")
@@ -483,6 +606,10 @@ class MainWindow(QMainWindow):
         self.intake_button.setEnabled(True)
         self.deliver_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
+        self.pause_button.setEnabled(False)
+        self.pause_button.setText("Pause")
+        self.tick.stop()
+        self.update_progress()
         self.refresh()
         if self.episode:
             self.show_episode(self.episode)
@@ -491,6 +618,10 @@ class MainWindow(QMainWindow):
     def on_finished(self, state: dict) -> None:
         self.append_log(f"job {state['job']} finished: " +
                         ", ".join(f"{k}={v['status']}" for k, v in state["steps"].items()))
+        if self.tracker is not None:
+            snap = self.tracker.snapshot()
+            if snap.state == "finished":
+                self.notify("Run complete", f"{self.episode}: all {snap.total} steps done")
         self._done()
 
     @Slot(str)

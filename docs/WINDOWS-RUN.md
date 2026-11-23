@@ -165,6 +165,14 @@ Setup puts a **FromStunToKill** shortcut on the Desktop and in the Start menu; d
 `Z:\FromStunToKill\tools\windows\FromStunToKill.cmd` (double-click), or `tools\windows\make-shortcut.ps1` to create the
 shortcuts later. Don't use "Run as administrator" (it hides mapped drives).
 
+## Watching progress, pausing
+The **Progress** tab shows the whole run: an overall bar ("Step 7 of 22", weighted by how long each step normally takes),
+and one row per step with its own bar, time and what it is doing. Time left appears only once there is a basis (a step's own
+rate, or timings from earlier runs on this machine; the first episode has less to go on). The window title and the taskbar
+button also show the percentage. **Pause** freezes the running tools exactly where they are (and starts nothing new);
+**Resume** continues from the same point. **Cancel** works while paused. **Notifications** toggles the desktop pop-ups for
+"needs your review", "step failed" and "run complete". Closing the app and reopening it shows where the episode got to.
+
 ## Mapped drives missing in the folder dialog
 Windows gives an Administrator PowerShell a separate session that cannot see mapped network drives (X:, Y:, W:).
 Start `fstk-gui` (and `setup-fstk.ps1` once Python is installed) from a **normal, non-admin** PowerShell. The setup

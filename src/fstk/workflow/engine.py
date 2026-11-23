@@ -43,6 +43,7 @@ from fstk.core.timeutil import utc_now_iso
 from fstk.evidence.approvals import ApprovalBook
 from fstk.manifest.store import ManifestStore
 from fstk.stages.base import RESOURCES, StageContext, StepOutput, StepPlan, get_stage, output_scope_for
+from fstk.tools.process import PAUSE
 from fstk.workspace.space import SpaceLedger
 
 PLAN_SCHEMA = "fstk-workflow-plan-v1"
@@ -153,6 +154,18 @@ class Engine:
         self._state_lock = threading.Lock()
         self.state: dict[str, Any] = {}
 
+    # ---------------------------------------------------------------- pause / resume
+    def pause(self) -> None:
+        """Freeze running tools where they are and start no new step until ``resume``."""
+        if not PAUSE.is_paused:
+            PAUSE.pause()
+            self._emit("paused")
+
+    def resume(self) -> None:
+        if PAUSE.is_paused:
+            PAUSE.resume()
+            self._emit("resumed")
+
     # ---------------------------------------------------------------- state
     def _emit(self, kind: str, **data) -> None:
         if self.events:
@@ -217,9 +230,11 @@ class Engine:
         frozen = frozen_reason(self.profile, self.episode)
         if frozen:
             raise WorkflowError(frozen)
+        PAUSE.resume()
         try:
             return self._run_locked()
         finally:
+            PAUSE.resume()
             if self.profile.shared_root:
                 self._emit("shared-publish", outcome=try_publish(self.profile, self.episode))
 
@@ -287,7 +302,7 @@ class Engine:
                 if self.cancel.is_set():
                     break
                 launched = False
-                for sid in self._ready():
+                for sid in ([] if PAUSE.is_paused else self._ready()):
                     if any(sid == v[0] for v in running.values()):
                         continue
                     res = get_stage(self._step(sid)["stage"]).resource

@@ -98,10 +98,16 @@ class StageContext:
         raise WorkflowError(f"unknown tool adapter {name!r}")
 
     def report(self, fraction: float | None = None, message: str = "") -> None:
+        from fstk.tools.process import PAUSE
+
+        PAUSE.wait_while_paused(self.cancel)
         if self.progress:
             self.progress(message, fraction)
 
     def check_cancel(self) -> None:
+        from fstk.tools.process import PAUSE
+
+        PAUSE.wait_while_paused(self.cancel)
         if self.cancel.is_set():
             raise WorkflowError("cancelled by operator")
 

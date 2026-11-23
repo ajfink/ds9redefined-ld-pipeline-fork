@@ -1,0 +1,311 @@
+"""Run progress: per-step percent, overall progress through the whole plan, and honest time estimates.
+
+``ProgressTracker`` is fed the engine's events (and the job's saved state, so a resumed run starts where it
+left off) and answers: which step is running, how far along it is, how far through the whole plan, how long it
+has taken, and, once there is evidence, how long it should still take. No Qt, so it is tested on its own.
+
+Overall progress weights each step by how long it normally takes (not 1/N per step: a 2-second step and the
+multi-hour encode are not the same fraction of an episode). Weights start as rough defaults and are replaced by
+the median of timings recorded on this machine (``Timings``, stored under the data root) as soon as any exist.
+An estimate is shown only with a basis: this step's own rate, or recorded history. Never an invented clock time.
+"""
+from __future__ import annotations
+
+import json
+import statistics
+import time
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+#: Rough seconds per stage for one ~45-minute episode on a modern machine; only used until real timings exist.
+DEFAULT_SECONDS: dict[str, float] = {
+    "archive-download": 3600, "capture-inventory": 600, "efm-decode": 1800, "efm-select": 60,
+    "stack-reference": 900, "stack-render": 14400, "video-trim": 120, "cadence-evidence": 1800,
+    "dvd-probe": 60, "dvd-alignment": 1800, "dvd-free-audio": 300, "dvd-ld-audio": 600, "dvd-retime": 600,
+    "av-correction": 120, "pad-audit": 300, "pad-repair": 300, "video-quality": 900, "audio-quality": 300,
+    "stretch-preview": 120, "frame-fixes": 120, "fix-preview": 60, "encode-final": 21600, "remux": 300,
+    "qc-report": 900, "episode-report": 300,
+}
+FALLBACK_SECONDS = 120.0
+KEEP_SAMPLES = 9
+MIN_FRACTION_FOR_ETA = 0.03
+MIN_SECONDS_FOR_ETA = 15.0
+
+DONE = ("passed",)
+SETTLED = ("passed", "failed", "blocked", "cancelled", "interrupted", "stale")
+RUNNING = "running"
+WAITING = "awaiting-review"
+
+
+def _review_stages() -> set[str]:
+    import fstk.stages  # noqa: F401  (registers the built-in stages)
+    from fstk.stages.base import REGISTRY
+
+    return {sid for sid, cls in REGISTRY.items() if getattr(cls, "review", None)}
+
+
+def format_duration(seconds: float | None) -> str:
+    if seconds is None or seconds != seconds:
+        return "–"
+    s = round(max(0.0, seconds))
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h:
+        return f"{h}h {m:02d}m"
+    if m:
+        return f"{m}m {sec:02d}s"
+    return f"{sec}s"
+
+
+def describe_job_state(state: Mapping[str, Any]) -> str:
+    """One line for a saved job: how far it got and what it is waiting on."""
+    steps = state.get("steps") or {}
+    done = sum(1 for st in steps.values() if st.get("status") == "passed")
+    line = f"{done} of {len(steps)} steps done"
+    waiting = [k for k, st in steps.items() if st.get("status") == WAITING]
+    failed = [k for k, st in steps.items() if st.get("status") in ("failed", "blocked", "stale")]
+    if failed:
+        line += f" · needs attention: {failed[0]}"
+    elif waiting:
+        line += f" · waiting for your review: {waiting[0]}"
+    elif done == len(steps) and steps:
+        line += " · finished"
+    return line
+
+
+class Timings:
+    """Recorded durations per stage (seconds), kept in one small JSON file; the median is the weight."""
+
+    def __init__(self, path: Path | None):
+        self.path = Path(path) if path else None
+        self.data: dict[str, list[float]] = {}
+        if self.path and self.path.is_file():
+            try:
+                raw = json.loads(self.path.read_text(encoding="utf-8"))
+                self.data = {k: [float(x) for x in v] for k, v in raw.get("stages", {}).items()}
+            except (OSError, ValueError, TypeError, AttributeError):
+                self.data = {}
+
+    def median(self, stage: str) -> float | None:
+        vals = self.data.get(stage)
+        return statistics.median(vals) if vals else None
+
+    def expected(self, stage: str) -> float:
+        return self.median(stage) or DEFAULT_SECONDS.get(stage, FALLBACK_SECONDS)
+
+    def has_history(self, stage: str) -> bool:
+        return bool(self.data.get(stage))
+
+    def record(self, stage: str, seconds: float) -> None:
+        if seconds < 1.0:
+            return                              # reused/instant steps say nothing about how long work takes
+        vals = self.data.setdefault(stage, [])
+        vals.append(round(float(seconds), 1))
+        del vals[:-KEEP_SAMPLES]
+        self._save()
+
+    def _save(self) -> None:
+        if not self.path:
+            return
+        try:
+            from fstk.core.fsio import atomic_write_json
+
+            atomic_write_json(self.path, {"schema": "fstk-timings-v1", "stages": self.data})
+        except OSError:
+            pass                                 # timings are a convenience; never fail a run over them
+
+
+@dataclass
+class StepProgress:
+    id: str
+    stage: str
+    status: str = "pending"
+    fraction: float | None = None
+    message: str = ""
+    started: float | None = None                 # monotonic
+    finished: float | None = None
+    weight: float = FALLBACK_SECONDS
+    review: bool = False                         # this stage ends in a human review
+    detail: str = ""
+
+    @property
+    def done(self) -> bool:
+        return self.status in DONE
+
+    def elapsed(self, now: float) -> float | None:
+        if self.started is None:
+            return None
+        return (self.finished if self.finished is not None else now) - self.started
+
+    def credit(self) -> float:
+        """Share of this step's weight already accomplished (0..1)."""
+        if self.done or self.status == WAITING:     # waiting for a person: the machine's work is finished
+            return 1.0
+        if self.status == RUNNING and self.fraction is not None:
+            return min(max(self.fraction, 0.0), 0.99)
+        return 0.0
+
+
+@dataclass
+class Snapshot:
+    steps: list[StepProgress]
+    done: int
+    total: int
+    overall: float                               # 0..1 weighted
+    overall_eta: float | None
+    current: list[StepProgress]
+    waiting: list[StepProgress]
+    failed: list[StepProgress]
+    elapsed: float
+    state: str                                   # idle | running | waiting | failed | finished
+    paused: bool = False
+
+    def headline(self) -> str:
+        if self.paused:
+            return "Paused"
+        if self.state == "finished":
+            return f"All {self.total} steps done"
+        if self.state == "failed" and self.failed:
+            return f"Stopped at step {self.failed[0].id}: needs attention"
+        if self.state == "waiting" and self.waiting:
+            return f"Waiting for you: {self.waiting[0].id}"
+        if self.current:
+            c = self.current[0]
+            return f"Step {self.done + 1} of {self.total}: {c.id}"
+        return f"{self.done} of {self.total} steps done"
+
+
+@dataclass
+class ProgressTracker:
+    plan: Mapping[str, Any]
+    timings: Timings = field(default_factory=lambda: Timings(None))
+    clock: Callable[[], float] = time.monotonic
+
+    def __post_init__(self) -> None:
+        self.steps: dict[str, StepProgress] = {}
+        review_stages = _review_stages()
+        for s in self.plan["steps"]:
+            stage = s["stage"]
+            self.steps[s["id"]] = StepProgress(s["id"], stage, weight=self.timings.expected(stage),
+                                               review=stage in review_stages)
+        self.started = self.clock()
+        self.paused_at: float | None = None
+
+    # ------------------------------------------------------------- inputs
+    def load_state(self, state: Mapping[str, Any]) -> None:
+        """Start from a job's saved state (a resumed run shows what is already done)."""
+        for sid, st in (state.get("steps") or {}).items():
+            step = self.steps.get(sid)
+            if step is None:
+                continue
+            status = st.get("status", "pending")
+            step.status = "pending" if status == "interrupted" else status
+            if step.status in SETTLED or step.status == WAITING:
+                step.detail = "; ".join(st.get("issues") or [])
+
+    def on_event(self, event: Mapping[str, Any]) -> None:
+        kind, sid = event.get("kind", ""), event.get("step")
+        if kind == "paused":
+            self.paused_at = self.paused_at or self.clock()
+            return
+        if kind == "resumed":
+            if self.paused_at is not None:               # time spent paused is not time spent working
+                gap = self.clock() - self.paused_at
+                self.started += gap
+                for s in self.steps.values():
+                    if s.status == RUNNING and s.started is not None:
+                        s.started += gap
+                self.paused_at = None
+            return
+        step = self.steps.get(sid) if sid else None
+        if step is None:
+            return
+        now = self.clock()
+        if kind == "step-start":
+            step.status, step.started, step.finished, step.fraction = RUNNING, now, None, None
+            step.message, step.detail = "", ""
+        elif kind == "progress":
+            frac = event.get("fraction")
+            if step.status != RUNNING:
+                step.status, step.started = RUNNING, step.started or now
+            step.fraction = None if frac is None else min(max(float(frac), 0.0), 1.0)
+            step.message = event.get("message", "") or step.message
+        elif kind in ("step-passed", "review-satisfied"):
+            if kind == "step-passed" and step.started is not None:
+                self.timings.record(step.stage, now - step.started)
+            step.status, step.fraction, step.finished = "passed", 1.0, now
+        elif kind == "step-awaiting-review":
+            if step.started is not None:
+                self.timings.record(step.stage, now - step.started)
+            step.status, step.finished, step.detail = WAITING, now, str(event.get("detail", ""))
+        elif kind in ("step-failed", "step-blocked", "step-stale", "step-cancelled", "step-interrupted"):
+            step.status = kind.removeprefix("step-")
+            step.finished = now
+            step.detail = "; ".join(event.get("issues") or []) or str(event.get("reason", ""))
+
+    # ------------------------------------------------------------- outputs
+    def _eta_step(self, step: StepProgress, now: float) -> float | None:
+        if step.status != RUNNING or step.fraction is None:
+            return None
+        elapsed = step.elapsed(now) or 0.0
+        if step.fraction < MIN_FRACTION_FOR_ETA or elapsed < MIN_SECONDS_FOR_ETA:
+            return None
+        return elapsed * (1.0 - step.fraction) / step.fraction
+
+    def step_eta(self, sid: str) -> float | None:
+        return self._eta_step(self.steps[sid], self.clock())
+
+    def snapshot(self) -> Snapshot:
+        now = self.paused_at if self.paused_at is not None else self.clock()
+        steps = list(self.steps.values())
+        total_w = sum(s.weight for s in steps) or 1.0
+        overall = sum(s.weight * s.credit() for s in steps) / total_w
+        current = [s for s in steps if s.status == RUNNING]
+        waiting = [s for s in steps if s.status == WAITING]
+        failed = [s for s in steps if s.status in ("failed", "blocked", "stale")]
+        done = sum(1 for s in steps if s.done)
+        if done == len(steps):
+            state = "finished"
+        elif failed and not current:
+            state = "failed"
+        elif current:
+            state = "running"
+        elif waiting:
+            state = "waiting"
+        else:
+            state = "idle"
+        return Snapshot(steps, done, len(steps), overall, self._overall_eta(steps, now), current, waiting, failed,
+                        now - self.started, state, self.paused_at is not None)
+
+    def _overall_eta(self, steps: list[StepProgress], now: float) -> float | None:
+        """Remaining machine time for the whole plan. Needs a basis: history for the unfinished stages, or a
+        speed observed on this run's own finished steps. Time a person takes to review is not counted."""
+        todo = [s for s in steps if not s.done and s.status != WAITING]
+        if not todo:
+            return 0.0
+        # observed speed on this run: actual / expected over finished steps long enough to measure
+        actual = expected = 0.0
+        for s in steps:
+            if (s.done or s.status == WAITING) and s.started is not None and s.finished is not None:
+                took = s.finished - s.started
+                if took >= MIN_SECONDS_FOR_ETA:
+                    actual += took
+                    expected += s.weight
+        ratio = actual / expected if expected else None
+        have_history = all(self.timings.has_history(s.stage) for s in todo)
+        if ratio is None and not have_history:
+            running_eta = [self._eta_step(s, now) for s in steps if s.status == RUNNING]
+            if len(todo) == 1 and running_eta and running_eta[0] is not None:
+                return running_eta[0]
+            return None
+        scale = ratio if (ratio is not None and not have_history) else 1.0
+        remaining = 0.0
+        for s in todo:
+            own = self._eta_step(s, now)
+            if own is not None:
+                remaining += own
+            else:
+                remaining += s.weight * (1.0 - s.credit()) * scale
+        return remaining

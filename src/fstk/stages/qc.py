@@ -126,7 +126,12 @@ class QcReport(Stage):
     def _decode_gates(self, ctx, m, deliverable: Path, evidence: dict, review: list) -> tuple[list[Gate], dict]:
         ff = ctx.tool("ffmpeg")
         ctx.report(0.05, "full decode + blackdetect")
-        scan = ff.blackdetect_decode(deliverable, cancel=ctx.cancel)
+        from fstk.tools.progress_lines import LineProgress
+
+        frames_expected = m.get("video.frames", None)
+        scan = ff.blackdetect_decode(deliverable, cancel=ctx.cancel,
+                                     progress=LineProgress(ctx.report, total_frames=frames_expected, base=0.05,
+                                                           span=0.5, label="decoding"))
         ctx.check_cancel()
         measured: dict = {"full_decode_errors": len(scan.errors), "frames": scan.frames,
                           "black_events": list(scan.events)}

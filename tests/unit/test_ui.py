@@ -59,5 +59,46 @@ def test_main_window_smoke(services, tmp_path, qtbot):
     assert w.values.rowCount() > 60
     w.start_plan(str(review_plan(tmp_path)))
     qtbot.waitUntil(lambda: w.thread is None, timeout=10000)
-    assert w.tabs.tabText(2) == "Reviews (1)"
+    assert w.tabs.tabText(3) == "Reviews (1)"
     assert "step-awaiting-review" in w.log.toPlainText()
+
+
+@pytest.mark.gui
+def test_progress_panel_follows_a_run_and_persists(services, tmp_path, qtbot):
+    from fstk.ui.app import MainWindow
+
+    w = MainWindow(services, actor="op")
+    qtbot.addWidget(w)
+    assert w.status_line.text() == "" and w.progress_panel.table.rowCount() == 0
+    w.start_plan(str(review_plan(tmp_path)))
+    assert w.tracker is not None and w.progress_panel.table.rowCount() == 1
+    assert w.pause_button.isEnabled() and "%" in w.windowTitle()
+    qtbot.waitUntil(lambda: w.thread is None, timeout=10000)
+    panel = w.progress_panel
+    assert panel.table.item(0, 1).text() == "needs your review"
+    assert "waiting for you" in panel.headline.text().lower()
+    assert not w.pause_button.isEnabled()
+    # reopening the app later: the saved job state is shown without running anything
+    w2 = MainWindow(services, actor="op")
+    qtbot.addWidget(w2)
+    assert "waiting for your review" in w2.status_line.text()
+    assert w2.progress_panel.table.rowCount() == 1
+
+
+@pytest.mark.gui
+def test_pause_button_drives_the_engine(services, tmp_path, qtbot):
+    from fstk.tools.process import PAUSE
+    from fstk.ui.app import MainWindow
+
+    w = MainWindow(services, actor="op")
+    qtbot.addWidget(w)
+    w.start_plan(str(review_plan(tmp_path)))
+    qtbot.waitUntil(lambda: (w.worker is not None and w.worker.engine is not None) or w.thread is None,
+                    timeout=5000)
+    if w.worker is not None and w.worker.engine is not None:
+        w.toggle_pause()
+        assert PAUSE.is_paused and w.pause_button.text() == "Resume"
+        w.toggle_pause()
+        assert not PAUSE.is_paused
+    qtbot.waitUntil(lambda: w.thread is None, timeout=10000)
+    assert not PAUSE.is_paused

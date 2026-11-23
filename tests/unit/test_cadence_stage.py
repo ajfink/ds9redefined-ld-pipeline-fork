@@ -21,7 +21,7 @@ class FakeVS:
     def __init__(self, frames=3000, log_rows=3000, vspipe_rc=0):
         self.frames, self.log_rows, self.vspipe_rc = frames, log_rows, vspipe_rc
 
-    def full_decode(self, script, *, name="", cancel=None):
+    def full_decode(self, script, *, name="", cancel=None, progress=None):
         text = Path(script).read_text()
         log = re.search(r"output='([^']+)'", text).group(1)
         assert "Trim(src, 118, None)" in text
@@ -113,7 +113,7 @@ class FakeVSHybrid(FakeVS):
         super().__init__()
         self.plate = plate
 
-    def full_decode(self, script, *, name="", cancel=None):
+    def full_decode(self, script, *, name="", cancel=None, progress=None):
         text = Path(script).read_text()
         if name == "field-diff":
             out = re.search(r"OUT = '([^']+)'", text).group(1)
