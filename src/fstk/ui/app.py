@@ -159,6 +159,9 @@ class MainWindow(QMainWindow):
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(5000)
+        self.remove_button = QPushButton("Remove…")
+        self.remove_button.setToolTip("Remove the selected episode (and, if you choose, its files)")
+        self.remove_button.clicked.connect(self.open_remove)
         self.pick_button = QPushButton("Episodes…")
         self.pick_button.clicked.connect(self.open_picker)
         self.intake_button = QPushButton("Run intake")
@@ -218,7 +221,12 @@ class MainWindow(QMainWindow):
 
         split = QSplitter(Qt.Orientation.Vertical)
         top = QSplitter(Qt.Orientation.Horizontal)
-        top.addWidget(self.episodes)
+        left = QWidget()
+        ll = QVBoxLayout(left)
+        ll.setContentsMargins(0, 0, 0, 0)
+        ll.addWidget(self.episodes, 1)
+        ll.addWidget(self.remove_button)
+        top.addWidget(left)
         top.addWidget(centre)
         top.setStretchFactor(1, 4)
         split.addWidget(top)
@@ -237,6 +245,8 @@ class MainWindow(QMainWindow):
             matches = self.episodes.findItems(current, Qt.MatchFlag.MatchExactly)
             if matches:
                 self.episodes.setCurrentItem(matches[0])
+            elif self.episodes.count():
+                self.episodes.setCurrentRow(0)
         elif self.episodes.count():
             self.episodes.setCurrentRow(0)
 
@@ -406,6 +416,32 @@ class MainWindow(QMainWindow):
         matches = self.episodes.findItems(canonical, Qt.MatchFlag.MatchExactly)
         if matches:
             self.episodes.setCurrentItem(matches[0])
+
+    def open_remove(self) -> None:
+        episode = self.episode
+        if not episode:
+            return
+        if self.thread is not None:
+            QMessageBox.information(self, "Run in progress", "Wait for the running plan to finish, or cancel it, "
+                                    "before removing an episode.")
+            return
+        from fstk.ui.remove import RemoveDialog
+
+        try:
+            dlg = RemoveDialog(self.services, episode, self)
+        except FstkError as exc:
+            QMessageBox.warning(self, "Cannot remove", str(exc))
+            return
+        if dlg.exec():
+            self.append_log(f"removed {episode}: " + ("; ".join(dlg.removed) or "project record only"))
+            self.tracker = None
+            self.progress_panel.set_tracker(None)
+            self.status_line.setText("")
+            self.refresh()
+            if not self.episodes.count():
+                self.title.setText("No episode selected")
+                self.values.setRowCount(0)
+                self.jobs.setRowCount(0)
 
     def open_folders(self) -> None:
         from fstk.ui.folders import FoldersDialog

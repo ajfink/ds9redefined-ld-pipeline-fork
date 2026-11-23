@@ -524,6 +524,26 @@ class Services:
             on_engine(engine)
         return engine, engine.run()
 
+    def removal_plan(self, episode: str | EpisodeId):
+        from fstk.workspace.removal import plan_removal
+
+        ep = episode if isinstance(episode, EpisodeId) else EpisodeId.parse(episode)
+        try:
+            manifest = self.workspace(ep).store.load()
+        except FstkError:
+            manifest = None
+        return plan_removal(self.profile, ep, manifest)
+
+    def remove_episode(self, episode: str | EpisodeId, scope: str) -> list[str]:
+        from fstk.workspace.removal import remove_episode
+
+        ep = episode if isinstance(episode, EpisodeId) else EpisodeId.parse(episode)
+        try:
+            manifest = self.workspace(ep).store.load()
+        except FstkError:
+            manifest = None
+        return remove_episode(self.profile, ep, scope, manifest)
+
     def job_plan(self, episode: str | EpisodeId, job: str) -> dict[str, Any] | None:
         """The plan a job ran (copy saved beside its state), or None."""
         for path in (self.workspace(episode).job_dir(job) / "plan.json",

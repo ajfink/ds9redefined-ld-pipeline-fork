@@ -771,3 +771,10 @@ only as a reviewed, opt-in source with side-by-side and in-context previews.
   the device VM), ffmpeg `frame=`/`time=`/`out_time_us` and generic `NN%`; wired into encode, encode verification,
   cadence TFM + film-plate, QC decode, stack render and EFM decode (Orc's own output format is unconfirmed: best effort, otherwise
   the bar stays indeterminate).
+
+## CP25 — Remove episode
+- Left of the episode list: **Remove…** → dialog (None = project only / Just the project files / Everything), then an
+  "Are you sure?" box (Remove / Cancel, Cancel default). `workspace/removal.py`: `plan_removal`, `remove_episode`.
+  Project record goes last; every path is checked to sit inside its base (data_root, media_root or the output override,
+  downloads_root) before anything is deleted. Captures chosen with "From local folder…" and the DVD are never deleted
+  (Everything only removes a download fstk made in downloads_root). Refused while a plan runs or the episode is handed off.
