@@ -113,3 +113,33 @@ def test_a_retired_tool_is_dropped_from_an_old_profile_with_a_note(tmp_path):
     prof = Profile.from_dict(doc)
     assert "vs_plugin_dir" not in prof.tools and prof.tools["curl"] == "/usr/bin/curl"
     assert any("tools.vs_plugin_dir dropped" in n for n in prof.notes)
+
+
+def _venv(root, bin_name="bin", exe="vspipe"):
+    (root / bin_name).mkdir(parents=True)
+    (root / "pyvenv.cfg").write_text("home = x\n")
+    f = root / bin_name / exe
+    f.write_text("")
+    return f
+
+
+def test_vspipe_follows_the_running_environment_not_a_stale_one(tmp_path, monkeypatch):
+    import sys
+
+    from fstk.config.profile import SCHEMA, Profile
+
+    old = _venv(tmp_path / "fstk" / "venv")                    # what an older `setup` recorded
+    mine = _venv(tmp_path / "fstk" / "venvs" / "6e00de08")
+    other = _venv(tmp_path / "somewhere" / "conda")            # not an fstk environment: left alone
+    p = Profile.from_dict({"schema": SCHEMA, "machine": "T", "os": "linux", "data_root": str(tmp_path / "d"),
+                           "media_root": str(tmp_path / "m"), "tools": {"vspipe": str(old)}})
+    monkeypatch.setattr(sys, "prefix", str(mine.parent.parent))
+    monkeypatch.setattr(sys, "base_prefix", "/usr")
+    assert p.tool("vspipe") == mine
+    p.tools["vspipe"] = str(other)
+    assert p.tool("vspipe") == other
+    p.tools["vspipe"] = str(mine)
+    assert p.tool("vspipe") == mine
+    monkeypatch.setattr(sys, "base_prefix", sys.prefix)        # not running in a virtual environment: no rewrite
+    p.tools["vspipe"] = str(old)
+    assert p.tool("vspipe") == old

@@ -49,6 +49,12 @@ def test_setup_logging_writes_session_events_and_uncaught_exceptions(fresh_loggi
     assert applog.setup_logging(directory=fresh_logging) == path           # idempotent
 
 
+def test_clean_exit_is_marked_in_the_crash_log(fresh_logging):
+    applog.setup_logging(directory=fresh_logging)
+    applog.shutdown()                  # faulthandler also logs harmless first-chance Windows exceptions (0x8001010d)
+    assert "ended normally" in (fresh_logging / "fstk-crash.log").read_text(encoding="utf-8")
+
+
 def test_engine_events_and_tool_runs_reach_the_log(fresh_logging, tmp_path):
     from fstk.tools import process
     from fstk.workflow.engine import Engine

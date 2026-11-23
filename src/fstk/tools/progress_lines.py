@@ -21,6 +21,11 @@ FF_FPS = re.compile(r"fps=\s*([\d.]+)")
 FF_TIME = re.compile(r"(?:^|\s)time=\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
 FF_OUT_US = re.compile(r"^out_time_us=(\d+)\s*$")
 PERCENT = re.compile(r"(?<![\w.])(\d{1,3}(?:\.\d+)?)\s*%")
+#: A log line (spdlog ``[info]``/``[warning]`` and the like) is a message, not progress: its percentages are about
+#: something else ("misfits by 41%").
+LOG_LEVEL = re.compile(r"\[(?:trace|debug|info|warning|warn|error|critical)\]")
+#: Orc's stacker reports each block of frames it has finished: ``"kind":"weights","frames":[3001,3500]``.
+STACKER = re.compile(r'"kind"\s*:\s*"weights"\s*,\s*"frames"\s*:\s*\[\s*\d+\s*,\s*(\d+)\s*\]')
 
 
 def _hms(seconds: float) -> str:
@@ -74,6 +79,12 @@ class LineProgress:
         if m and self.total_seconds:
             t = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
             return t / self.total_seconds, f"{_hms(t)} of {_hms(self.total_seconds)}"
+        m = STACKER.search(line)
+        if m and self.total_frames:
+            done = min(int(m.group(1)), self.total_frames)
+            return done / self.total_frames, f"frame {done}/{self.total_frames}"
+        if LOG_LEVEL.search(line):
+            return None
         m = PERCENT.search(line)
         if m and 0 <= float(m.group(1)) <= 100:
             return float(m.group(1)) / 100.0, f"{float(m.group(1)):.0f}%"

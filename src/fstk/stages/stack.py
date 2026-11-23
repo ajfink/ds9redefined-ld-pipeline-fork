@@ -282,7 +282,8 @@ class StackRender(Stage):
             from fstk.tools.progress_lines import LineProgress
 
             res, text = orc.process_project(render, cancel=ctx.cancel,
-                                            on_line=LineProgress(ctx.report, span=0.88, label="Orc render"))
+                                            on_line=LineProgress(ctx.report, total_frames=int(d["frames"]), span=0.88,
+                                                                 label="Orc render"))
             ctx.check_cancel()
             if not master.is_file() or master.stat().st_size == 0:
                 raise ArtifactError(f"Orc produced no stack master ({res.describe()}); if this Orc build rejects "

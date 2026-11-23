@@ -161,6 +161,37 @@ def change_folders(profile: Profile, *, data_root: str | os.PathLike | None = No
     return [(k, str(o) if o else None, str(n) if n else None) for k, o, n in changes]
 
 
+def _fstk_environment(path: Path) -> Path | None:
+    """The environment folder ``path`` (``<env>/Scripts|bin/<exe>``) lives in, if it is one fstk made:
+    ``…/venvs/<key>`` (the launcher's) or the older ``…/venv``."""
+    env = path.parent.parent
+    if (env / "pyvenv.cfg").is_file() and (env.parent.name == "venvs" or env.name == "venv"):
+        return env
+    return None
+
+
+def _own_environment_vspipe(configured: Path) -> Path | None:
+    """The vspipe of the environment this process runs in, when the profile names another fstk environment's.
+
+    A profile written by ``setup`` records the vspipe of the environment that existed then. The launcher makes one
+    environment per copy of the app (moving the app folder makes a new one), and a pip VapourSynth is configured
+    per environment, so the old one's vspipe stops working (seen on the Windows machine: exit 1, "Python executable
+    and library path couldn't be determined"). Follow the running environment instead of failing.
+    """
+    import sys
+
+    if sys.prefix == sys.base_prefix:
+        return None
+    mine, theirs = Path(sys.prefix), _fstk_environment(configured)
+    if theirs is None or _fstk_environment(mine / "Scripts" / "x") is None or theirs == mine:
+        return None
+    for sub, exe in (("Scripts", "vspipe.exe"), ("bin", "vspipe")):
+        cand = mine / sub / exe
+        if cand.is_file():
+            return cand
+    return None
+
+
 def change_sources(profile: Profile, sources: Mapping[str, str | None]) -> list[tuple[str, str | None, str | None]]:
     """Set or clear the read-only source folders (``downloads_root``, ``dvd_root``) and save the profile.
 
@@ -358,7 +389,7 @@ class Profile:
             ok = p.is_dir() if spec["kind"] == "dir" else p.is_file()
             if not ok:
                 raise ConfigError(f"tools.{name} points at a missing {spec['kind']}: {p}")
-            return p
+            return (_own_environment_vspipe(p) or p) if name == "vspipe" else p
         if allow_path_lookup:
             for candidate in spec["path_names"]:
                 found = shutil.which(candidate)

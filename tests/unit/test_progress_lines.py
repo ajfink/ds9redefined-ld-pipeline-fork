@@ -46,3 +46,23 @@ def test_percent_span_base_throttle_and_never_backwards():
         lp("e", f"{p}%")
     assert len(got2) == 1                                           # throttled
     assert run([("e", "version 1.2.3 build 100")]) == []            # not a percentage
+
+
+WARN = ("[orc-cli] [2026-11-23 13:27:34.198] [core] [warning] StackerStage: frames 500-999: the noise model does not "
+        "explain the inputs (pair 2-8 misfits by 41%, 15% rms over 66 pair(s)), so they are stacked with equal weights")
+REPORT = ('[orc-cli] [2026-11-23 13:40:47.106] [core] [info] StackerStage report: {"v":1,"kind":"weights",'
+          '"frames":[3001,3500],"inputs":[{"input":1,"sigma":2.66,"share":9.3}]}')
+
+
+def test_a_percentage_inside_a_log_message_is_not_progress():
+    # Seen on the Windows run: this Orc warning put the render bar at "41%" an hour into a 7-hour render.
+    assert run([("stderr-orc-cli", WARN)], label="Orc render") == []
+    got = run([("stderr-orc-cli", "[orc-cli] [1/13] field_mapping on 'Frame Map P6':  20% Running disc mapper analysis...")])
+    assert got[0][0] == 0.2
+
+
+def test_orc_stacker_blocks_give_render_progress_when_the_total_is_known():
+    got = run([("stderr-orc-cli", WARN), ("stderr-orc-cli", REPORT)], total_frames=83335, label="Orc render")
+    assert len(got) == 1 and abs(got[0][0] - 3500 / 83335) < 1e-9
+    assert got[0][1] == "Orc render frame 3500/83335"
+    assert run([("stderr-orc-cli", REPORT)]) == []                      # without a total there is nothing to scale to

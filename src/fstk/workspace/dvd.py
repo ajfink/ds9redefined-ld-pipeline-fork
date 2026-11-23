@@ -46,13 +46,18 @@ def dvd_status(manifest) -> dict:
 
 def record_dvd(store, actor: str, file: str | Path | None) -> str | None:
     """Record the DVD file, or ``None`` for "this episode has no DVD (LD-only route)". Returns the path or None."""
+    current = dvd_status(store.load())
     if file is None:
+        if current["state"] == "none":
+            return None                                  # already recorded: no new journal entry per repeated click
         with store.transaction(by=actor, reason="operator: no DVD reference for this episode") as m:
             m.set("mode.dvd_reference_available", False, by=actor, note="operator: no DVD")
         return None
     dvd = Path(file).absolute()
     if not dvd.is_file():
         raise FstkError(f"DVD file not found: {dvd}")
+    if current == {"state": "set", "path": str(dvd)}:
+        return str(dvd)
     with store.transaction(by=actor, reason=f"operator: DVD reference {dvd.name}") as m:
         m.set_artifact("dvd", path=str(dvd))
         m.set("mode.dvd_reference_available", True, by=actor, note=f"operator: {dvd}")

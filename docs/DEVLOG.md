@@ -980,3 +980,28 @@ stayed empty — no folder, no list — so it looked as if nothing had been chos
 search box, lists and selects the file (even when its name lacks the episode number) and says "Recorded for <episode>:
 <name>"; reopening an episode with a recorded DVD shows it the same way. New **Remember folder** button saves the folder
 as `sources.dvd_root` (same as Settings → Folders) so later episodes start there. Test added; full suite re-run.
+
+## CP37 — Windows run (debug bundle `fstk-debug-20261123-134506`): E20 intake done, delivery render under way
+
+What the bundle shows: the E20 intake finished on the Legion (efm-decode 5.5 h, stack-reference 18.5 h = pass 1 11.3 h + pass 2
+7.2 h; reference P6, stack sigma 1.674 vs 1.753 equal-weight, 83,335 frames with 3+ sources; EFM auto-pick M1); the DVD was
+recorded (`Z:\Video\DS9S1D5\…mkv`, probe passed, 65,944 frames, monotonic); the delivery plan started with dvd-probe (passed)
+and the 7-hour Orc lossless render (about 3 frames/s). Anomalies and what was done:
+
+- **Stale vspipe in the profile.** `tools.vspipe` still named the pre-launcher environment (`%LOCALAPPDATA%\fstk\venv`); the
+  app ran in `venvs\6e00de08`. The old one's vspipe now exits 1 ("Python executable and library path couldn't be
+  determined"), so the doctor FAILs and `tool-versions.json` has `vspipe: null`; the delivery run only survived because
+  its first steps do not call vspipe. `Profile.tool("vspipe")` now follows the running fstk environment when the profile
+  names another fstk environment's (`…/venvs/<key>` or `…/venv`); other vspipe paths are left alone.
+- **Bogus render progress.** The generic `NN%` parser matched an Orc warning ("misfits by 41%"), pinning the bar at 36 % an
+  hour into the render. Log-level lines (`[info]`, `[warning]`…) are no longer read for percentages; the Orc stacker's
+  per-block reports (`"frames":[3001,3500]`) now drive the render bar from the known frame count.
+- **Crash log noise.** `Windows fatal exception: code 0x8001010d` (COM RPC_E_CANTCALLBACK…, raised inside the Qt event loop)
+  is written by `faulthandler` although the app carried on (and the first session ended normally). A clean exit now writes
+  `--- session pid=… ended normally` to the crash log so such entries can be told from a real crash.
+- **Repeated DVD records.** The journal has five identical "DVD reference" entries (the old dialog gave no feedback, see CP36b);
+  recording the same choice again is now a no-op.
+- Informational, not changed: all 12 EFM captures are rated POOR by Orc (P8 far worse: post-C2 0.116 %, 23 missing sections);
+  the first 1,000 frames of the render log "noise model does not explain the inputs … equal weights" (title/leader frames);
+  the manifest stores absolute Windows paths (UNC capture folder, `Z:\` working and DVD folders), which another machine
+  must translate; the old `…\fstk\venv` environment is now unused and can be deleted.

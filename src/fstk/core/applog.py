@@ -136,4 +136,11 @@ def install_qt_handler() -> None:
 
 def shutdown() -> None:
     logging.getLogger("fstk.session").info("=== session end pid=%s", os.getpid())
+    crash = _state.get("crash_file")
+    if crash is not None:
+        try:      # faulthandler also writes harmless first-chance Windows exceptions; this marks a clean exit
+            crash.write(f"--- session pid={os.getpid()} ended normally {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            crash.flush()
+        except (OSError, ValueError):
+            pass
     logging.shutdown()

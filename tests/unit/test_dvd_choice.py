@@ -35,7 +35,12 @@ def test_record_dvd_states(services, tmp_path):  # noqa: F811
     assert dvd_status(store.load())["state"] == "unfiled"          # the v38 import says "available", names no file
     assert record_dvd(store, "op", hit) == str(hit)
     assert dvd_status(store.load()) == {"state": "set", "path": str(hit)}
+    n = len(store.journal())
+    assert record_dvd(store, "op", hit) == str(hit)                 # same choice again: nothing new is written
+    assert len(store.journal()) == n
     assert record_dvd(store, "op", None) is None
+    n = len(store.journal())
+    assert record_dvd(store, "op", None) is None and len(store.journal()) == n
     assert dvd_status(store.load())["state"] == "none"
     with pytest.raises(FstkError):
         record_dvd(store, "op", tmp_path / "nope.mkv")
