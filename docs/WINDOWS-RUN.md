@@ -178,6 +178,18 @@ button also show the percentage. **Pause** freezes the running tools exactly whe
 **Resume** continues from the same point. **Cancel** works while paused. **Notifications** toggles the desktop pop-ups for
 "needs your review", "step failed" and "run complete". Closing the app and reopening it shows where the episode got to.
 
+## Settings and the queue
+
+**Settings…** sets video and audio quality for every episode (Defaults) or for one episode (This episode only),
+plus folders, tools, logging and tool priority. Changing an encoded episode's settings offers a re-encode
+(encode → remux → QC only).
+
+The **Queue** tab runs several episodes unattended: select an episode, **Add to queue** → intake, delivery or
+both (or *Several episodes…*), then **Start queue**. One heavy job runs at a time; the next episode may download
+meanwhile. An item that needs a review, is blocked or fails is flagged and the queue moves on; **Retry**
+continues it later. Closing the app stops the queue cleanly and it resumes on the next start. Tick *Sleep the
+computer when the queue is done* for overnight runs.
+
 ## Mapped drives missing in the folder dialog
 Windows gives an Administrator PowerShell a separate session that cannot see mapped network drives (X:, Y:, W:).
 Start `fstk-gui` (and `setup-fstk.ps1` once Python is installed) from a **normal, non-admin** PowerShell. The setup

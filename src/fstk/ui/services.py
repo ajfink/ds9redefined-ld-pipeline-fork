@@ -483,6 +483,52 @@ class Services:
         found = sorted(d.glob("fix-preview-*.json")) if d.is_dir() else []
         return json.loads(found[-1].read_text(encoding="utf-8")) if found else None
 
+    # ---------------------------------------------------------------- queue
+    def queue_store(self):
+        from fstk.workflow.queue import QueueStore
+
+        if getattr(self, "_queue_store", None) is None:
+            self._queue_store = QueueStore(self.profile.data_root / "queue.json")
+        return self._queue_store
+
+    def queue_plan(self, episode: str, kind: str) -> Path:
+        """The plan a queue item runs, written when it starts (so it sees what earlier work measured)."""
+        if kind == "intake":
+            return self.write_intake_plan(episode)
+        if kind == "delivery":
+            return self.write_delivery_plan(episode)
+        if kind == "reencode":
+            return self.write_reencode_plan(episode)
+        raise FstkError(f"unknown queue task {kind!r}")
+
+    def queue_runner(self, *, actor: str):
+        from fstk.workflow.queue import QueueRunner
+
+        def factory(plan_path, events, priority):
+            return Engine(self.profile, load_plan(plan_path), actor=actor, events=events, priority=priority)
+
+        return QueueRunner(self.queue_store(), planner=self.queue_plan, engine_factory=factory,
+                           timings=self.timings())
+
+    @staticmethod
+    def sleep_command(os_name: str | None = None) -> list[str]:
+        import platform
+
+        system = os_name or platform.system()
+        if system == "Windows":
+            return ["powershell", "-NoProfile", "-Command",
+                    "Add-Type -AssemblyName System.Windows.Forms; "
+                    "[System.Windows.Forms.Application]::SetSuspendState('Suspend', $false, $false)"]
+        if system == "Darwin":
+            return ["pmset", "sleepnow"]
+        return ["systemctl", "suspend"]
+
+    def sleep_computer(self) -> None:
+        import subprocess
+
+        LOG_SETTINGS.info("queue done: putting the computer to sleep")
+        subprocess.Popen(self.sleep_command())
+
     # ---------------------------------------------------------------- settings
     APP_PREFS: ClassVar[dict[str, Any]] = {"operator": "", "notifications": True, "catalog_refresh_days": 30, "log_level": "INFO",
                  "priority": "below_normal"}

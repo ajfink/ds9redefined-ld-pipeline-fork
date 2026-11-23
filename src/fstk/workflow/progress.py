@@ -251,6 +251,8 @@ class ProgressTracker:
             step.status, step.finished, step.detail, step.fraction = "pending", None, "", None
         elif kind == "space-rechecked":
             step.detail = str(event.get("detail", ""))
+        elif kind == "step-waiting":                     # another run holds the heavy slot
+            step.detail = step.message = str(event.get("detail", ""))
         elif kind in ("step-failed", "step-blocked", "step-stale", "step-cancelled", "step-interrupted"):
             step.status = kind.removeprefix("step-")
             step.finished = now

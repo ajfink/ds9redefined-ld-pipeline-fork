@@ -137,10 +137,63 @@ def _descendants(plan: dict[str, Any], step_id: str) -> set[str]:
 
 
 # ------------------------------------------------------------------------------ engine
+HEAVY_RESOURCES = ("compute", "gpu")
+
+
+class HeavyGate:
+    """One heavy job at a time across every plan this app runs (owner decision 2026-11-23).
+
+    A run that holds the gate may run its own compute and GPU steps under its own limits; every other run
+    waits until it has none left. Downloads and prep steps never wait here, so the next episode can download
+    while this one stacks or encodes. When the gate frees, the waiting run with the lowest ``priority``
+    (its queue position) gets it next."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._holder: object | None = None
+        self._label = ""
+        self._count = 0
+        self._waiting: dict[object, int] = {}
+
+    def try_acquire(self, owner: object, priority: int = 1_000_000, label: str = "") -> bool:
+        with self._lock:
+            if self._holder not in (None, owner):
+                self._waiting[owner] = priority
+                return False
+            if self._holder is None and any(p < priority for o, p in self._waiting.items() if o is not owner):
+                self._waiting[owner] = priority
+                return False
+            self._waiting.pop(owner, None)
+            self._holder, self._label = owner, label
+            self._count += 1
+            return True
+
+    def release(self, owner: object) -> None:
+        with self._lock:
+            if self._holder is owner:
+                self._count -= 1
+                if self._count <= 0:
+                    self._holder, self._count, self._label = None, 0, ""
+
+    def forget(self, owner: object) -> None:
+        with self._lock:
+            self._waiting.pop(owner, None)
+            if self._holder is owner:
+                self._holder, self._count, self._label = None, 0, ""
+
+    @property
+    def holder_label(self) -> str:
+        with self._lock:
+            return self._label
+
+
+HEAVY = HeavyGate()
+
+
 class Engine:
     def __init__(self, profile: Profile, plan: dict[str, Any], *, actor: str,
                  events: EventSink | None = None, tool_overrides: dict[str, Any] | None = None,
-                 ledger: SpaceLedger | None = None):
+                 ledger: SpaceLedger | None = None, priority: int = 1_000_000):
         validate_plan(plan)
         self.profile = profile
         self.plan = plan
@@ -154,6 +207,8 @@ class Engine:
         self.tool_overrides = tool_overrides or {}
         self.ledger = ledger or SpaceLedger.for_profile(profile)
         self.cancel = threading.Event()
+        self.priority = priority
+        self._waiting_heavy: set[str] = set()
         self._progress_logged: dict[str, float] = {}
         self._state_lock = threading.Lock()
         self.state: dict[str, Any] = {}
@@ -364,35 +419,57 @@ class Engine:
         busy = {r: 0 for r in RESOURCES}
         running: dict[Future, tuple[str, str | None]] = {}
         with ThreadPoolExecutor(max_workers=max(1, sum(limits.values()) + 1)) as pool:
-            while True:
-                if self.cancel.is_set():
-                    break
-                launched = False
-                for sid in ([] if PAUSE.is_paused else self._ready()):
-                    if any(sid == v[0] for v in running.values()):
-                        continue
-                    res = get_stage(self._step(sid)["stage"]).resource
-                    if res and busy[res] >= limits[res]:
-                        continue
-                    if res:
-                        busy[res] += 1
-                    self.state["steps"][sid].update(status="running", started_utc=utc_now_iso())
-                    self._save()
-                    self._emit("step-start", step=sid)
-                    running[pool.submit(self._execute, sid)] = (sid, res)
-                    launched = True
-                if not running:
-                    if not launched:
+            try:
+                while True:
+                    if self.cancel.is_set():
                         break
-                    continue
-                done, _ = wait(list(running), return_when=FIRST_COMPLETED, timeout=0.5)
-                for fut in done:
-                    sid, res = running.pop(fut)
-                    if res:
-                        busy[res] -= 1
-                    fut.result()  # _execute never raises
-            for fut in running:
-                fut.result()
+                    launched = False
+                    held_back = PAUSE.is_paused and bool(self._ready())
+                    for sid in ([] if PAUSE.is_paused else self._ready()):
+                        if any(sid == v[0] for v in running.values()):
+                            continue
+                        res = get_stage(self._step(sid)["stage"]).resource
+                        if res and busy[res] >= limits[res]:
+                            continue
+                        if res in HEAVY_RESOURCES and not HEAVY.try_acquire(self, self.priority,
+                                                                             f"{self.episode} {sid}"):
+                            held_back = True
+                            if sid not in self._waiting_heavy:
+                                self._waiting_heavy.add(sid)
+                                self._emit("step-waiting", step=sid,
+                                           detail=f"waiting for {HEAVY.holder_label or 'another run'} "
+                                                  "(one heavy job at a time)")
+                            continue
+                        self._waiting_heavy.discard(sid)
+                        if res:
+                            busy[res] += 1
+                        self.state["steps"][sid].update(status="running", started_utc=utc_now_iso())
+                        self._save()
+                        self._emit("step-start", step=sid)
+                        running[pool.submit(self._execute, sid)] = (sid, res)
+                        launched = True
+                    if not running:
+                        if launched:
+                            continue
+                        if held_back:
+                            time.sleep(0.5)        # paused, or another run has the heavy slot: keep waiting
+                            continue
+                        break
+                    done, _ = wait(list(running), return_when=FIRST_COMPLETED, timeout=0.5)
+                    for fut in done:
+                        sid, res = running.pop(fut)
+                        if res:
+                            busy[res] -= 1
+                        if res in HEAVY_RESOURCES:
+                            HEAVY.release(self)
+                        fut.result()  # _execute never raises
+                for fut in running:
+                    fut.result()
+                    sid, res = running[fut]
+                    if res in HEAVY_RESOURCES:
+                        HEAVY.release(self)
+            finally:
+                HEAVY.forget(self)
         # mark unreachable steps
         for s in self.plan["steps"]:
             st = self.state["steps"][s["id"]]

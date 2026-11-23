@@ -352,3 +352,40 @@ def test_recheck_space_unblocks_every_space_blocked_step_when_room_appears(env, 
     # the saved state agrees, and the next run now executes them
     state = Engine(prof, p, actor="t", ledger=ledger).run()
     assert state["steps"]["a"]["status"] == "passed" and state["steps"]["b"]["status"] == "passed"
+
+
+def test_heavy_gate_runs_one_heavy_step_at_a_time_across_runs(env):
+    """Owner decision: one heavy job at a time across every plan the app runs (queue + direct runs)."""
+    import threading
+
+    prof, ws, src, ledger = env
+    ACTIVE.update(compute=0, max_compute=0)
+    events: list[dict] = []
+    first = Engine(prof, plan("h1", step("a", "t-compute"), step("b", "t-compute", after=["a"])), actor="t",
+                   ledger=ledger, priority=1)
+    second = Engine(prof, plan("h2", step("c", "t-compute")), actor="t", ledger=ledger, priority=2,
+                    events=events.append)
+    out = {}
+    threads = [threading.Thread(target=lambda e=e, k=k: out.__setitem__(k, e.run())) for k, e in
+               (("first", first), ("second", second))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(20)
+    assert ACTIVE["max_compute"] == 1
+    assert all(s["status"] == "passed" for st in out.values() for s in st["steps"].values())
+    from fstk.workflow.engine import HEAVY
+
+    assert HEAVY.holder_label == ""                               # released at the end
+
+
+def test_heavy_gate_prefers_the_lower_queue_position():
+    from fstk.workflow.engine import HeavyGate
+
+    gate, a, b, c = HeavyGate(), object(), object(), object()
+    assert gate.try_acquire(a, 5)
+    assert not gate.try_acquire(c, 9) and not gate.try_acquire(b, 2)
+    gate.release(a)
+    assert not gate.try_acquire(c, 9)            # b (position 2) is waiting and goes first
+    assert gate.try_acquire(b, 2)
+    assert gate.try_acquire(b, 2)                # the holder may run its own second heavy step

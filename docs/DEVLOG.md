@@ -818,3 +818,14 @@ only as a reviewed, opt-in source with side-by-side and in-context previews.
   (below normal by default).
 - Known: a lossy codec on the *main* LD track adds encoder priming delay (AAC ≈ 21 ms); the A/V gates would catch
   it. Container stays MKV (MP4 not offered). Queue system is next.
+
+## CP30 — Episode queue
+- `engine.HEAVY`: one heavy (compute/GPU) job at a time across every run in the app; a run holding it may run
+  its own heavy steps; waiters are served by queue position; `step-waiting` event names the holder. Downloads
+  and prep never wait. A paused engine with nothing running now waits instead of ending its run.
+- `workflow/queue.py`: `QueueStore` (`<data>/queue.json`; running items return to queued on load) and
+  `QueueRunner` (2 items at once, one per episode, later items of an episode held until earlier ones are done;
+  review/blocked/failed are flagged and skipped; Retry resumes the same job; plans written at start).
+- Queue tab: Add to queue (intake / delivery / both / re-encode / several episodes), reorder, retry, stop item,
+  remove, clear finished, sleep when done (1-minute grace, cancellable). Closing the app shuts the queue down and
+  it resumes on the next start.

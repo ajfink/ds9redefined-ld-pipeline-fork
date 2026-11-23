@@ -161,6 +161,15 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.values, "Manifest")
         self.tabs.addTab(self.jobs, "Jobs")
         self.tabs.addTab(review_page, "Reviews")
+        from fstk.ui.queue_panel import QueuePanel
+
+        self.queue_runner = services.queue_runner(actor=self.actor)
+        self.queue_panel = QueuePanel(self.queue_runner, current_episode=lambda: self.episode,
+                                      episodes=lambda: [str(e) for e in self.services.episodes()],
+                                      notify=self.notify, sleep=self.services.sleep_computer)
+        self.tabs.addTab(self.queue_panel, "Queue")
+        if self.queue_runner.running and any(i.status in ("queued", "held") for i in self.queue_runner.store.items):
+            QTimer.singleShot(3000, self._resume_queue)
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -601,13 +610,17 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         """Closing mid-run stops it cleanly: tools are ended, unfinished files removed, state saved."""
-        if self.thread is None or self.worker is None:
+        queue_busy = getattr(self, "queue_runner", None) is not None and self.queue_runner.busy()
+        if (self.thread is None or self.worker is None) and not queue_busy:
+            if getattr(self, "queue_runner", None) is not None:
+                self.queue_runner.shutdown(5)
             event.accept()
             return
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Question)
         box.setWindowTitle("A run is in progress")
-        box.setText("A plan is still running.\n\nStop it and close? Finished steps and captures are saved and "
+        box.setText(("The queue is working" if queue_busy and self.thread is None else "A plan is still running")
+                    + ".\n\nStop it and close? Finished steps and captures are saved and "
                     "picked up again next time; only the piece being worked on right now starts over.")
         stop = box.addButton("Stop and close", QMessageBox.AcceptRole)
         box.addButton("Keep running", QMessageBox.RejectRole)
@@ -616,11 +629,15 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         LOG.info("action close-while-running: stopping")
-        self.cancel_run()
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            self.thread.quit()
-            stopped = self.thread.wait(120_000)
+            stopped = True
+            if queue_busy:              # queued items go back to queued and resume next time the app opens
+                stopped = self.queue_runner.shutdown(120)
+            if self.thread is not None and self.worker is not None:
+                self.cancel_run()
+                self.thread.quit()
+                stopped = self.thread.wait(120_000) and stopped
         finally:
             QApplication.restoreOverrideCursor()
         if not stopped:
