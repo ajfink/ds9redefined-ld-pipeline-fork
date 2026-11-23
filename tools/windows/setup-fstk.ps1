@@ -83,3 +83,7 @@ Write-Host "Change the folders any time: fstk profile folders --media-root D:\so
 Step "doctor"
 & "$Venv\Scripts\fstk.exe" doctor
 Write-Host "`nfstk is in $Venv\Scripts (fstk.exe, fstk-gui.exe). Next: docs\WINDOWS-RUN.md" -ForegroundColor Green
+
+Step "desktop shortcut"
+try { & "$Repo\tools\windows\make-shortcut.ps1" -Venv $Venv -Repo $Repo }
+catch { Write-Host "shortcut not created: $_ (run tools\windows\make-shortcut.ps1 yourself)" -ForegroundColor Yellow }

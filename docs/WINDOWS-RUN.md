@@ -160,6 +160,11 @@ you move the work yourself or confirm.
 
 Nothing in this run modifies the captures, the DVD, the v38 tree, or the v38 master.
 
+## Starting the app
+Setup puts a **FromStunToKill** shortcut on the Desktop and in the Start menu; double-click it. Without it, run
+`Z:\FromStunToKill\tools\windows\FromStunToKill.cmd` (double-click), or `tools\windows\make-shortcut.ps1` to create the
+shortcuts later. Don't use "Run as administrator" (it hides mapped drives).
+
 ## Mapped drives missing in the folder dialog
 Windows gives an Administrator PowerShell a separate session that cannot see mapped network drives (X:, Y:, W:).
 Start `fstk-gui` (and `setup-fstk.ps1` once Python is installed) from a **normal, non-admin** PowerShell. The setup
