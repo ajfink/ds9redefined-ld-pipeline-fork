@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from fstk.config.profile import change_folders, default_data_root, default_media_root
+from fstk.config.profile import change_folders, change_sources, default_data_root, default_media_root
 from fstk.core.errors import FstkError
 
 
@@ -29,17 +29,24 @@ class FoldersDialog(QDialog):
         super().__init__(parent)
         self.profile = profile
         self.setWindowTitle("Folders")
-        self.resize(720, 260)
+        self.resize(760, 320)
         lay = QVBoxLayout(self)
-        lay.addWidget(QLabel("Captures and the DVD are only read. Everything fstk writes goes to these folders; "
-                             "keep the working folder on a fast local disk (it holds a ~40 GB master per episode)."))
+        lay.addWidget(QLabel("The capture and DVD folders are only read. Everything fstk writes goes to the data, working "
+                             "and finished-files folders; keep the working folder on a fast local disk "
+                             "(it holds a ~40 GB master per episode)."))
         form = QFormLayout()
         self.data = self._row(form, "Data (state, reports, logs)", str(profile.data_root), default_data_root())
         self.media = self._row(form, "Working folder (media)", str(profile.media_root), default_media_root())
         self.out = self._row(form, "Finished files (optional)", profile.roots.get("out", ""), None,
                              placeholder="inside the working folder")
+        sources = profile.sources or {}
+        self.downloads = self._row(form, "LaserDisc captures (read only)", sources.get("downloads_root", ""), None,
+                                   placeholder="folder that holds DS9-S01E20-LaserDisc-Copies and the like")
+        self.dvd = self._row(form, "DVD rips (read only)", sources.get("dvd_root", ""), None,
+                             placeholder="folder with the DVD video files (optional)")
         lay.addLayout(form)
         self.changed: list = []
+        self._sources: list = []          # saved first, so a declined 'work exists' prompt does not lose them
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.save)
         buttons.rejected.connect(self.reject)
@@ -52,6 +59,11 @@ class FoldersDialog(QDialog):
             "media": "Where the big working files go: the stacked master (~40 GB per episode), decoded audio and "
                      "encodes. Use a fast local drive with plenty of room.",
             "out": "Optional separate folder for the finished files. Blank keeps them inside the working folder.",
+            "downloads": "The folder that holds the LaserDisc capture folders (for example DS9-S01E20-LaserDisc-Copies). "
+                         "It is only read. Intake looks here first and downloads what is missing into it. Required "
+                         "before an episode's intake can run.",
+            "dvd": "The folder that holds the DVD video files. Only read; the DVD… button on the main window searches "
+                   "it for an episode's file. Optional.",
         })
         apply_common(self)
 
@@ -80,9 +92,12 @@ class FoldersDialog(QDialog):
 
     def save(self, force: bool = False) -> None:
         try:
-            self.changed = change_folders(self.profile, data_root=self.data.text().strip() or None,
-                                          media_root=self.media.text().strip() or None,
-                                          roots={"out": self.out.text().strip() or None}, force=force)
+            self._sources += change_sources(self.profile, {"downloads_root": self.downloads.text(),
+                                                           "dvd_root": self.dvd.text()})
+            folders = change_folders(self.profile, data_root=self.data.text().strip() or None,
+                                     media_root=self.media.text().strip() or None,
+                                     roots={"out": self.out.text().strip() or None}, force=force)
+            self.changed = self._sources + folders
         except FstkError as exc:
             if force:
                 QMessageBox.warning(self, "Folders not changed", str(exc))

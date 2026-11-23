@@ -952,3 +952,23 @@ plan refuses to build until the DVD reference is recorded (or declined).
   S01E20 fixture is one); the dialog tells the operator to choose the file.
 
 Tests: `tests/unit/test_dvd_choice.py` (5 cases incl. dialog and button), tooltip coverage via `missing_tips`.
+
+## CP36 — second Mac run (debug bundle `fstk-debug-20261123-133116`): no place to set the source folders
+
+State after CP34/CP35: vspipe now exits 0 in the Mac environment (the `vapoursynth config` fix worked), data and work
+folders were moved to `~/FromStunToKill/{data,work}` by the owner, the DVD… button was used. Intake of DS9:S02E01 and
+S02E02 still failed at `download`: `sources.downloads_root` is empty and the owner could not set it.
+
+- **Cause (ours):** the error said "set it in Settings → Folders", but the Folders dialog only had data / working /
+  finished-files rows; nothing in the app wrote `sources.downloads_root` or `sources.dvd_root` (only `fstk setup` did, and
+  its prompts had been skipped). The CP34 message pointed at a control that did not exist.
+- **Fix:** `change_sources()` in `config/profile.py` (sets/clears `downloads_root` and `dvd_root`, keeps the path as typed,
+  creates nothing, saves); two new rows in Settings → Folders, "LaserDisc captures (read only)" and "DVD rips (read
+  only)", with Browse and tooltips; they are saved before the data/working change so a declined "work exists" prompt
+  does not lose them.
+- Run intake / Run delivery with no episode selected used to do nothing (six clicks in the log at 13:30); they now say
+  "Pick an episode in the list on the left first."
+- Not changed: episodes created before the data folder moved (DS9:S02E02 under `/Volumes/Swap Folder/FromStunToKill`)
+  are not visible from the new data folder; the owner starts them again or moves the folder.
+
+Tests: `test_folders.py` +2 (change_sources, dialog); full suite 566 passed.

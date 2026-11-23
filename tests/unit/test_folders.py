@@ -96,3 +96,32 @@ def test_folders_dialog_saves(tmp_path):
     dlg.save()
     assert p.media_root == tmp_path / "fast" and p.roots["out"] == str(tmp_path / "done")
     assert {c[0] for c in dlg.changed} == {"media_root", "roots.out"}
+
+
+def test_change_sources_sets_clears_and_saves(tmp_path):
+    from fstk.config.profile import change_sources
+
+    p = make(tmp_path)
+    assert change_sources(p, {"downloads_root": '"/Volumes/Captures"', "dvd_root": "/Volumes/DVD"}) == [
+        ("sources.downloads_root", None, "/Volumes/Captures"), ("sources.dvd_root", None, "/Volumes/DVD")]
+    saved = Profile.load(tmp_path / "machine.json")
+    assert saved.sources == {"downloads_root": "/Volumes/Captures", "dvd_root": "/Volumes/DVD"}
+    assert change_sources(p, {"downloads_root": "/Volumes/Captures"}) == []          # unchanged: no write
+    assert change_sources(p, {"dvd_root": ""}) == [("sources.dvd_root", "/Volumes/DVD", None)]
+    assert "dvd_root" not in Profile.load(tmp_path / "machine.json").sources
+    with pytest.raises(ConfigError):
+        change_sources(p, {"cut_pad_images": "/x"})
+
+
+@pytest.mark.gui
+def test_folders_dialog_sets_the_source_folders(tmp_path, qtbot):
+    from fstk.ui.folders import FoldersDialog
+
+    p = make(tmp_path)
+    dlg = FoldersDialog(p)
+    qtbot.addWidget(dlg)
+    dlg.downloads.setText("/Volumes/Swap Folder/Captures")
+    dlg.dvd.setText("/Volumes/DVD")
+    dlg.save()
+    assert ("sources.downloads_root", None, "/Volumes/Swap Folder/Captures") in dlg.changed
+    assert Profile.load(tmp_path / "machine.json").sources["downloads_root"] == "/Volumes/Swap Folder/Captures"

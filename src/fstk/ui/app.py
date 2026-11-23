@@ -560,6 +560,7 @@ class MainWindow(QMainWindow):
     def run_intake(self) -> None:
         LOG.info("action run-intake episode=%s", self.episode)
         if not self.episode:
+            QMessageBox.information(self, "Select an episode", "Pick an episode in the list on the left first.")
             return
         try:
             path = self.services.write_intake_plan(self.episode)
@@ -571,6 +572,7 @@ class MainWindow(QMainWindow):
     def run_delivery(self) -> None:
         LOG.info("action run-delivery episode=%s", self.episode)
         if not self.episode:
+            QMessageBox.information(self, "Select an episode", "Pick an episode in the list on the left first.")
             return
         try:
             path = self.services.write_delivery_plan(self.episode)

@@ -161,6 +161,32 @@ def change_folders(profile: Profile, *, data_root: str | os.PathLike | None = No
     return [(k, str(o) if o else None, str(n) if n else None) for k, o, n in changes]
 
 
+def change_sources(profile: Profile, sources: Mapping[str, str | None]) -> list[tuple[str, str | None, str | None]]:
+    """Set or clear the read-only source folders (``downloads_root``, ``dvd_root``) and save the profile.
+
+    These hold the owner's captures and DVD rips: nothing is created or moved there, and a share that is not
+    mounted right now is still accepted (the path is kept as typed). Returns (key, old, new) per change.
+    """
+    changes: list[tuple[str, str | None, str | None]] = []
+    current = dict(profile.sources)
+    for name, value in sources.items():
+        if name not in ("downloads_root", "dvd_root"):
+            raise ConfigError(f"unknown source folder {name!r}; one of downloads_root, dvd_root")
+        new = (value or "").strip().strip('"').strip("'") or None
+        old = current.get(name) or None
+        if old == new:
+            continue
+        if new is None:
+            current.pop(name, None)
+        else:
+            current[name] = new
+        changes.append((f"sources.{name}", old, new))
+    if changes:
+        profile.sources = current
+        profile.save()
+    return changes
+
+
 def default_profile_path() -> Path:
     env = os.environ.get("FSTK_PROFILE")
     if env:
