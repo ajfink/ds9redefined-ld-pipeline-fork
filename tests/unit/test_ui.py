@@ -202,3 +202,53 @@ def test_refresh_icons_stay_hidden_on_unblocked_rows_when_the_window_is_shown(se
     qtbot.wait(200)                                     # let the table run its layout passes
     p = w.progress_panel
     assert p.refresh_buttons["a"].isVisible() and not p.refresh_buttons["b"].isVisible()
+
+
+def test_closing_the_window_mid_run_asks_then_stops_the_run(services, monkeypatch):
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QCloseEvent
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from fstk.ui.app import MainWindow
+
+    QApplication.instance() or QApplication([])
+    win = MainWindow(services)
+    idle = QCloseEvent()
+    win.closeEvent(idle)
+    assert idle.isAccepted()                                  # nothing running: closes straight away
+
+    class FakeThread:
+        def __init__(self):
+            self.calls = []
+
+        def quit(self):
+            self.calls.append("quit")
+
+        def wait(self, ms):
+            self.calls.append("wait")
+            return True
+
+    class FakeEngine:
+        def __init__(self):
+            import threading
+
+            self.cancel = threading.Event()
+            self.resumed = False
+
+        def resume(self):
+            self.resumed = True
+
+    win.thread, win.worker = FakeThread(), type("W", (), {"engine": FakeEngine()})()
+    answers = iter(["Keep running", "Stop and close"])
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: None)
+    monkeypatch.setattr(QMessageBox, "clickedButton",
+                        lambda self: next(b for b in self.buttons() if b.text() == next_answer[0]))
+    next_answer = [next(answers)]
+    keep = QCloseEvent()
+    win.closeEvent(keep)
+    assert not keep.isAccepted() and not win.worker.engine.cancel.is_set()
+    next_answer[0] = next(answers)
+    stop = QCloseEvent()
+    win.closeEvent(stop)
+    assert stop.isAccepted() and win.worker.engine.cancel.is_set() and win.thread.calls == ["quit", "wait"]
+    assert QEvent  # (import kept for Qt type clarity)

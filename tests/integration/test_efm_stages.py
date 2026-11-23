@@ -305,3 +305,39 @@ def test_plan_estimates_space_from_field_count(env):
     _, _, _, dl = env
     size, basis = estimate_wav_bytes(next(dl.glob("*-L1.tbc.json")), "NTSC")
     assert basis.startswith("600 fields") and size == int(600 / (60000 / 1001) * 176400 * 1.02)
+
+
+def test_stopped_run_keeps_finished_decodes_and_resumes_with_the_rest(env):
+    """Closing the app mid-run: captures already decoded are kept, the one in progress is cleaned up and
+    not recorded as a failure, and the next run decodes only what is left."""
+    from fstk.core.errors import ToolError
+
+    prof, ws, ledger, _ = env
+    _stack(env)
+    holder = {}
+
+    class StoppingOrc(FakeOrc):
+        def decode_efm(self, project, orc_log, **kw):
+            label = re.search(r'user_label: "TBC Source (.+)"', Path(project).read_text(encoding="utf-8")).group(1)
+            if label == "P1":
+                Path(_value(Path(project).read_text(encoding="utf-8"), "output_path")).write_bytes(b"partial")
+                holder["engine"].cancel.set()
+                raise ToolError("killed")
+            return super().decode_efm(project, orc_log, **kw)
+
+    plan = {"schema": PLAN_SCHEMA, "episode": str(EP), "job": "stop1", "steps": [DECODE]}
+    holder["engine"] = Engine(prof, plan, actor="op", ledger=ledger, tool_overrides={"orc": StoppingOrc()})
+    state = holder["engine"].run()
+    assert state["steps"]["efm"]["status"] == "cancelled", state["steps"]["efm"]
+    m = ws.store.load()
+    assert not m.get("audio.efm_provenance") and not m.get("audio.efm_decode_failures")
+    assert not list((prof.root("audio", EP) / "efm").rglob("P1-efm.wav*"))      # the partial file is gone
+    assert not list(prof.root("references", EP).glob("*.partial"))
+    assert not list(prof.root("reports", EP).glob("efm-provenance-P1-*"))        # not recorded as FAILED
+
+    orc = FakeOrc()
+    state = run(env, [DECODE], "stop2", orc=orc)
+    assert state["steps"]["efm"]["status"] == "passed", state["steps"]["efm"]
+    assert [c[0] for c in orc.calls] == ["P1", "P6"]                              # L1 was not decoded again
+    assert "resuming finished decode(s) ['L1']" in state["steps"]["efm"]["plan_summary"]
+    assert sorted(ws.store.load().get("audio.efm_provenance")) == LABELS

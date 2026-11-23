@@ -70,6 +70,32 @@ def _downloads_present(ctx, manifest):
 LOSSLESS_MASTER_CODECS = ("ffv1",)
 
 
+def _text_sha(text: str, paths: dict[str, Path] | None = None) -> str:
+    """Key of a refresh: the project text plus the size and time of every capture it reads."""
+    import hashlib
+
+    parts = [text]
+    for label, p in sorted((paths or {}).items()):
+        try:
+            st = Path(p).stat()
+            parts.append(f"{label}:{st.st_size}:{st.st_mtime_ns}")
+        except OSError:
+            parts.append(f"{label}:missing")
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def _load_pass(path: Path, order: list[str], key: str) -> dict | None:
+    """A saved refresh result, only if it was made from exactly this project text and source order."""
+    try:
+        data = read_json(path) if path.is_file() else None
+    except (OSError, ValueError):
+        return None
+    if (isinstance(data, dict) and data.get("order") == order and data.get("project_sha256") == key
+            and isinstance(data.get("decision"), dict) and "orc_exit" in data):
+        return data
+    return None
+
+
 @register
 class StackReference(Stage):
     id = "stack-reference"
@@ -119,10 +145,18 @@ class StackReference(Stage):
                                        f"{ctx.episode.code} weighted stack (pass {n})")
             project = scratch / f"pass{n}.orcprj"
             atomic_write_bytes(project, text.encode("utf-8"))
-            refreshed = orc.refresh(project, log_name=f"orc-refresh-pass{n}", cancel=ctx.cancel)
-            decision = source_alignment_decision(refreshed.report, order)
-            passes.append({"pass": n, "order": order, "orc_exit": refreshed.process.returncode,
-                           "decision": decision})
+            saved = _load_pass(scratch / f"pass{n}.result.json", order, _text_sha(text, paths))
+            if saved is not None:                       # this refresh finished before an earlier run stopped
+                ctx.report(n / MAX_REFERENCE_PASSES, f"refresh pass {n}: reusing the saved result")
+                decision, exit_code = saved["decision"], saved["orc_exit"]
+            else:
+                refreshed = orc.refresh(project, log_name=f"orc-refresh-pass{n}", cancel=ctx.cancel)
+                decision = source_alignment_decision(refreshed.report, order)
+                exit_code = refreshed.process.returncode
+                atomic_write_json(scratch / f"pass{n}.result.json",
+                                  {"order": order, "project_sha256": _text_sha(text, paths), "orc_exit": exit_code,
+                                   "decision": decision})
+            passes.append({"pass": n, "order": order, "orc_exit": exit_code, "decision": decision})
             if decision["suggested_label"] == first:
                 final_project_text = project.read_text(encoding="utf-8")
                 break

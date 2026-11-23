@@ -184,3 +184,20 @@ def test_existing_lossless_master_is_reused_and_a_lossy_one_refused(env):
     state = run(env, [REF, RENDER], "q2", orc=FakeOrc(), ffmpeg=FakeFF(codec="prores"))
     assert state["steps"]["render"]["status"] == "failed"
     assert any("not lossless" in i for i in state["steps"]["render"]["issues"])
+
+
+def test_finished_refresh_passes_are_reused_after_a_stop(env):
+    from fstk.core.errors import ToolError
+
+    class Dies(FakeOrc):
+        def refresh(self, project, **kw):
+            if self.refreshes >= 1:                 # the second pass is cut off (app closed)
+                raise ToolError("killed")
+            return super().refresh(project, **kw)
+
+    first = Dies(preferred="P6")
+    assert run(env, [REF], "ref-a", orc=first)["steps"]["ref"]["status"] == "failed"
+    again = FakeOrc(preferred="P6")
+    state = run(env, [REF], "ref-b", orc=again)
+    assert state["steps"]["ref"]["status"] == "passed", state["steps"]["ref"]
+    assert again.refreshes == 1                     # pass 1 came from the saved result; only pass 2 ran

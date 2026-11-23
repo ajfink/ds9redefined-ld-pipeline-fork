@@ -796,3 +796,9 @@ only as a reviewed, opt-in source with side-by-side and in-context previews.
 - `diagnostics.py` / `fstk bundle` / GUI **Save debug bundle…** + **Open logs**: zip of logs, environment (doctor, versions,
   free space, admin?), profile, ledger, timings, and per episode manifest, plans, job state, tool logs (tail-capped);
   home folder → `~`, user name → `<user>`; no media.
+
+## CP28 — restart-safe progress
+- Closing the window mid-run asks, then stops the run cleanly (tools ended, state saved) instead of orphaning it.
+- `efm-decode`: a stopped run is no longer recorded as a failed capture; the unfinished capture's partial files are removed (markers also let the next start sweep leftovers from a hard kill); captures already verified are saved to `reports/efm-decode-progress.json` and adopted by the next run, so only the rest is decoded.
+- `stack-reference`: each finished Orc refresh pass is saved in scratch (keyed by project text + capture sizes/times) and reused after a restart.
+- Still restarts from the beginning of the step: encode, cadence, QC and other single long processes.

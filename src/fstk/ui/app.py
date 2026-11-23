@@ -580,6 +580,34 @@ class MainWindow(QMainWindow):
         self.append_log(f"Archive catalog check skipped (keeping current snapshot): {message}")
         self._catalog_end()
 
+    def closeEvent(self, event) -> None:
+        """Closing mid-run stops it cleanly: tools are ended, unfinished files removed, state saved."""
+        if self.thread is None or self.worker is None:
+            event.accept()
+            return
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("A run is in progress")
+        box.setText("A plan is still running.\n\nStop it and close? Finished steps and captures are saved and "
+                    "picked up again next time; only the piece being worked on right now starts over.")
+        stop = box.addButton("Stop and close", QMessageBox.AcceptRole)
+        box.addButton("Keep running", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is not stop:
+            event.ignore()
+            return
+        LOG.info("action close-while-running: stopping")
+        self.cancel_run()
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            self.thread.quit()
+            stopped = self.thread.wait(120_000)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if not stopped:
+            LOG.warning("run did not stop within 120 s; closing anyway (saved state is kept)")
+        event.accept()
+
     def cancel_run(self) -> None:
         if self.worker and self.worker.engine:
             self.worker.engine.cancel.set()

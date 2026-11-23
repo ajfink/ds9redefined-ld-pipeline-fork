@@ -32,14 +32,16 @@
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import os
 import secrets
 import shutil
 from pathlib import Path
 from typing import Any
 
-from fstk.core.errors import ArtifactError, GateError, ToolError
+from fstk.core.errors import ArtifactError, GateError, ToolError, WorkflowError
 from fstk.core.fsio import atomic_write_json, read_json
 from fstk.core.hashing import SCOPE_HEAD_TAIL, head_tail_sha256, sha256_file
 from fstk.core.timeutil import utc_now_iso, utc_stamp
@@ -152,6 +154,65 @@ def estimate_wav_bytes(json_path: Path, video_format: str) -> tuple[int, str]:
     return int(seconds * PCM_BYTES_PER_SECOND * 1.02), f"{fields} fields / {FIELD_RATES[video_format]:.3f} Hz"
 
 
+PROGRESS_NAME = "efm-decode-progress.json"
+
+
+def _progress_path(ctx) -> Path:
+    return ctx.root("reports") / PROGRESS_NAME
+
+
+def _load_progress(ctx) -> dict[str, dict]:
+    """Verified decodes finished by a run that was stopped before the step committed them."""
+    path = _progress_path(ctx)
+    try:
+        data = read_json(path) if path.is_file() else {}
+    except (OSError, ValueError):
+        return {}
+    return {k: v for k, v in (data.get("captures") or {}).items() if isinstance(v, dict)}
+
+
+def _save_progress(ctx, captures: dict[str, dict]) -> None:
+    atomic_write_json(_progress_path(ctx), {"schema": "fstk-efm-decode-progress-v1", "captures": captures})
+
+
+def _partial_paths(item: dict) -> list[Path]:
+    keys = ("wav", "report", "project", "orc_log", "extract_to")
+    return [Path(item[k]) for k in keys if item.get(k)]
+
+
+def _marker_path(item: dict) -> Path:
+    return Path(str(item["project"]) + ".partial")
+
+
+def _discard_partial(item: dict) -> None:
+    """Remove what an unfinished decode of this capture left behind (never a finished, verified one)."""
+    if Path(item["provenance"]).exists():
+        return
+    for p in _partial_paths(item):
+        with contextlib.suppress(OSError):
+            if p.is_file() or p.is_symlink():
+                p.unlink()
+    with contextlib.suppress(OSError):
+        _marker_path(item).unlink()
+
+
+def _sweep_dead_partials(ctx) -> None:
+    """A run that was killed (crash, power loss) cannot clean up: its markers name the partial files."""
+    import psutil
+
+    for marker in ctx.root("references").glob("efm-decode-*.orcprj.partial"):
+        try:
+            data = read_json(marker)
+            if data.get("pid") == os.getpid() or psutil.pid_exists(int(data.get("pid", 0))):
+                continue
+            for name in data.get("paths", []):
+                with contextlib.suppress(OSError):
+                    Path(name).unlink()
+            marker.unlink()
+        except (OSError, ValueError):
+            continue
+
+
 def _record_still_valid(ctx, record: dict) -> tuple[bool, str, dict | None]:
     """Latest provenance entry → (still valid?, why, provenance report)."""
     try:
@@ -207,6 +268,8 @@ class EfmDecode(Stage):
         run = f"{utc_stamp()[:15].lower()}-{secrets.token_hex(3)}"
         audio_dir = ctx.root("audio") / "efm" / run
         todo, kept, inputs, outputs = [], {}, [], []
+        adopted: dict[str, dict] = {}
+        saved = {} if params.get("redecode") else _load_progress(ctx)
         wav_bytes, basis = 0, []
         for cap in caps:
             label = cap["label"]
@@ -215,6 +278,11 @@ class EfmDecode(Stage):
                 ok, why, _ = _record_still_valid(ctx, history[-1])
                 if ok:
                     kept[label] = why
+                    continue
+            if label in saved:
+                ok, why, _ = _record_still_valid(ctx, saved[label])
+                if ok:
+                    adopted[label] = saved[label]      # finished before an earlier run was stopped
                     continue
             files = cap["files"]
             tbc = _safe_source(folder, files["tbc"]["name"], f"{label} TBC")
@@ -251,9 +319,11 @@ class EfmDecode(Stage):
                                   + "; ".join(basis))
         summary = (f"decode {len(todo)} capture(s) [{', '.join(t['label'] for t in todo)}]" if todo
                    else "nothing to decode") + (f"; keeping verified {sorted(kept)}" if kept else "")
+        if adopted:
+            summary += f"; resuming finished decode(s) {sorted(adopted)} from an interrupted run"
         return StepPlan(self.id, params, inputs=inputs, outputs=outputs, space=space,
                         input_scope={str(p): SCOPE_HEAD_TAIL for p in inputs}, summary=summary,
-                        data={"run": run, "todo": todo, "kept": kept, "formats": [video, source, amplitude],
+                        data={"run": run, "todo": todo, "kept": kept, "adopted": adopted, "formats": [video, source, amplitude],
                               "formats_from": formats_from, "audio_dir": str(audio_dir)})
 
     # -- one capture
@@ -295,6 +365,7 @@ class EfmDecode(Stage):
                                     efm=decode_input.resolve(), wav=wav.resolve(strict=False),
                                     video_format=video, source_format=source, amplitude_unit=amplitude)
         project.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(_marker_path(item), {"pid": os.getpid(), "paths": [str(p) for p in _partial_paths(item)]})
         with project.open("x", encoding="utf-8", newline="\n") as stream:
             stream.write(text)
         wav.parent.mkdir(parents=True, exist_ok=True)
@@ -340,6 +411,8 @@ class EfmDecode(Stage):
             "selection_note": "provenance only; this report does not rank or select the audio capture",
         }
         atomic_write_json(prov_path, prov)
+        with contextlib.suppress(OSError):
+            _marker_path(item).unlink()
         return {"report_path": _rel(prov_path, ctx.profile.episode_state_dir(ctx.episode)),
                 "report_sha256": sha256_file(prov_path), "wav_sha256": prov["wav"]["sha256"],
                 "verified_utc": prov["created_utc"], "run": plan.data["run"]}
@@ -352,15 +425,25 @@ class EfmDecode(Stage):
         if todo:
             orc = ctx.tool("orc")
             plan.data["orc_version"] = orc.identity() if hasattr(orc, "identity") else {"version": orc.version()}
+        _sweep_dead_partials(ctx)
         merged = {k: list(v) for k, v in (ctx.manifest.get("audio.efm_provenance") or {}).items()}
         failures = dict(ctx.manifest.get("audio.efm_decode_failures") or {})
         added, failed = {}, {}
+        progress = _load_progress(ctx)
+        for label, entry in (plan.data.get("adopted") or {}).items():
+            merged.setdefault(label, []).append(entry)
+            added[label] = entry
+            failures.pop(label, None)
         for n, item in enumerate(todo):
             ctx.check_cancel()
             ctx.report(n / max(1, len(todo)), f"[{n + 1} of {len(todo)}] {item['label']}: starting")
             try:
                 entry = self._decode_one(ctx, plan, item, (n + 1, len(todo)))
             except (ArtifactError, GateError, ToolError) as exc:
+                if ctx.cancel.is_set():       # stopped by the operator or a closing app: not a failed capture
+                    _discard_partial(item)
+                    raise WorkflowError("cancelled by operator") from exc
+                _discard_partial(item)
                 failed[item["label"]] = {"run": plan.data["run"], "reason": str(exc)[:2000],
                                          "efm_bytes": item["specs"]["efm"].get("bytes"), "utc": utc_now_iso()}
                 prov = Path(item["provenance"])
@@ -370,6 +453,11 @@ class EfmDecode(Stage):
                                              "created_utc": utc_now_iso(), "reason": str(exc),
                                              "orc_version": plan.data.get("orc_version", "unknown")})
                 continue
+            except BaseException:
+                _discard_partial(item)
+                raise
+            progress[item["label"]] = entry
+            _save_progress(ctx, progress)       # kept even if the run is stopped before the step commits
             merged.setdefault(item["label"], []).append(entry)
             added[item["label"]] = entry
             failures.pop(item["label"], None)
