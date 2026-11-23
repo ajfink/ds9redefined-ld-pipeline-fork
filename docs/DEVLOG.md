@@ -788,3 +788,11 @@ only as a reviewed, opt-in source with side-by-side and in-context previews.
 - CP26 follow-up (first real use): refresh icons showed on every row (Qt force-shows direct cell widgets: now inside a
   container); "lock held" when the job is running in another window: friendly message, saved state followed live
   (`job_runner`, 3 s watch, running steps shown as running instead of interrupted).
+
+## CP27 — logging and debug bundle
+- `core/applog.py`: rotating `fstk.log` (5×5 MB) under `<home>\logs` — GUI actions, every engine event (progress every 30 s),
+  every tool command + exit, warnings/errors, uncaught exceptions (main and threads) with tracebacks, Qt warnings;
+  `fstk-crash.log` via faulthandler for hard crashes. Started by the GUI and the real CLI (not by tests).
+- `diagnostics.py` / `fstk bundle` / GUI **Save debug bundle…** + **Open logs**: zip of logs, environment (doctor, versions,
+  free space, admin?), profile, ledger, timings, and per episode manifest, plans, job state, tool logs (tail-capped);
+  home folder → `~`, user name → `<user>`; no media.

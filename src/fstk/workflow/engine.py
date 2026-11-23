@@ -25,7 +25,9 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import threading
+import time
 import traceback
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
@@ -46,6 +48,7 @@ from fstk.stages.base import RESOURCES, StageContext, StepOutput, StepPlan, get_
 from fstk.tools.process import PAUSE
 from fstk.workspace.space import SpaceLedger
 
+LOG = logging.getLogger("fstk.engine")
 PLAN_SCHEMA = "fstk-workflow-plan-v1"
 STATE_SCHEMA = "fstk-workflow-state-v1"
 TERMINAL = ("passed", "failed", "cancelled", "blocked")
@@ -151,6 +154,7 @@ class Engine:
         self.tool_overrides = tool_overrides or {}
         self.ledger = ledger or SpaceLedger.for_profile(profile)
         self.cancel = threading.Event()
+        self._progress_logged: dict[str, float] = {}
         self._state_lock = threading.Lock()
         self.state: dict[str, Any] = {}
 
@@ -215,9 +219,24 @@ class Engine:
 
     # ---------------------------------------------------------------- state
     def _emit(self, kind: str, **data) -> None:
+        self._log_event(kind, data)
         if self.events:
             with contextlib.suppress(Exception):  # observers never break a run
                 self.events({"kind": kind, "utc": utc_now_iso(), "job": self.job, **data})
+
+    def _log_event(self, kind: str, data: dict) -> None:
+        """Every event goes to the application log; progress only every 30 s per step (it is frequent)."""
+        with contextlib.suppress(Exception):
+            sid = data.get("step", "")
+            if kind == "progress":
+                now = time.monotonic()
+                last = self._progress_logged.get(sid, -1e9)
+                if now - last < 30:
+                    return
+                self._progress_logged[sid] = now
+            detail = {k: v for k, v in data.items() if k not in ("step",)}
+            level = logging.WARNING if kind in ("step-failed", "step-blocked", "tool-version-drift") else logging.INFO
+            LOG.log(level, "%s job=%s step=%s %s", kind, self.job, sid, detail if detail else "")
 
     def _record_tool_versions(self) -> None:
         """Trace which tool/library versions this run used; report drift (never blocks a run)."""

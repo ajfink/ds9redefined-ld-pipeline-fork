@@ -125,8 +125,13 @@ The finished file is in `…\FromStunToKill\work\ds9-s01e20\out\` (or your finis
 
 ## If something fails
 
-Check where a job stands: `fstk status DS9:S01E20 <job>` (the job name is the plan file name).
-Send back:
+**Easiest:** click **Save debug bundle…** in the app (or run `fstk bundle --episode DS9:S01E20`) and send me the zip.
+It holds the application log, the crash log, settings, job state and every step's tool log (long ones cut to their last
+part), with your user name and home folder blanked out and no media. **Open logs** opens the folder
+(`%USERPROFILE%\FromStunToKill\logs`: `fstk.log` records every button action, every engine event and every tool
+command; `fstk-crash.log` catches hard crashes of the app itself).
+
+By hand: check where a job stands with `fstk status DS9:S01E20 <job>` (the job name is the plan file name). Send back:
 
 1. the failing **stage** and its **issues** (from `fstk status`, or the app's job panel),
 2. the stage's **log** from `…\FromStunToKill\data\episodes\DS9\S01E20\logs\` (newest files),

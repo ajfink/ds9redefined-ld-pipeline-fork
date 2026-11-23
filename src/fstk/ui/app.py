@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import contextlib
 import getpass
+import logging
 import os
 import socket
 import sys
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, QUrl, Signal, Slot
@@ -51,6 +53,7 @@ from fstk.ui.progress_panel import ProgressPanel
 from fstk.ui.services import Services, describe_field
 from fstk.workflow.progress import ProgressTracker, describe_job_state
 
+LOG = logging.getLogger("fstk.ui")
 STATUS_COLOURS = {"passed": "#2e7d32", "failed": "#c62828", "blocked": "#ef6c00",
                   "awaiting-review": "#1565c0", "running": "#6a1b9a", "pending": "#616161",
                   "cancelled": "#616161"}
@@ -183,6 +186,12 @@ class MainWindow(QMainWindow):
         self.folders_button = QPushButton("Folders…")
         self.folders_button.setToolTip("Where fstk keeps its state and does its work")
         self.folders_button.clicked.connect(self.open_folders)
+        self.bundle_button = QPushButton("Save debug bundle…")
+        self.bundle_button.setToolTip("Zip the logs, settings, job state and tool logs (no media) to send for a bug report")
+        self.bundle_button.clicked.connect(self.save_bundle)
+        self.logs_button = QPushButton("Open logs")
+        self.logs_button.setToolTip("Open the folder with the application log and crash log")
+        self.logs_button.clicked.connect(self.open_logs)
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.cancel_run)
@@ -223,6 +232,11 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.notify_button)
         bar.addWidget(self.folders_button)
         cl.addLayout(bar)
+        bar2 = QHBoxLayout()
+        bar2.addStretch(1)
+        bar2.addWidget(self.logs_button)
+        bar2.addWidget(self.bundle_button)
+        cl.addLayout(bar2)
 
         split = QSplitter(Qt.Orientation.Vertical)
         top = QSplitter(Qt.Orientation.Horizontal)
@@ -427,6 +441,7 @@ class MainWindow(QMainWindow):
 
     def open_remove(self) -> None:
         episode = self.episode
+        LOG.info("action remove-open episode=%s", episode)
         if not episode:
             return
         if self.thread is not None:
@@ -451,6 +466,35 @@ class MainWindow(QMainWindow):
                 self.values.setRowCount(0)
                 self.jobs.setRowCount(0)
 
+    def open_logs(self) -> None:
+        from fstk.core.applog import log_dir
+
+        d = log_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        LOG.info("action open-logs")
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(d)))
+
+    def save_bundle(self) -> None:
+        from fstk.config.profile import default_app_home
+        from fstk.diagnostics import build_bundle
+
+        default = default_app_home() / "bundles" / f"fstk-debug-{time.strftime('%Y%m%d-%H%M%S')}.zip"
+        path, _ = QFileDialog.getSaveFileName(self, "Save debug bundle", str(default), "Zip (*.zip)")
+        if not path:
+            return
+        LOG.info("action save-bundle path=%s episode=%s", path, self.episode)
+        try:
+            res = build_bundle(self.services.profile, path, episodes=[self.episode] if self.episode else None)
+        except (OSError, FstkError) as exc:
+            LOG.exception("debug bundle failed")
+            QMessageBox.warning(self, "Could not save the bundle", str(exc))
+            return
+        self.append_log(f"debug bundle saved: {res['path']} ({res['files']} files, {res['bytes'] / 1e6:.1f} MB)")
+        QMessageBox.information(self, "Debug bundle saved",
+                                f"{res['path']}\n\n{res['files']} files, {res['bytes'] / 1e6:.1f} MB. "
+                                "It contains logs, settings and job state, no media.")
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(res["path"]).parent)))
+
     def open_folders(self) -> None:
         from fstk.ui.folders import FoldersDialog
 
@@ -460,6 +504,7 @@ class MainWindow(QMainWindow):
             self.refresh()
 
     def run_intake(self) -> None:
+        LOG.info("action run-intake episode=%s", self.episode)
         if not self.episode:
             return
         try:
@@ -470,6 +515,7 @@ class MainWindow(QMainWindow):
         self.start_plan(str(path))
 
     def run_delivery(self) -> None:
+        LOG.info("action run-delivery episode=%s", self.episode)
         if not self.episode:
             return
         try:
@@ -541,6 +587,7 @@ class MainWindow(QMainWindow):
         self.append_log("cancel requested")
 
     def toggle_pause(self) -> None:
+        LOG.info("action pause-toggle")
         engine = self.worker.engine if self.worker else None
         if engine is None:
             return
@@ -703,21 +750,33 @@ class MainWindow(QMainWindow):
         self._done()
 
     def append_log(self, text: str) -> None:
+        LOG.info("%s", text)
         self.log.appendPlainText(text)
 
 
 def main(argv: list[str] | None = None) -> int:
+    real_run = argv is None
     argv = list(sys.argv[1:] if argv is None else argv)
     app = QApplication.instance() or QApplication([sys.argv[0], *argv])
+    if real_run:                                     # not a test: keep an application log and catch crashes
+        from fstk.core import applog
+
+        applog.setup_logging()
+        applog.install_qt_handler()
     profile = argv[argv.index("--profile") + 1] if "--profile" in argv else None
     try:
         services = Services.load(profile)
     except FstkError as exc:
         QMessageBox.critical(None, "FromStunToKill", str(exc))
         return 2
+    if real_run:
+        applog.log_environment(services.profile)
     window = MainWindow(services)
     window.show()
-    return app.exec()
+    code = app.exec()
+    if real_run:
+        applog.shutdown()
+    return code
 
 
 if __name__ == "__main__":

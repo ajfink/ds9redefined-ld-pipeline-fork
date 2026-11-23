@@ -19,6 +19,7 @@ blackdetect and the downloader exit non-zero on success and zero on truncation).
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import signal
 import subprocess
@@ -33,6 +34,7 @@ from typing import IO
 from fstk.core.errors import ToolError
 from fstk.core.timeutil import utc_now_iso
 
+LOG = logging.getLogger("fstk.process")
 LineCallback = Callable[[str, str], None]  # (stream_name, line)
 TAIL_LINES = 60
 STOP_GRACE_SECONDS = 8.0
@@ -288,6 +290,7 @@ def run_pipeline(commands: Sequence[Sequence[str | os.PathLike]], *, log_path: P
     tail: deque[str] = deque(maxlen=TAIL_LINES)
     started = time.monotonic()
     log.write(f"\n[{utc_now_iso()}] RUN: {' | '.join(_display(a) for a in argv)}\n")
+    LOG.info("RUN %s%s", " | ".join(_display(a) for a in argv)[:600], f"  (log {log_path})" if log_path else "")
     procs: list[subprocess.Popen] = []
     threads: list[threading.Thread] = []
     sink: list[bytes] | None = [] if capture_stdout else None
@@ -351,6 +354,9 @@ def run_pipeline(commands: Sequence[Sequence[str | os.PathLike]], *, log_path: P
                                        cancelled, timed_out) for i, p in enumerate(procs)]
         failing = next((r.returncode for r in stage_results if r.returncode not in (0,)), 0)
         rc = failing if len(procs) > 1 else procs[0].returncode
+        LOG.log(logging.INFO if not failing and not cancelled and not timed_out else logging.WARNING,
+                "EXIT %s after %.1fs%s%s", [p.returncode for p in procs], duration,
+                " (cancelled)" if cancelled else "", " (timed out)" if timed_out else "")
         log.write(f"[{utc_now_iso()}] EXIT: {[p.returncode for p in procs]} after {duration:.1f}s"
                   f"{' (cancelled)' if cancelled else ''}{' (timed out)' if timed_out else ''}\n")
         return ProcessResult(argv[-1] if len(argv) == 1 else argv[0], rc, duration,

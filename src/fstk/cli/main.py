@@ -10,6 +10,7 @@ import getpass
 import json
 import socket
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -259,6 +260,17 @@ def cmd_status(args) -> int:
         return 0
     for sid, st in state["steps"].items():
         print(f"{sid:24} {st['status']:16} {'; '.join(st.get('issues') or [])}")
+    return 0
+
+
+def cmd_bundle(args) -> int:
+    from fstk.config.profile import default_app_home
+    from fstk.diagnostics import build_bundle
+
+    out = Path(args.out) if args.out else default_app_home() / "bundles" / f"fstk-debug-{time.strftime('%Y%m%d-%H%M%S')}.zip"
+    profile = None if args.no_profile else _profile(args)
+    res = build_bundle(profile, out, episodes=[args.episode] if args.episode else None)
+    _print(args, res, f"wrote {res['path']} ({res['files']} files, {res['bytes'] / 1e6:.1f} MB)")
     return 0
 
 
@@ -657,6 +669,11 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("episode")
     st.add_argument("job")
     st.set_defaults(func=cmd_status)
+    bd = sub.add_parser("bundle", help="zip the logs, environment, profile and job state for bug reports (no media)")
+    bd.add_argument("--episode", help="only this episode, e.g. DS9:S01E20 (default: all)")
+    bd.add_argument("--out", help="zip file to write (default: <FromStunToKill home>\\bundles)")
+    bd.add_argument("--no-profile", action="store_true")
+    bd.set_defaults(func=cmd_bundle)
     d = sub.add_parser("doctor", help="read-only readiness report")
     d.add_argument("--no-profile", action="store_true", help="check the Python environment only")
     d.set_defaults(func=cmd_doctor)
@@ -665,9 +682,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if argv is None:                       # a real command line (not a test calling main([...])): keep a log
+        from fstk.core.applog import setup_logging
+
+        setup_logging()
     try:
         return int(args.func(args) or 0)
     except FstkError as exc:
+        import logging
+
+        logging.getLogger("fstk.cli").error("%s: %s", args.func.__name__, exc)
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
