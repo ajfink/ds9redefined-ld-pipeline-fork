@@ -52,32 +52,52 @@ def display_aspect(sar: str, width: int, height: int) -> str:
     return f"{num * width}:{den * height}"
 
 
-PRESETS = ("ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow")
+PRESETS = ("ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow",
+           "placebo")
 DEFAULT_PRESET = "slow"
 
 
 def final_encode_args(*, aspect: str, frames: int, duration_s: float, capture: str, out: str,
-                      chroma: str | None = None, preset: str = DEFAULT_PRESET) -> list[str]:
-    """FFmpeg arguments after the ``-f yuv4mpegpipe -i -`` input (v38 recipe; chroma per episode)."""
+                      chroma: str | None = None, preset: str | None = None, settings=None,
+                      pass_no: int | None = None, stats: str | None = None) -> list[str]:
+    """FFmpeg arguments after the ``-f yuv4mpegpipe -i -`` input.
+
+    ``settings`` (``fstk.config.output.OutputSettings``) picks the encoder and quality; without it the
+    v38 recipe is used (x265 CRF 14 / slow / tune grain). ``chroma``/``preset`` override the settings
+    (per-episode chroma decision; smoke-run presets). Pass 1 of a two-pass encode writes nowhere."""
+    from fstk.config.output import DEFAULTS, OutputSettings, video_args
+
     if frames <= 0 or duration_s <= 0:
         raise ArtifactError("measured frames and duration are required for the final encode")
-    spec = chroma_spec(chroma)
-    if preset not in PRESETS:
-        raise ArtifactError(f"unknown x265 preset {preset!r}")
-    return ["-map", "0:v:0", "-an", "-sn", "-aspect", aspect,
-            "-c:v", "libx265", "-profile:v", spec["x265_profile"], "-pix_fmt", spec["pix_fmt"],
-            "-crf", "14", "-preset", preset, "-tune", "grain", "-x265-params", X265_PARAMS,
+    if settings is None:
+        settings = OutputSettings(dict(DEFAULTS["video"]), dict(DEFAULTS["audio"]))
+    video = dict(settings.video)
+    if chroma is not None:
+        chroma_spec(chroma)
+        video["chroma"] = chroma
+    if preset is not None:
+        video["preset"] = preset
+    enc = settings.encoder
+    if video["chroma"] not in enc.chromas:
+        raise ArtifactError(f"{enc.label} cannot encode {video['chroma']} chroma")
+    if enc.presets and str(video["preset"]) not in enc.presets:
+        raise ArtifactError(f"unknown {enc.label} preset {video['preset']!r}")
+    settings = OutputSettings(video, settings.audio, settings.overridden)
+    codec = video_args(settings, base_params=X265_PARAMS, pass_no=pass_no, stats=stats)
+    target = ["-f", "null", "-"] if pass_no == 1 else [out]
+    title = ["-metadata:s:v:0", f"title=LaserDisc {capture}, measured IVTC with source PAD repairs, 23.976p"]
+    return ["-map", "0:v:0", "-an", "-sn", "-aspect", aspect, *codec,
             "-color_primaries", "smpte170m", "-color_trc", "smpte170m",
             "-colorspace", "smpte170m", "-color_range", "tv",
             "-frames:v", str(frames), "-t", str(duration_s),
-            "-metadata:s:v:0", f"title=LaserDisc {capture}, measured IVTC with source PAD repairs, 23.976p",
-            "-max_muxing_queue_size", "8192", out]
+            *([] if pass_no == 1 else title),
+            "-max_muxing_queue_size", "8192", *target]
 
 
 def check_encoded_stream(stream: dict[str, Any], *, probe_frames: int, decoded_frames: int | None,
                          decode_errors: list[str], duration_s: float | None, expected_frames: int,
                          expected_duration_s: float, expected_raster: tuple[int, int] | None,
-                         chroma: str | None = None) -> list[str]:
+                         chroma: str | None = None, expected: dict[str, Any] | None = None) -> list[str]:
     """v38 ``validate_encoded_video`` checks, returned as issues (empty = pass)."""
     issues = []
     if probe_frames != expected_frames:
@@ -85,8 +105,10 @@ def check_encoded_stream(stream: dict[str, Any], *, probe_frames: int, decoded_f
     if expected_raster and (stream.get("width"), stream.get("height")) != expected_raster:
         issues.append(f"encoded raster is {stream.get('width')}x{stream.get('height')}, "
                       f"expected {expected_raster[0]}x{expected_raster[1]}")
-    spec = chroma_spec(chroma)
-    if stream.get("profile") != spec["profile"]:
+    spec = expected or chroma_spec(chroma)
+    if spec.get("codec_name") and stream.get("codec_name") != spec["codec_name"]:
+        issues.append(f"encoded codec is {stream.get('codec_name')!r}, expected {spec['codec_name']}")
+    if spec.get("profile") and stream.get("profile") != spec["profile"]:
         issues.append(f"encoded profile is {stream.get('profile')!r}, expected {spec['profile']}")
     if stream.get("pix_fmt") != spec["pix_fmt"]:
         issues.append(f"encoded pixel format is {stream.get('pix_fmt')!r}, expected {spec['pix_fmt']}")

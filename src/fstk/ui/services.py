@@ -6,11 +6,14 @@ safe to call from a worker thread except where noted.
 """
 from __future__ import annotations
 
+import contextlib
 import json
+import logging
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from fstk.config.profile import Profile
 from fstk.core.errors import FstkError
@@ -19,6 +22,19 @@ from fstk.core.identity import EpisodeId
 from fstk.manifest.registry import FIELDS, field_def
 from fstk.stages.base import get_stage
 from fstk.workflow.engine import Engine, EpisodeWorkspace, load_plan
+
+LOG_SETTINGS = logging.getLogger("fstk.ui")
+
+
+def apply_app_prefs(profile) -> None:
+    """Apply the machine-wide app preferences that take effect immediately (log level, tool priority)."""
+    from fstk.tools.process import set_priority
+
+    prefs = profile.ui or {}
+    with contextlib.suppress(ValueError):
+        set_priority(str(prefs.get("priority") or "below_normal"))
+    if prefs.get("log_level") and not os.environ.get("FSTK_LOG_LEVEL"):
+        logging.getLogger("fstk").setLevel(getattr(logging, str(prefs["log_level"]), logging.INFO))
 
 
 @dataclass(frozen=True)
@@ -466,6 +482,151 @@ class Services:
         d = self.profile.root("reports", self.workspace(episode).episode)
         found = sorted(d.glob("fix-preview-*.json")) if d.is_dir() else []
         return json.loads(found[-1].read_text(encoding="utf-8")) if found else None
+
+    # ---------------------------------------------------------------- settings
+    APP_PREFS: ClassVar[dict[str, Any]] = {"operator": "", "notifications": True, "catalog_refresh_days": 30, "log_level": "INFO",
+                 "priority": "below_normal"}
+
+    def app_prefs(self) -> dict[str, Any]:
+        return {**self.APP_PREFS, **(self.profile.ui or {})}
+
+    def save_app_prefs(self, prefs: dict[str, Any]) -> None:
+        from fstk.tools.process import PRIORITIES
+
+        merged = {**self.app_prefs(), **prefs}
+        unknown = sorted(set(merged) - set(self.APP_PREFS))
+        if unknown:
+            raise FstkError(f"unknown app setting(s) {unknown}")
+        if merged["log_level"] not in ("INFO", "DEBUG", "WARNING"):
+            raise FstkError("log level must be INFO, DEBUG or WARNING")
+        if merged["priority"] not in PRIORITIES:
+            raise FstkError(f"process priority must be one of {PRIORITIES}")
+        if not (1 <= int(merged["catalog_refresh_days"]) <= 365):
+            raise FstkError("catalog check interval must be 1–365 days")
+        self.profile.ui = {k: merged[k] for k in self.APP_PREFS}
+        self.profile.save()
+        apply_app_prefs(self.profile)
+
+    def save_limits(self, *, min_free_gb: float) -> None:
+        if not (min_free_gb > 0):
+            raise FstkError("the free-space reserve must be more than 0 GiB")
+        self.profile.limits.min_free_gb = float(min_free_gb)
+        self.profile.save()
+
+    def save_tools(self, tools: dict[str, str]) -> None:
+        self.profile.tools = {k: v for k, v in tools.items() if v.strip()}
+        self.profile.save()
+
+    def tool_status(self) -> list[dict[str, str]]:
+        from fstk.tools.requirements import check_requirements
+
+        return check_requirements(self.profile)
+
+    def output_defaults(self) -> dict[str, dict[str, Any]]:
+        from fstk.config.output import machine_defaults
+
+        return machine_defaults(self.profile)
+
+    def save_output_defaults(self, group: str, values: dict[str, Any]) -> None:
+        from fstk.config.output import DEFAULTS, validate_group
+
+        problems = validate_group(group, values)
+        if problems:
+            raise FstkError("; ".join(problems))
+        self.profile.output = {**(self.profile.output or {}), group: {**DEFAULTS[group], **values}}
+        self.profile.save()
+
+    def project_output(self, episode: str | EpisodeId) -> dict[str, dict[str, Any]]:
+        """This episode's own groups only (a group missing here uses the machine defaults)."""
+        return dict(self.workspace(episode).store.load().get("settings.output") or {})
+
+    def save_project_output(self, episode: str | EpisodeId, group: str, values: dict[str, Any] | None, *,
+                            actor: str) -> None:
+        """Set this episode's own settings for one group, or ``None`` to go back to the machine defaults."""
+        from fstk.config.output import DEFAULTS, describe_audio, describe_video, effective, validate_group
+
+        if values is not None:
+            problems = validate_group(group, values)
+            if problems:
+                raise FstkError("; ".join(problems))
+        ws = self.workspace(episode)
+        current = dict(ws.store.load().get("settings.output") or {})
+        if values is None:
+            if group not in current:
+                return
+            current.pop(group)
+        else:
+            current[group] = {**DEFAULTS[group], **values}
+        with ws.store.transaction(by=actor, reason=f"{group} output settings changed for this episode") as m:
+            if current:
+                m.set("settings.output", current, by=actor, note=f"{group}: "
+                      + ("this episode's own settings" if values is not None else "back to the defaults"))
+            else:
+                m.unset("settings.output", by=actor, reason=f"{group}: back to the defaults")
+            s = effective(self.profile, m)
+        LOG_SETTINGS.info("episode=%s %s settings: %s", ws.episode, group,
+                          describe_video(s) if group == "video" else describe_audio(s))
+
+    def output_summary(self, episode: str | EpisodeId | None = None) -> dict[str, str]:
+        from fstk.config.output import describe_audio, describe_video, effective
+
+        m = self.workspace(episode).store.load() if episode else None
+        s = effective(self.profile, m)
+        has_51 = None
+        if m is not None:
+            tracks = m.get("deliverable.mux_tracks")
+            has_51 = ("51" in tracks) if tracks else None
+        return {"video": describe_video(s), "audio": describe_audio(s, has_51=has_51),
+                "overridden": ", ".join(s.overridden)}
+
+    def available_encoders(self) -> set[str]:
+        """FFmpeg encoder names this machine's FFmpeg offers (empty if FFmpeg cannot be run)."""
+        import subprocess
+
+        if getattr(self, "_encoders", None) is None:
+            try:
+                exe = str(self.profile.tool("ffmpeg"))
+                text = subprocess.run([exe, "-hide_banner", "-encoders"], capture_output=True, text=True,
+                                      timeout=20).stdout
+                self._encoders = {line.split()[1] for line in text.splitlines()
+                                  if len(line.split()) > 1 and line.startswith(" ") and line.split()[0][:1] in "VA"}
+            except Exception:  # missing tool, timeout: treat as unknown
+                self._encoders = set()
+        return self._encoders
+
+    def has_encode(self, episode: str | EpisodeId) -> bool:
+        return bool(self.workspace(episode).store.load().artifact("padfixed_video"))
+
+    def write_reencode_plan(self, episode: str | EpisodeId) -> Path:
+        """A fresh encode from the master with the current output settings: encode → remux → QC → report.
+        Nothing earlier is redone; the previous files are kept (new revisions are numbered)."""
+        from fstk.core.fsio import atomic_write_json
+        from fstk.core.timeutil import utc_stamp
+        from fstk.workflow.engine import PLAN_SCHEMA, validate_plan
+        from fstk.workflow.plans import ENCODE_BYTES_PER_OUTPUT_FRAME
+
+        ws = self.workspace(episode)
+        m = ws.store.load()
+        if not m.artifact("padfixed_video"):
+            raise FstkError("this episode has not been encoded yet; its first encode will use these settings")
+        frames = int(m.get("video.frames") or 0)
+        job = f"reencode-{utc_stamp()[:15].lower()}"
+        chain = [("encode", "encode-final"), ("remux", "remux"), ("qc", "qc-report"),
+                 ("episode-report", "episode-report")]
+        steps, prev = [], None
+        for sid, stage in chain:
+            params: dict[str, Any] = {}
+            if stage == "encode-final":
+                params = {"planned_gib": round(frames * ENCODE_BYTES_PER_OUTPUT_FRAME / 2**30, 2),
+                          "estimate_basis": f"{frames} output frames × {ENCODE_BYTES_PER_OUTPUT_FRAME} B "
+                                            "(raised by the encoder's own estimate when larger)"}
+            steps.append({"id": sid, "stage": stage, "after": [prev] if prev else [], "params": params})
+            prev = sid
+        plan = {"schema": PLAN_SCHEMA, "episode": ws.episode.canonical, "job": job, "steps": steps}
+        validate_plan(plan)
+        path = ws.state_dir / "plans" / f"{job}.plan.json"
+        atomic_write_json(path, plan)
+        return path
 
     def write_fixes_plan(self, episode: str | EpisodeId, *, fixes: list[dict[str, Any]], actor: str) -> Path:
         """Record the operator's frame fixes and plan a fresh encode from the master with them:

@@ -119,11 +119,14 @@ def read_frame_list(path: Path) -> list[int]:
 
 # --------------------------------------------------------------------------- stream inventory
 def stream_inventory(streams: list[dict], fmt: dict, tracks: list[str], duration_s: float,
-                     chroma: str | None = None) -> Gate:
+                     chroma: str | None = None, *, video_expected: dict | None = None,
+                     audio_layout: list[dict] | None = None) -> Gate:
+    """``video_expected``/``audio_layout`` are what the encode and remux recorded from the output settings;
+    without them (v38-era and older deliverables) the original x265 + FLAC expectations apply."""
     vid = [s for s in streams if s.get("codec_type") == "video"]
     aud = [s for s in streams if s.get("codec_type") == "audio"]
     sub = [s for s in streams if s.get("codec_type") == "subtitle"]
-    want_a = 2 if "51" in tracks else 1
+    want_a = len(audio_layout) if audio_layout else (2 if "51" in tracks else 1)
     want_s = 1 if "srt" in tracks else 0
     problems = []
 
@@ -139,8 +142,10 @@ def stream_inventory(streams: list[dict], fmt: dict, tracks: list[str], duration
         v = vid[0]
         from fstk.media.encode import chroma_spec
 
-        spec = chroma_spec(chroma)
-        if v.get("profile") != spec["profile"]:
+        spec = video_expected or chroma_spec(chroma)
+        if spec.get("codec_name") and v.get("codec_name") != spec["codec_name"]:
+            problems.append(f"codec={v.get('codec_name')}")
+        if (spec.get("profile") and v.get("profile") != spec["profile"]) or (not video_expected and v.get("profile") != spec["profile"]):
             problems.append(f"profile={v.get('profile')}")
         if v.get("pix_fmt") != spec["pix_fmt"]:
             problems.append(f"pix_fmt={v.get('pix_fmt')}")
@@ -155,29 +160,31 @@ def stream_inventory(streams: list[dict], fmt: dict, tracks: list[str], duration
     if len(aud) != want_a:
         problems.append(f"audio streams={len(aud)} want {want_a}")
     else:
-        a0 = aud[0]
-        if (a0.get("codec_name") != "flac" or a0.get("channels") != 2 or str(a0.get("sample_rate")) != "44100"
-                or str(a0.get("bits_per_raw_sample")) not in ("16", "24")):
-            # 24-bit since the exact-ratio resampler (fstk.media.resample); 16-bit for v38-built tracks
-            problems.append("LD track is not 44.1 kHz 16/24-bit FLAC stereo")
-        if disp(a0).get("default") != 1:
-            problems.append("LD is not the default track")
-        if tags(a0).get("language") != "eng":
-            problems.append("LD missing language=eng")
-        if tags(a0).get("title") != "LD 2.0 (original Dolby Surround)":
-            problems.append("LD track title is missing or unexpected")
-        if want_a == 2:
-            a1 = aud[1]
-            if (a1.get("codec_name") != "flac" or a1.get("channels") != 6 or str(a1.get("sample_rate")) != "48000"
-                    or str(a1.get("bits_per_raw_sample")) != "24"):
-                problems.append(f"5.1 track wrong: {a1.get('codec_name')} {a1.get('channels')}ch/"
-                                f"{a1.get('sample_rate')}Hz/{a1.get('bits_per_raw_sample')}bit")
-            if disp(a1).get("default") != 0:
-                problems.append("5.1 must be non-default")
-            if tags(a1).get("language") != "eng":
-                problems.append("5.1 missing language=eng")
-            if tags(a1).get("title") != "DVD 5.1 (retimed)":
-                problems.append("5.1 track title is missing or unexpected")
+        layout = audio_layout or ([{"role": "ld", "codec_name": "flac", "channels": 2, "default": True,
+                                     "title": "LD 2.0 (original Dolby Surround)"}]
+                                   + ([{"role": "51", "codec_name": "flac", "channels": 6, "default": False,
+                                        "title": "DVD 5.1 (retimed)"}] if want_a == 2 else []))
+        for a, t in zip(aud, layout, strict=True):
+            role = {"ld": "LD", "51": "5.1", "compat": "compatibility"}.get(t["role"], t["role"])
+            if t["role"] == "ld" and t["codec_name"] == "flac":
+                if (a.get("codec_name") != "flac" or a.get("channels") != 2 or str(a.get("sample_rate")) != "44100"
+                        or str(a.get("bits_per_raw_sample")) not in ("16", "24")):
+                    # 24-bit since the exact-ratio resampler (fstk.media.resample); 16-bit for v38-built tracks
+                    problems.append("LD track is not 44.1 kHz 16/24-bit FLAC stereo")
+            elif t["role"] == "51" and t["codec_name"] == "flac" and not audio_layout:
+                if (a.get("codec_name") != "flac" or a.get("channels") != 6 or str(a.get("sample_rate")) != "48000"
+                        or str(a.get("bits_per_raw_sample")) != "24"):
+                    problems.append(f"5.1 track wrong: {a.get('codec_name')} {a.get('channels')}ch/"
+                                    f"{a.get('sample_rate')}Hz/{a.get('bits_per_raw_sample')}bit")
+            elif a.get("codec_name") != t["codec_name"] or int(a.get("channels") or 0) != t["channels"]:
+                problems.append(f"{role} track is {a.get('codec_name')} {a.get('channels')}ch, expected "
+                                f"{t['codec_name']} {t['channels']}ch")
+            if disp(a).get("default") != (1 if t["default"] else 0):
+                problems.append(f"{role} is not the default track" if t["default"] else f"{role} must be non-default")
+            if tags(a).get("language") != "eng":
+                problems.append(f"{role} missing language=eng")
+            if tags(a).get("title") != t["title"]:
+                problems.append(f"{role} track title is missing or unexpected")
     if len(sub) != want_s:
         problems.append(f"subtitle streams={len(sub)} want {want_s}")
     elif sub:
@@ -198,7 +205,8 @@ def stream_inventory(streams: list[dict], fmt: dict, tracks: list[str], duration
     if problems:
         return Gate("stream inventory", "FAIL", "; ".join(problems), summary)
     return Gate("stream inventory", "PASS",
-                f"1 video Main10 768x484 23.976, {len(aud)} audio (LD default), {len(sub)} subtitle, "
+                f"1 video {(video_expected or {}).get('codec_name', 'hevc')} 768x484 23.976, {len(aud)} audio "
+                f"(LD default), {len(sub)} subtitle, "
                 f"{dur:.6f}s, {fmt.get('size')} bytes", summary)
 
 

@@ -195,6 +195,10 @@ class Profile:
     #: Named volumes reachable from several machines (e.g. the capture disk shared from the Flex):
     #: the same name on every machine, each with its own mount path (ADR 0002 §3).
     volumes: dict[str, str] = field(default_factory=dict)
+    #: Default output settings per group (``video``, ``audio``; see ``fstk.config.output``).
+    output: dict[str, dict] = field(default_factory=dict)
+    #: App preferences: operator name, notifications, catalog check interval, log level, process priority.
+    ui: dict[str, object] = field(default_factory=dict)
     path: Path | None = None
 
     # ------------------------------------------------------------------ construction
@@ -218,7 +222,9 @@ class Profile:
                        allow_newer_packages=bool(data.get("allow_newer_packages", False)),
                        notes=list(data.get("notes") or []),
                        catalog_path=str(data.get("catalog_path") or ""),
-                       volumes=dict(data.get("volumes") or {}), path=path)
+                       volumes=dict(data.get("volumes") or {}),
+                       output={k: dict(v) for k, v in (data.get("output") or {}).items()},
+                       ui=dict(data.get("ui") or {}), path=path)
         except KeyError as exc:
             raise ConfigError(f"{path or 'profile'}: missing required key {exc.args[0]!r}") from None
         prof.validate()
@@ -238,6 +244,8 @@ class Profile:
             "allow_newer_packages": self.allow_newer_packages, "notes": list(self.notes),
             **({"catalog_path": self.catalog_path} if self.catalog_path else {}),
             **({"volumes": dict(sorted(self.volumes.items()))} if self.volumes else {}),
+            **({"output": {k: dict(v) for k, v in sorted(self.output.items())}} if self.output else {}),
+            **({"ui": dict(sorted(self.ui.items()))} if self.ui else {}),
         }
 
     @classmethod

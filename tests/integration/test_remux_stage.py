@@ -63,10 +63,13 @@ def test_remux_needs_no_review_and_proves_identity(env):
     assert st["status"] == "passed", st.get("issues")                     # owner: no remux review
     report = json.loads((prof.root("reports", EP) / "remux.json").read_text())
     assert report["status"] == "PASS" and all(r["match"] for r in report["identity"])
-    assert [r["stream"] for r in report["identity"]] == ["video", "LD audio", "DVD 5.1"]
+    assert [r["stream"] for r in report["identity"]] == ["video", "LD audio", "DVD 5.1", "compatibility audio"]
     streams = FFmpeg("ffmpeg", "ffprobe").probe(prof.root("out", EP) / "S01E20-23.976-padfixed.mkv").streams
     audio = [s.raw for s in streams if s.codec_type == "audio"]
     assert audio[0]["disposition"]["default"] == 1 and audio[1]["disposition"]["default"] == 0
+    assert audio[2]["codec_name"] == "aac" and audio[2]["disposition"]["default"] == 0   # compatibility track last
+    layout = ws.store.load().get("deliverable.audio_layout")
+    assert [t["role"] for t in layout] == ["ld", "51", "compat"]
     # an A/V-check rerun remuxes again: a new version, the first one untouched
     first = (prof.root("out", EP) / "S01E20-23.976-padfixed.mkv").read_bytes()
     assert run(env, "m1-rerun")["steps"]["mux"]["status"] == "passed"
@@ -82,3 +85,17 @@ def test_overlong_track_is_caught_by_packet_identity(env):
     st = run(env, "m2")["steps"]["mux"]
     assert st["status"] == "failed" and any("LD audio packet hash changed" in i for i in st["issues"])
     assert not (prof.root("out", EP) / "S01E20-23.976-padfixed.mkv").exists()
+
+
+def test_remux_follows_the_episode_audio_settings(env):
+    prof, ws, _ = env
+    with ws.store.transaction(by="op", reason="settings") as m:
+        m.set("settings.output", {"audio": {"stereo_codec": "opus", "stereo_bitrate": 256, "include_51": False,
+                                            "compat": False}}, by="op")
+    st = run(env, "m-settings")["steps"]["mux"]
+    assert st["status"] == "passed", st.get("issues")
+    out = prof.root("out", EP) / "S01E20-23.976-padfixed.mkv"
+    audio = [s.raw for s in FFmpeg("ffmpeg", "ffprobe").probe(out).streams if s.codec_type == "audio"]
+    assert [a["codec_name"] for a in audio] == ["opus"]
+    report = json.loads((prof.root("reports", EP) / "remux.json").read_text())
+    assert all(r["match"] for r in report["identity"])          # identity checked against the encoded file

@@ -64,9 +64,27 @@ class ProcessResult:
         return f"{Path(self.args[0]).name} {status} after {self.duration_s:.1f}s\n{tail}"
 
 
+#: Priority of the tools fstk starts: "normal", "below_normal" (default; keeps the computer usable) or "idle".
+PRIORITY = {"value": "below_normal"}
+PRIORITIES = ("normal", "below_normal", "idle")
+
+
+def set_priority(value: str) -> None:
+    if value not in PRIORITIES:
+        raise ValueError(f"priority must be one of {PRIORITIES}")
+    PRIORITY["value"] = value
+
+
 def _popen_kwargs() -> dict:
     if os.name == "nt":
-        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        flag = {"normal": 0, "below_normal": 0x00004000, "idle": 0x00000040}[PRIORITY["value"]]
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | flag}
+    nice = {"normal": 0, "below_normal": 10, "idle": 19}[PRIORITY["value"]]
+    if nice:
+        def lower() -> None:
+            with contextlib.suppress(OSError):
+                os.nice(nice)
+        return {"start_new_session": True, "preexec_fn": lower}
     return {"start_new_session": True}
 
 

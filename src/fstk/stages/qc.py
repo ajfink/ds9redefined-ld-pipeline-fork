@@ -305,7 +305,9 @@ class QcReport(Stage):
             hashes["video"] = vh
             ldh = ff.packet_md5(deliverable, "0:a:0")
             ld_key = "ld_audio_finished" if m.artifact("ld_audio_finished") else m.get("deliverable.ld_audio_source")
-            src = source(ld_key)
+            delivered = {t["role"]: Path(t["file"]) for t in (m.get("deliverable.audio_layout") or [])
+                         if t.get("file") and Path(t["file"]).is_file()}
+            src = delivered.get("ld") or source(ld_key)
             src_h = ff.packet_md5(src, "0:a:0") if src else None
             rec = (m.get("qc.ld_audio_md5") or "").lower()
             if src_h and ldh != src_h:
@@ -319,7 +321,7 @@ class QcReport(Stage):
                 gates.append(Gate("LD audio hash", "PASS", ldh + (" (source match)" if src_h else " (manifest match)")))
             hashes["ld"] = ldh
             if "51" in tracks:
-                src = source("retimed_51")
+                src = delivered.get("51") or source("retimed_51")
                 if src is None:
                     raise FstkError("retimed DVD 5.1 source missing")
                 a, b = ff.packet_md5(deliverable, "0:a:1"), ff.packet_md5(src, "0:a:0")
@@ -328,6 +330,15 @@ class QcReport(Stage):
                 gates.append(Gate("DVD 5.1 hash", "PASS" if ok else "FAIL",
                                   f"out={a} src={b}" + (f" manifest={rec}" if rec else "")))
                 hashes["fiveone"] = a
+            compat = next((i for i, t in enumerate(m.get("deliverable.audio_layout") or [])
+                           if t["role"] == "compat"), None)
+            if compat is not None:
+                src = delivered.get("compat")
+                a = ff.packet_md5(deliverable, f"0:a:{compat}")
+                b = ff.packet_md5(src, "0:a:0") if src else None
+                gates.append(Gate("compatibility audio hash", "PASS" if a == b else ("FAIL" if b else "ERROR"),
+                                  f"out={a} src={b}" if b else "the encoded compatibility track is missing"))
+                hashes["compat"] = a
             if "srt" in tracks:
                 src = source("retimed_srt")
                 if src is None:
@@ -347,6 +358,10 @@ class QcReport(Stage):
         d = plan.data
         deliverable = Path(d["deliverable"])
         tracks = list(m.get("deliverable.tracks") or ["ld"])
+        layout = m.get("deliverable.audio_layout")
+        if layout:          # what the remux actually delivered under the output settings
+            tracks = ["ld", *(["51"] if any(t["role"] == "51" for t in layout) else []),
+                      *(["srt"] if "srt" in tracks else [])]
         dvd = m.get("mode.dvd_reference_available")
         duration = float(m.require("video.duration_s"))
         evidence: dict = {}
@@ -373,7 +388,10 @@ class QcReport(Stage):
         ff = ctx.tool("ffmpeg")
         info = ff.probe(deliverable)
         raw = [s.raw for s in info.streams]
-        inventory = stream_inventory(raw, info.format, tracks, duration, m.get("mode.chroma_output"))
+        encoding = m.get("deliverable.video_encoding") or None
+        inventory = stream_inventory(raw, info.format, tracks, duration,
+                                     (encoding or {}).get("chroma") or m.get("mode.chroma_output"),
+                                     video_expected=encoding, audio_layout=layout)
         gates.append(inventory)
         audio_count = sum(1 for s in raw if s.get("codec_type") == "audio")
         ctx.report(0.7, "audio seekability")

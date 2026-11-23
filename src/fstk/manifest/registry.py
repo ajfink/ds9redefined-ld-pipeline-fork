@@ -98,6 +98,14 @@ def _unique(values: list) -> str | None:
     return None if len(set(values)) == len(values) else "values must be unique"
 
 
+def _output_groups(value: dict) -> str | None:
+    from fstk.config.output import validate_group
+
+    problems = [p for g, v in value.items() for p in (validate_group(g, v) if isinstance(v, dict)
+                                                      else [f"{g}: must be a dict"])]
+    return "; ".join(problems) or None
+
+
 def _tracks(values: list) -> str | None:
     bad = [v for v in values if v not in ("ld", "51", "srt")]
     if bad:
@@ -259,6 +267,13 @@ FIELDS: tuple[FieldDef, ...] = (
        extra_check=_tracks),
     _F("deliverable.ld_audio_source", "setting", "str", "Artifact key of the LD audio for remux",
        v38="ld_audio_source"),
+    _F("settings.output", "setting", "dict",
+       "This episode's own output settings, per group (video, audio); a missing group uses the machine defaults",
+       extra_check=lambda v: _output_groups(v)),
+    _F("deliverable.video_encoding", "record", "dict",
+       "Settings and expected stream properties of the verified final encode (QC checks against it)"),
+    _F("deliverable.audio_layout", "record", "list",
+       "Delivered audio tracks in order (role, codec, channels, title, default), written by remux"),
     # ---------------------------------------------------------------- records
     _F("audio.capture_selection", "record", "dict", "EFM capture selection decision",
        v38="audio.capture_selection"),

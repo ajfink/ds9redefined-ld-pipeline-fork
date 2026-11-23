@@ -802,3 +802,19 @@ only as a reviewed, opt-in source with side-by-side and in-context previews.
 - `efm-decode`: a stopped run is no longer recorded as a failed capture; the unfinished capture's partial files are removed (markers also let the next start sweep leftovers from a hard kill); captures already verified are saved to `reports/efm-decode-progress.json` and adopted by the next run, so only the rest is decoded.
 - `stack-reference`: each finished Orc refresh pass is saved in scratch (keyed by project text + capture sizes/times) and reused after a restart.
 - Still restarts from the beginning of the step: encode, cadence, QC and other single long processes.
+
+## CP29 — Settings window, output settings (defaults + per episode)
+- `fstk.config.output`: six software encoders (x265 10/12-bit, x264 10/8-bit, SVT-AV1 10-bit, FFV1). x265 always
+  `-tune grain`; colour range always limited; average-bitrate mode = two passes (x26x only). Audio: LD stereo
+  (FLAC default) · DVD 5.1 when present (FLAC default) · lossy compatibility stereo (AAC 256 default, owner: on).
+- Defaults in the profile (`output`), per-episode groups in the manifest (`settings.output`, whole-group override).
+- `encode-final` uses the effective settings, records `deliverable.video_encoding` (QC checks codec/profile/pix_fmt
+  against it). `remux` encodes non-FLAC tracks to their own files first, stream-copies them (identity proof kept),
+  records `deliverable.audio_layout`; LD stays a:0 and DVD 5.1 a:1, compatibility last. QC follows both records;
+  older deliverables keep the original x265/FLAC expectations.
+- UI: Settings… (General, Folders, Video, Audio, Output, Processing, Tools, Logging) with a scope switch; saving
+  episode settings for an encoded episode offers a re-encode plan (encode → remux → QC → report).
+- App prefs in the profile (`ui`): operator name, notifications, catalog interval, log level, tool priority
+  (below normal by default).
+- Known: a lossy codec on the *main* LD track adds encoder priming delay (AAC ≈ 21 ms); the A/V gates would catch
+  it. Container stays MKV (MP4 not offered). Queue system is next.

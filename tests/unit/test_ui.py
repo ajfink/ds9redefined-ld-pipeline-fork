@@ -252,3 +252,69 @@ def test_closing_the_window_mid_run_asks_then_stops_the_run(services, monkeypatc
     win.closeEvent(stop)
     assert stop.isAccepted() and win.worker.engine.cancel.is_set() and win.thread.calls == ["quit", "wait"]
     assert QEvent  # (import kept for Qt type clarity)
+
+
+def _settings_dialog(services, episode=None):
+    from PySide6.QtWidgets import QApplication
+
+    from fstk.ui.settings import SettingsDialog
+
+    QApplication.instance() or QApplication([])
+    services._encoders = {"libx265", "libx264", "libsvtav1", "ffv1"}
+    return SettingsDialog(services, episode, None, actor="op")
+
+
+def test_settings_defaults_scope_saves_to_the_profile(services, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(services.profile, "save", lambda *a, **k: None)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: pytest.fail(f"warning: {a[2]}"))
+    dlg = _settings_dialog(services)
+    v = dlg.video
+    assert v.values()["encoder"] == "x265-10" and v.values()["quality"] == 14 and v.values()["tune"] == "grain"
+    assert not v.tune.isEnabled()                                    # x265: grain is permanent
+    v.encoder.setCurrentIndex(v.encoder.findData("av1-10"))
+    assert v.values()["chroma"] == "420" and v.chroma.count() == 1      # SVT-AV1 is 4:2:0 only
+    v.quality.setValue(v.quality.value() + 2)                          # two steps towards higher quality
+    assert v.values()["quality"] == 18
+    dlg.audio.compat.setChecked(False)
+    dlg.operator.setText("Andy")
+    dlg.save()
+    assert services.profile.output["video"]["encoder"] == "av1-10"
+    assert services.profile.output["audio"]["compat"] is False
+    assert services.app_prefs()["operator"] == "Andy"
+
+
+def test_settings_episode_scope_overrides_then_returns_to_defaults(services, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: pytest.fail(f"warning: {a[2]}"))
+    dlg = _settings_dialog(services, "S01E20")
+    dlg.scope.setCurrentIndex(1)
+    assert dlg.video.use_defaults.isChecked() and not dlg.pages["General"].isEnabled()
+    dlg.audio.use_defaults.setChecked(False)
+    codec, rate = dlg.audio.rows["stereo"]
+    codec.setCurrentIndex(codec.findData("opus"))
+    assert rate.isEnabled() and rate.currentData() == 192
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: asked.append(1) or QMessageBox.StandardButton.No)
+    dlg.save()
+    own = services.project_output("S01E20")
+    assert own["audio"]["stereo_codec"] == "opus" and "video" not in own
+    assert asked == [1] and services.has_encode("S01E20")             # the imported episode is already encoded
+    assert "Opus 192 kb/s" in services.output_summary("S01E20")["audio"]
+    dlg = _settings_dialog(services, "S01E20")
+    dlg.scope.setCurrentIndex(1)
+    assert not dlg.audio.use_defaults.isChecked()
+    dlg.audio.use_defaults.setChecked(True)
+    dlg.save()
+    assert services.project_output("S01E20") == {}
+
+
+def test_reencode_plan_runs_only_encode_onwards(services):
+    ws = services.workspace("S01E20")
+    if not ws.store.load().artifact("padfixed_video"):
+        with ws.store.transaction(by="t", reason="fixture") as m:
+            m.set_artifact("padfixed_video", root="out", name="S01E20-23.976-padfixed-video.mkv")
+    plan = json.loads(services.write_reencode_plan("S01E20").read_text())
+    assert [s["stage"] for s in plan["steps"]] == ["encode-final", "remux", "qc-report", "episode-report"]

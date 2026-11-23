@@ -329,10 +329,11 @@ def status(profile, *, now: datetime | None = None) -> dict:
     path = resolve_path(profile)
     catalog = load_catalog(path)
     when = generated_at(catalog)
+    days = int((getattr(profile, "ui", None) or {}).get("catalog_refresh_days") or MAX_AGE.days)
     return {
         "path": str(path),
         "generated_at_utc": when.isoformat() if when else None,
-        "stale": is_stale(catalog, now=now),
+        "stale": is_stale(catalog, now=now, max_age=timedelta(days=days)),
         "explicit": bool(getattr(profile, "catalog_path", "")),
-        "max_age_days": MAX_AGE.days,
+        "max_age_days": days,
     }

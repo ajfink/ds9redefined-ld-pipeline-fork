@@ -106,7 +106,8 @@ class MainWindow(QMainWindow):
     def __init__(self, services: Services, *, actor: str | None = None):
         super().__init__()
         self.services = services
-        self.actor = actor or f"{getpass.getuser()}@{socket.gethostname()}"
+        self.actor = actor or str((services.profile.ui or {}).get("operator") or "").strip() \
+            or f"{getpass.getuser()}@{socket.gethostname()}"
         self.thread: QThread | None = None
         self.worker: PlanWorker | None = None
         self.setWindowTitle(f"FromStunToKill — {services.profile.machine}")
@@ -183,6 +184,9 @@ class MainWindow(QMainWindow):
         self.handoff_button.clicked.connect(self.ask_handoff)
         self.run_button = QPushButton("Run plan…")
         self.run_button.clicked.connect(self.choose_and_run)
+        self.settings_button = QPushButton("Settings…")
+        self.settings_button.setToolTip("Video and audio quality (defaults and per episode), folders, tools, logging")
+        self.settings_button.clicked.connect(self.open_settings)
         self.folders_button = QPushButton("Folders…")
         self.folders_button.setToolTip("Where fstk keeps its state and does its work")
         self.folders_button.clicked.connect(self.open_folders)
@@ -202,7 +206,7 @@ class MainWindow(QMainWindow):
         self.pause_button.clicked.connect(self.toggle_pause)
         self.notify_button = QPushButton("Notifications")
         self.notify_button.setCheckable(True)
-        self.notify_button.setChecked(True)
+        self.notify_button.setChecked(bool((services.profile.ui or {}).get("notifications", True)))
         self.notify_button.setToolTip("Desktop notification when a step needs you, a step fails, or the run ends")
         self.tray = QSystemTrayIcon(self.windowIcon() or QApplication.windowIcon(), self)
         self.watch = QTimer(self)                         # follows a run that another window/process is doing
@@ -230,7 +234,7 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.cancel_button)
         bar.addStretch(1)
         bar.addWidget(self.notify_button)
-        bar.addWidget(self.folders_button)
+        bar.addWidget(self.settings_button)
         cl.addLayout(bar)
         bar2 = QHBoxLayout()
         bar2.addStretch(1)
@@ -494,6 +498,21 @@ class MainWindow(QMainWindow):
                                 f"{res['path']}\n\n{res['files']} files, {res['bytes'] / 1e6:.1f} MB. "
                                 "It contains logs, settings and job state, no media.")
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(res["path"]).parent)))
+
+    def open_settings(self) -> None:
+        from fstk.ui.settings import SettingsDialog
+
+        LOG.info("action open-settings episode=%s", self.episode)
+        dlg = SettingsDialog(self.services, self.episode or None, self, actor=self.actor)
+        if not dlg.exec():
+            return
+        prefs = self.services.app_prefs()
+        self.notify_button.setChecked(bool(prefs["notifications"]))
+        if prefs["operator"]:
+            self.actor = str(prefs["operator"])
+        self.refresh()
+        if dlg.reencode_plan:
+            self.start_plan(dlg.reencode_plan)
 
     def open_folders(self) -> None:
         from fstk.ui.folders import FoldersDialog
@@ -797,6 +816,9 @@ def main(argv: list[str] | None = None) -> int:
     except FstkError as exc:
         QMessageBox.critical(None, "FromStunToKill", str(exc))
         return 2
+    from fstk.ui.services import apply_app_prefs
+
+    apply_app_prefs(services.profile)
     if real_run:
         applog.log_environment(services.profile)
     window = MainWindow(services)
