@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import secrets
 import threading
 import time
@@ -25,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from fstk.core.errors import FstkError
-from fstk.core.fsio import atomic_write_json, read_json
+from fstk.core.fsio import LockHeldError, atomic_write_json, exclusive_lock, move_aside, read_json, read_lock
 from fstk.core.timeutil import utc_now_iso
 
 LOG = logging.getLogger("fstk.queue")
@@ -67,7 +68,12 @@ class Item:
 
 
 class QueueStore:
-    """The saved queue. Thread-safe; every change is written atomically."""
+    """The saved queue. Thread-safe; every change is written atomically.
+
+    Two windows may share one data folder: each save first merges what the other wrote (new items, removals,
+    status changes of items this window did not touch), so neither overwrites the other. A damaged file is moved
+    aside (``queue.json.bad-<time>``), never overwritten, and the previous good version is kept as ``queue.json.bak``.
+    """
 
     def __init__(self, path: Path):
         self.path = Path(path)
@@ -75,30 +81,115 @@ class QueueStore:
         self.items: list[Item] = []
         self.running = False
         self.sleep_when_done = False
+        self._sig: tuple[int, int] | None = None          # file stamp when we last read or wrote it
+        self._synced: dict[str, dict[str, Any]] = {}      # id → saved fields as of that moment
+        self._flags: tuple[bool, bool] = (False, False)   # (running, sleep_when_done) as of that moment
         self._load()
 
-    def _load(self) -> None:
+    @property
+    def runner_lock_path(self) -> Path:
+        return self.path.with_name("queue-runner.lock")
+
+    def other_runner(self) -> str | None:
+        """Who runs the queue in another process (``pid 1234``), else None."""
+        info = read_lock(self.runner_lock_path)
+        if info is not None and info.pid != os.getpid() and info.local_process_alive is not False:
+            return f"pid {info.pid}" if info.pid else "another process"
+        return None
+
+    def _signature(self) -> tuple[int, int] | None:
+        try:
+            st = self.path.stat()
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def _parse(self) -> dict[str, Any] | None:
+        """The saved queue, or None. A file that cannot be read is moved aside so the next save keeps it."""
         if not self.path.is_file():
-            return
+            return None
         try:
             data = read_json(self.path)
+            if not isinstance(data, dict) or data.get("schema") != SCHEMA or not isinstance(data.get("items", []), list):
+                raise ValueError("not a queue file")
+            return data
         except (OSError, ValueError) as exc:
-            LOG.warning("queue file unreadable, starting empty: %s", exc)
+            kept = move_aside(self.path)
+            LOG.warning("queue file unreadable (%s); starting empty, the damaged file is kept as %s", exc, kept)
+            return None
+
+    def _load(self) -> None:
+        data = self._parse()
+        self._sig = self._signature()
+        if data is None:
             return
-        if data.get("schema") != SCHEMA:
-            return
-        self.items = [Item.from_dict(d) for d in data.get("items") or []]
+        self.items = [Item.from_dict(d) for d in data.get("items") or [] if isinstance(d, dict)]
         self.running = bool(data.get("running"))
         self.sleep_when_done = bool(data.get("sleep_when_done"))
-        for it in self.items:
-            if it.status == RUNNING:          # the app stopped while it ran: resume its job next time
-                it.status, it.detail = QUEUED, "resumes where it stopped"
+        self._synced = {it.id: it.to_dict() for it in self.items}
+        self._flags = (self.running, self.sleep_when_done)
+        if self.other_runner() is None:
+            for it in self.items:
+                if it.status == RUNNING:          # the app stopped while it ran: resume its job next time
+                    it.status, it.detail = QUEUED, "resumes where it stopped"
+
+    def sync(self) -> bool:
+        """Merge changes another window saved. True if anything here changed."""
+        with self.lock:
+            sig = self._signature()
+            if sig == self._sig:
+                return False
+            data = self._parse()
+            self._sig = self._signature()
+            if data is None:
+                return False
+            disk = {d["id"]: d for d in data.get("items") or [] if isinstance(d, dict) and d.get("id")}
+            mem = {i.id: i for i in self.items}
+            changed = False
+            for iid, d in disk.items():
+                it = mem.get(iid)
+                if it is None:
+                    if iid not in self._synced:                                  # added by the other window
+                        self.items.append(Item.from_dict(d))
+                        changed = True
+                elif it.to_dict() == self._synced.get(iid) and Item.from_dict(d).to_dict() != it.to_dict():
+                    theirs = Item.from_dict(d)                                   # they changed it, we did not
+                    for k in ("status", "plan", "job", "added_utc", "started_utc", "finished_utc", "detail"):
+                        setattr(it, k, getattr(theirs, k))
+                    changed = True
+            for iid, it in list(mem.items()):
+                if iid not in disk and iid in self._synced and it.to_dict() == self._synced[iid] \
+                        and it.status != RUNNING:
+                    self.items.remove(it)                                        # removed by the other window
+                    changed = True
+            if self._flags == (self.running, self.sleep_when_done):
+                theirs_flags = (bool(data.get("running")), bool(data.get("sleep_when_done")))
+                if theirs_flags != self._flags:
+                    self.running, self.sleep_when_done = theirs_flags
+                    changed = True
+            self._synced = {k: Item.from_dict(d).to_dict() for k, d in disk.items()}
+            self._flags = (bool(data.get("running")), bool(data.get("sleep_when_done")))
+            return changed
 
     def save(self) -> None:
         with self.lock:
+            self.sync()
             atomic_write_json(self.path, {"schema": SCHEMA, "running": self.running,
                                           "sleep_when_done": self.sleep_when_done,
-                                          "items": [it.to_dict() for it in self.items]})
+                                          "items": [it.to_dict() for it in self.items]}, backup=True)
+            self._sig = self._signature()
+            self._synced = {it.id: it.to_dict() for it in self.items}
+            self._flags = (self.running, self.sleep_when_done)
+
+    def drop_episode(self, episode: str) -> int:
+        """Remove every waiting item of an episode (it was removed from this machine). Running items stay."""
+        with self.lock:
+            keep = [i for i in self.items if i.episode != episode or i.status == RUNNING]
+            n = len(self.items) - len(keep)
+            if n:
+                self.items = keep
+                self.save()
+            return n
 
     # -- edits
     def add(self, episode: str, kind: str) -> Item:
@@ -214,6 +305,38 @@ class QueueRunner:
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._was_busy = False
+        self._runner_lock: Any = None          # the queue-runner lock while this process runs the queue
+
+    # -- one runner per data folder
+    def _acquire_runner_lock(self) -> None:
+        """Only one window runs the queue; a second one would start the same items twice."""
+        if self._runner_lock is not None:
+            return
+        path = self.store.runner_lock_path
+        for attempt in (1, 2):
+            cm = exclusive_lock(path, purpose="queue-runner")
+            try:
+                cm.__enter__()
+            except LockHeldError as exc:
+                if attempt == 1 and exc.info.local_process_alive is False:
+                    LOG.warning("removing the queue-runner lock of a process that is gone: %s", exc.info.pid)
+                    path.unlink(missing_ok=True)
+                    continue
+                who = f"pid {exc.info.pid}" if exc.info.pid else "another process"
+                raise FstkError(f"The queue is already being run by another FromStunToKill window ({who}). "
+                                "Use that window, or close it first.") from None
+            self._runner_lock = cm
+            return
+
+    def _release_runner_lock(self) -> None:
+        cm, self._runner_lock = self._runner_lock, None
+        if cm is not None:
+            with contextlib.suppress(Exception):
+                cm.__exit__(None, None, None)
+
+    def other_runner(self) -> str | None:
+        """Who runs the queue in another process, else None."""
+        return None if self._runner_lock is not None else self.store.other_runner()
 
     # -- control
     @property
@@ -221,6 +344,7 @@ class QueueRunner:
         return self.store.running
 
     def start(self) -> None:
+        self._acquire_runner_lock()
         with self.store.lock:
             self.store.running = True
             self.store.save()
@@ -261,10 +385,14 @@ class QueueRunner:
                 if it.status == STOPPED and it.detail.startswith("stopped"):
                     it.status, it.detail = QUEUED, "resumes where it stopped"
             self.store.save()
-        return not any(t.is_alive() for t, _ in self.active.values())
+        stopped = not any(t.is_alive() for t, _ in self.active.values())
+        if stopped:
+            self._release_runner_lock()
+        return stopped
 
     def busy(self) -> bool:
-        return bool(self.active)
+        with self._lock:
+            return any(t.is_alive() for t, _e in self.active.values())
 
     # -- internals
     def _changed(self, item_id: str) -> None:
@@ -308,6 +436,8 @@ class QueueRunner:
                     t.start()
                     self._changed(it.id)
             busy = bool(self.active)
+            if not busy and not self.store.running:
+                self._release_runner_lock()
         if self._was_busy and not busy and self.store.running and not any(
                 i.status in (QUEUED, RUNNING) for i in self.store.items):
             LOG.info("queue finished")

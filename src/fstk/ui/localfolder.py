@@ -53,6 +53,9 @@ class LocalFolderDialog(QDialog):
         browse.clicked.connect(self._browse)
         find = QPushButton("Find episodes")
         find.clicked.connect(self.scan)
+        self.path.setToolTip("The folder with the TBC/JSON captures, or a folder of episodes. Paste a path or use "
+                             "Browse.")
+        find.setToolTip("Look in this folder and the ones directly below it for capture sets.")
         for w in (self.path, browse, find):
             row.addWidget(w)
         lay.addLayout(row)
@@ -65,11 +68,15 @@ class LocalFolderDialog(QDialog):
         lay.addWidget(self.status)
         self.found = QListWidget()
         self.found.itemDoubleClicked.connect(lambda *_: self.accept_selection())
+        self.found.setToolTip("Capture folders found. Double-click one to use it.")
         lay.addWidget(self.found, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Open | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept_selection)
         buttons.rejected.connect(self.reject)
         lay.addWidget(buttons)
+        from fstk.ui.tips import apply_common
+
+        apply_common(self)
 
     def _browse(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "Folder with TBC/JSON captures", self.path.text())

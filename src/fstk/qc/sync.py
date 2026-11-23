@@ -104,6 +104,7 @@ class LinearFit:
     slope_ppm: float
     rms: float          # in the y unit
     n: int
+    slope_stderr_ppm: float | None = None      # 1σ of the slope from the fit residuals (None below 3 points)
 
 
 def linear_fit(x: list[float], y: list[float], *, y_in_ms: bool) -> LinearFit:
@@ -113,7 +114,40 @@ def linear_fit(x: list[float], y: list[float], *, y_in_ms: bool) -> LinearFit:
     res = ya - (slope * xa + const)
     rms = float(res.std(ddof=2)) if len(ya) > 2 else 0.0
     ppm = slope * 1000.0 if y_in_ms else slope * 1e6
-    return LinearFit(float(const), float(ppm), rms, len(ya))
+    se_ppm = None
+    if len(ya) > 2:
+        sxx = float(((xa - xa.mean()) ** 2).sum())
+        if sxx > 0:
+            se = math.sqrt(float((res ** 2).sum()) / (len(ya) - 2) / sxx)
+            se_ppm = se * (1000.0 if y_in_ms else 1e6)
+    return LinearFit(float(const), float(ppm), rms, len(ya), se_ppm)
+
+
+#: a slope within this many ppm of its gate, or within two standard errors of it, is "marginal": it passes (or
+#: fails) by less than the measurement can tell apart, so more windows are measured before the gate is decided
+SLOPE_MARGIN_PPM = 6.0
+
+
+def slope_verdict(slope_ppm: float, stderr_ppm: float | None, limit_ppm: float) -> dict:
+    """How far inside (or outside) its limit a drift slope is, counting the measurement's own uncertainty.
+
+    ``verdict``: ``pass`` (clearly inside), ``marginal`` (inside, but the limit is within 2σ or
+    ``SLOPE_MARGIN_PPM``), ``fail`` (outside). ``ambiguous`` is True when a failing slope is within 2σ of the
+    limit, i.e. it could be a pass that the measurement noise pushed over. The limit is never relaxed: the
+    ambiguity is resolved by measuring more.
+    """
+    sigma = stderr_ppm if stderr_ppm is not None else 0.0
+    mag = abs(slope_ppm)
+    headroom = limit_ppm - mag
+    if mag > limit_ppm:
+        verdict = "fail"
+    elif headroom < max(SLOPE_MARGIN_PPM, 2 * sigma):
+        verdict = "marginal"
+    else:
+        verdict = "pass"
+    return {"verdict": verdict, "headroom_ppm": headroom, "stderr_ppm": stderr_ppm,
+            "ambiguous": verdict == "fail" and mag - 2 * sigma <= limit_ppm,
+            "limit_ppm": limit_ppm}
 
 
 def between_track_sync(points: list[float], grab: Callable[[str, float], np.ndarray]) -> dict:
@@ -130,7 +164,32 @@ def between_track_sync(points: list[float], grab: Callable[[str, float], np.ndar
     rms_ms = fit.rms * 1000
     ok = rms_ms <= SYNC_GATE_RMS_MS and abs(fit.slope_ppm) <= SYNC_GATE_SLOPE_PPM
     return {"rows": rows, "constant_ms": fit.constant * 1000, "slope_ppm": fit.slope_ppm, "rms_ms": rms_ms,
-            "pass": ok}
+            "pass": ok, "slope_stderr_ppm": fit.slope_stderr_ppm,
+            "slope": slope_verdict(fit.slope_ppm, fit.slope_stderr_ppm, SYNC_GATE_SLOPE_PPM)}
+
+
+def more_sync_points(gaps: list[tuple[float, float]], duration_s: float, have: list[float], want: int = 7) -> list[float]:
+    """Extra 60 s windows inside the content segments, none overlapping a window already measured.
+
+    Used to settle a marginal drift slope: the slope's uncertainty shrinks with more windows spread across the
+    programme, so the gate is decided on enough data instead of on seven points that happen to straddle the limit.
+    """
+    cursor, segs = 0.0, []
+    for g0, g1 in sorted(gaps):
+        segs.append((cursor, g0))
+        cursor = g1
+    segs.append((cursor, duration_s))
+    cand: list[float] = []
+    for lo, hi in segs:
+        t = lo + SYNC_WIN / 2 + 5
+        while t + SYNC_WIN / 2 + 5 <= hi:
+            cand.append(t)
+            t += SYNC_WIN + 10
+    free = [c for c in cand if all(abs(c - h) >= SYNC_WIN for h in have) and 0 <= c <= duration_s - SYNC_WIN]
+    if len(free) > want:
+        step = len(free) / want
+        free = [free[int(i * step)] for i in range(want)]
+    return sorted(free)
 
 
 # ---------------------------------------------------------------- absolute A/V
@@ -267,4 +326,6 @@ def absolute_av(*, ld_audio: np.ndarray, dvd_audio: np.ndarray, delta_s: float, 
     gates = {"constant": abs(fit.constant) <= AV_GATE_CONST_MS, "slope": abs(fit.slope_ppm) <= AV_GATE_SLOPE_PPM,
              "rms": fit.rms <= AV_GATE_RMS_MS}
     return {"rows": rows, "constant_ms": fit.constant, "slope_ppm": fit.slope_ppm, "rms_ms": fit.rms,
-            "gates": gates, "pass": all(gates.values()), "dropped_subwindows": dropped_all}
+            "gates": gates, "pass": all(gates.values()), "dropped_subwindows": dropped_all,
+            "slope_stderr_ppm": fit.slope_stderr_ppm,
+            "slope": slope_verdict(fit.slope_ppm, fit.slope_stderr_ppm, AV_GATE_SLOPE_PPM)}

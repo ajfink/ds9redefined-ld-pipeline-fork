@@ -18,10 +18,11 @@
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from fstk.core.errors import ArtifactError, GateError
-from fstk.core.fsio import atomic_write_bytes, atomic_write_json, read_json
+from fstk.core.fsio import atomic_write_bytes, atomic_write_json, move_aside, read_json
 from fstk.core.hashing import SCOPE_HEAD_TAIL
 from fstk.core.timeutil import utc_now_iso
 from fstk.tools.orc import project_source_labels, source_alignment_decision, validate_render_evidence
@@ -44,6 +45,7 @@ from .base import (
     register,
 )
 
+LOG = logging.getLogger("fstk.stack")
 MAX_REFERENCE_PASSES = 3
 
 
@@ -88,7 +90,10 @@ def _load_pass(path: Path, order: list[str], key: str) -> dict | None:
     """A saved refresh result, only if it was made from exactly this project text and source order."""
     try:
         data = read_json(path) if path.is_file() else None
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        if isinstance(exc, ValueError):
+            LOG.warning("damaged refresh cache %s moved aside (%s); the pass runs again", path, exc)
+            move_aside(path)
         return None
     if (isinstance(data, dict) and data.get("order") == order and data.get("project_sha256") == key
             and isinstance(data.get("decision"), dict) and "orc_exit" in data):

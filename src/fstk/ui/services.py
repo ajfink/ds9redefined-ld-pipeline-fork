@@ -586,6 +586,43 @@ class Services:
         """This episode's own groups only (a group missing here uses the machine defaults)."""
         return dict(self.workspace(episode).store.load().get("settings.output") or {})
 
+    def output_override_info(self, episode: str | EpisodeId) -> dict[str, Any] | None:
+        """How this episode's own output settings differ from the machine defaults, or None if it has none.
+
+        ``{"set_utc", "by", "groups": {group: [(setting, own, default), …]}, "same": [group, …]}``. ``set_utc`` is
+        when the override was last saved, so a later change to the defaults can be told apart from it.
+        """
+        from fstk.config.output import DEFAULTS
+
+        m = self.workspace(episode).store.load()
+        entry = m.entry("settings.output")
+        own = (entry or {}).get("value") or {}
+        if not own:
+            return None
+        defaults = self.output_defaults()
+        groups: dict[str, list[tuple[str, Any, Any]]] = {}
+        same: list[str] = []
+        for group, values in own.items():
+            full = {**DEFAULTS.get(group, {}), **values}
+            diffs = [(k, v, defaults.get(group, {}).get(k)) for k, v in sorted(full.items())
+                     if defaults.get(group, {}).get(k) != v]
+            if diffs:
+                groups[group] = diffs
+            else:
+                same.append(group)
+        return {"set_utc": entry.get("utc", ""), "by": entry.get("by", ""), "groups": groups, "same": same,
+                "defaults_changed_since": self._defaults_changed_since(entry.get("utc", ""))}
+
+    def _defaults_changed_since(self, utc: str) -> bool:
+        """Were the machine defaults saved after this moment? (The profile file's own time is the evidence.)"""
+        from fstk.core.timeutil import parse_utc
+
+        try:
+            when = parse_utc(utc).timestamp()
+            return bool(self.profile.path and self.profile.path.stat().st_mtime > when + 1)
+        except (ValueError, OSError):
+            return False
+
     def save_project_output(self, episode: str | EpisodeId, group: str, values: dict[str, Any] | None, *,
                             actor: str) -> None:
         """Set this episode's own settings for one group, or ``None`` to go back to the machine defaults."""
@@ -779,7 +816,13 @@ class Services:
             manifest = self.workspace(ep).store.load()
         except FstkError:
             manifest = None
-        return remove_episode(self.profile, ep, scope, manifest)
+        store = self.queue_store()
+        if any(i.episode == str(ep) and i.status == "running" for i in store.items):
+            raise FstkError(f"{ep} is running in the queue. Stop that item (Queue tab) before removing the episode. "
+                            "Nothing was deleted.")
+        removed = remove_episode(self.profile, ep, scope, manifest)
+        store.drop_episode(str(ep))                    # its waiting queue items would only fail now
+        return removed
 
     def job_plan(self, episode: str | EpisodeId, job: str) -> dict[str, Any] | None:
         """The plan a job ran (copy saved beside its state), or None."""

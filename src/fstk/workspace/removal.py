@@ -120,6 +120,24 @@ def plan_removal(profile, episode: EpisodeId, manifest=None) -> RemovalPlan:
     return plan
 
 
+def running_jobs(profile, episode: EpisodeId) -> list[str]:
+    """Jobs of this episode whose lock is held by a live process (or by one we cannot tell about)."""
+    from fstk.core.fsio import read_lock
+
+    out: list[str] = []
+    plans = profile.episode_state_dir(episode) / "plans"
+    if not plans.is_dir():
+        return out
+    for lock in sorted(plans.glob("*/.job.lock")):
+        info = read_lock(lock)
+        if info is None or info.local_process_alive is False:      # no lock, or its owner is gone: not running
+            continue
+        who = f"pid {info.pid}" if info.pid else "an unknown process"
+        where = "" if info.local_process_alive else f" on {info.host or 'another machine'}"
+        out.append(f"{lock.parent.name} ({who}{where})")
+    return out
+
+
 def _delete(path: Path) -> None:
     if path.is_dir() and not path.is_symlink():
         shutil.rmtree(path)
@@ -136,6 +154,10 @@ def remove_episode(profile, episode: EpisodeId, scope: str, manifest=None) -> li
     reason = frozen_reason(profile, episode)
     if reason:
         raise FstkError(reason)
+    busy = running_jobs(profile, episode)
+    if busy:
+        raise FstkError(f"{episode} is being worked on: {'; '.join(busy)}. Wait for it to finish, or stop it, "
+                        "before removing the episode. Nothing was deleted.")
     allowed: list[tuple[Item, Path]] = []
     for item in plan.items(scope):
         if item in plan.project:

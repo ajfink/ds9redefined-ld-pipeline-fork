@@ -25,7 +25,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from fstk.core.errors import SpaceError
-from fstk.core.fsio import atomic_write_json, pid_alive
+from fstk.core.fsio import atomic_write_json, pid_alive, process_start_time
+from fstk.workspace.volumes import hint_for_space
 
 GIB = 1024 ** 3
 LEDGER_NAME = "space-reservations.json"
@@ -147,7 +148,7 @@ class SpaceLedger:
             raise SpaceError(f"space ledger has an unexpected format: {self.path}")
         host = socket.gethostname()
         return [r for r in data["reservations"] if isinstance(r, dict)
-                and not (r.get("host") == host and not pid_alive(int(r.get("pid") or 0)))]
+                and not (r.get("host") == host and not pid_alive(int(r.get("pid") or 0), r.get("ptime")))]
 
     def _write(self, rows: list[dict]) -> None:
         atomic_write_json(self.path, {"schema": SCHEMA, "reservations": rows})
@@ -187,7 +188,8 @@ class SpaceLedger:
                 return None, check
             rid = uuid.uuid4().hex
             rows.append({"id": rid, "volume": volume, "bytes": planned, "pid": owner_pid or os.getpid(),
-                         "host": socket.gethostname(), "label": label, "created_epoch": time.time()})
+                         "host": socket.gethostname(), "label": label, "created_epoch": time.time(),
+                         "ptime": process_start_time(owner_pid)})
             self._write(rows)
         return rid, check
 
@@ -202,7 +204,8 @@ class SpaceLedger:
         rid, check = self.try_reserve(target_dir, planned_gib, label=label)
         if rid is None:
             raise SpaceError(check.describe() + " — make space or move the work root; the reserve is "
-                             "never lowered and nothing is deleted without the operator's authorization")
+                             "never lowered and nothing is deleted without the operator's authorization. "
+                             + hint_for_space(check.reserve_bytes / GIB, target_dir))
         try:
             yield check
         finally:

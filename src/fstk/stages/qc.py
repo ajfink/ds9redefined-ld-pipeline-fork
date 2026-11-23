@@ -64,6 +64,7 @@ from fstk.qc.sync import (
     between_track_sync,
     break_gaps,
     fit_windows,
+    more_sync_points,
     sync_sample_points,
 )
 from fstk.qc.sync import FPS as AV_FPS
@@ -272,13 +273,32 @@ class QcReport(Stage):
             gaps = break_gaps(m.get("retime.breaks") or [], delta)
             points = sync_sample_points(gaps, float(m.require("video.duration_s")))
             ff = ctx.tool("ffmpeg")
-            result = between_track_sync(points, lambda sel, t: ff.pcm(deliverable, sel, SYNC_SR, start_s=t,
-                                                                      duration_s=SYNC_WIN, cancel=ctx.cancel))
+            def grab(sel, t):
+                return ff.pcm(deliverable, sel, SYNC_SR, start_s=t, duration_s=SYNC_WIN, cancel=ctx.cancel)
+
+            result = between_track_sync(points, grab)
+            first = result["slope"]
+            if first["verdict"] == "marginal" or first["ambiguous"]:
+                # the slope is within its own uncertainty of the limit: measure more windows, then decide.
+                # The limit itself is never relaxed.
+                extra = more_sync_points(gaps, float(m.require("video.duration_s")), points)
+                if extra:
+                    ctx.report(0.9, f"between-track slope is marginal ({first['headroom_ppm']:+.1f} ppm of headroom): "
+                                    f"measuring {len(extra)} more windows")
+                    first_slope = result["slope_ppm"]
+                    result = between_track_sync(sorted([*points, *extra]), grab)
+                    result["remeasured"] = {"first": {"windows": len(points), "slope_ppm": first_slope,
+                                                      "stderr_ppm": first["stderr_ppm"], "verdict": first["verdict"]},
+                                            "windows": len(points) + len(extra)}
         except FstkError as exc:
             return Gate(name, "ERROR", str(exc))
         measured["track_offset_ms"] = result["constant_ms"]
-        detail = (f"lag {result['constant_ms']:+.1f} ms + {result['slope_ppm']:+.1f} ppm·t, rms {result['rms_ms']:.1f} ms "
-                  f"over {len(result['rows'])} windows (gates ≤40 ms, ±30 ppm; constant offset is expected)")
+        sv = result["slope"]
+        sigma = f" ±{sv['stderr_ppm']:.1f}" if sv["stderr_ppm"] is not None else ""
+        detail = (f"lag {result['constant_ms']:+.1f} ms + {result['slope_ppm']:+.1f}{sigma} ppm·t, rms {result['rms_ms']:.1f} ms "
+                  f"over {len(result['rows'])} windows (gates ≤40 ms, ±30 ppm; constant offset is expected)"
+                  + ("; measured again with more windows because the first fit was marginal" if "remeasured" in result else "")
+                  + (f"; MARGINAL: {sv['headroom_ppm']:.1f} ppm of headroom" if sv["verdict"] == "marginal" else ""))
         if not result["pass"]:
             for r in result["rows"]:
                 review.append({"id": f"track-sync-{len(review) + 1:03d}", "gate": name, "start_s": r["time_s"],

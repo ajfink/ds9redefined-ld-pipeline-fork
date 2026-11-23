@@ -78,6 +78,22 @@ class EpisodePicker(QDialog):
         self.local_btn.clicked.connect(self.from_local)
         close.clicked.connect(self.reject)
 
+        from fstk.ui.tips import apply_tips
+
+        apply_tips(self, {
+            "search": "Type a series, season, episode or title words. Searches the archive catalog snapshot.",
+            "series": "Limit the list to one series.",
+            "only_local": "Show only episodes that already have a workspace, a download or a partial download "
+                          "on this computer.",
+            "tree": "The archive catalog. Double-click an episode to create or open its workspace.",
+            "detail": "What is known about the selected episode: captures, sizes, where it is held.",
+            "create_btn": "Create a workspace for the selected episode. Nothing is downloaded until intake runs, "
+                          "and only after the free-space check.",
+            "open_btn": "Open the existing workspace of the selected episode.",
+            "local_btn": "Use captures you already have in a folder or on a network share, instead of downloading.",
+            "adopt_btn": "Take over an episode another computer handed off (shared workspace).",
+        })
+        close.setToolTip("Close without choosing.")
         top = QHBoxLayout()
         top.addWidget(self.search, 1)
         top.addWidget(self.series)

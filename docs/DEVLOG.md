@@ -829,3 +829,27 @@ only as a reviewed, opt-in source with side-by-side and in-context previews.
 - Queue tab: Add to queue (intake / delivery / both / re-encode / several episodes), reorder, retry, stop item,
   remove, clear finished, sleep when done (1-minute grace, cancellable). Closing the app shuts the queue down and
   it resumes on the next start.
+
+## CP31 — deep-review fixes, volume advice, sync-gate uncertainty, override flag, tooltips
+
+Source: `DEEP-REVIEW-1` (project doc). Defects A1–A5 reproduced, then fixed with regression tests in
+`tests/unit/test_review_fixes.py`:
+
+- Damaged JSON (profile, queue, caches, progress files) now raises `JsonFileError` (an `FstkError` that is also a
+  `ValueError`) naming the file, instead of crashing a window. Queue and profile keep a rolling `.bak`; a damaged queue
+  is moved aside as `*.bad-<stamp>` and the app starts clean.
+- Queue: three-way merge on save so two windows cannot overwrite each other; single queue runner per machine via
+  `queue-runner.lock`; removing an episode is refused while a job runs or the queue holds it (and the queue drops it
+  after removal). `_resume_queue` was missing in `ui/app.py` (a saved running queue would have crashed start-up).
+- pid liveness uses process start time (`ptime`) so a recycled pid is not mistaken for the lock owner.
+- Space block messages end with a concrete suggestion (`workspace/volumes.py`: measured needs from v38; network and
+  removable drives are never suggested). The Settings Folders page shows the same advice; the main window warns once at
+  start-up when a folder sits on a drive that cannot hold the work.
+- Between-track sync gate: limits unchanged (|slope| ≤ 30 ppm, rms ≤ 40 ms). New `slope_verdict` uses the fit's own
+  standard error (2σ, 6 ppm margin): pass / marginal / fail / ambiguous. A marginal or ambiguous result is re-measured
+  automatically with more windows (`more_sync_points`); the limit is never relaxed. Note for the review's wording:
+  E09's +34.7 ppm *failed* v38's gate and was fixed by rate refinement; 4.7–38.2 ppm is the feasible window, not an
+  accepted slope.
+- Episodes with their own output settings show a flag in the main window (what differs, who, when, and whether the
+  defaults changed since). Every interactive control now has a hover tooltip (`ui/tips.py`); `tests/unit/test_tooltips.py`
+  fails when a new control is added without one.

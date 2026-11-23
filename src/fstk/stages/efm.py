@@ -35,6 +35,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import logging
 import os
 import secrets
 import shutil
@@ -42,7 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from fstk.core.errors import ArtifactError, GateError, ToolError, WorkflowError
-from fstk.core.fsio import atomic_write_json, read_json
+from fstk.core.fsio import atomic_write_json, move_aside, read_json
 from fstk.core.hashing import SCOPE_HEAD_TAIL, head_tail_sha256, sha256_file
 from fstk.core.timeutil import utc_now_iso, utc_stamp
 from fstk.tools.orc import project_source_labels
@@ -67,6 +68,7 @@ from fstk.tools.orc_project import bundled_template
 from .base import ArtifactExists, Custom, SpaceNeed, Stage, StepOutput, StepPlan, ValueSet, register
 from .intake import downloads_folder
 
+LOG = logging.getLogger("fstk.efm")
 GIB = 1024 ** 3
 PROVENANCE_SCHEMA = "fstk-efm-provenance-v1"
 SELECTION_SCHEMA = "fstk-efm-selection-v1"
@@ -166,7 +168,10 @@ def _load_progress(ctx) -> dict[str, dict]:
     path = _progress_path(ctx)
     try:
         data = read_json(path) if path.is_file() else {}
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        if isinstance(exc, ValueError):
+            LOG.warning("damaged decode progress file %s moved aside (%s); decodes start over", path, exc)
+            move_aside(path)
         return {}
     return {k: v for k, v in (data.get("captures") or {}).items() if isinstance(v, dict)}
 

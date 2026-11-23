@@ -47,6 +47,7 @@ from fstk.manifest.store import ManifestStore
 from fstk.stages.base import RESOURCES, StageContext, StepOutput, StepPlan, get_stage, output_scope_for
 from fstk.tools.process import PAUSE
 from fstk.workspace.space import SpaceLedger
+from fstk.workspace.volumes import hint_for_space
 
 LOG = logging.getLogger("fstk.engine")
 PLAN_SCHEMA = "fstk-workflow-plan-v1"
@@ -261,7 +262,8 @@ class Engine:
             else:
                 with self._state_lock:
                     st["issues"] = [check.describe() + " — make space or move the work root; the reserve is never "
-                                    "lowered and nothing is deleted without the operator's authorization"]
+                                    "lowered and nothing is deleted without the operator's authorization. "
+                                    + hint_for_space(check.reserve_bytes / 2**30, target)]
                 self._emit("space-rechecked", step=sid, detail=st["issues"][0], ok=False)
         self._save()
         return results

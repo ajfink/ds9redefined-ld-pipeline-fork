@@ -67,6 +67,14 @@ class RemoveDialog(QDialog):
         row.addWidget(self.remove_button)
         row.addWidget(cancel)
         lay.addLayout(row)
+        from fstk.ui.tips import apply_tips
+
+        apply_tips(self, {
+            "detail": "Exactly which folders and how much space each choice would free.",
+            "remove_button": "Delete what is listed, after one more confirmation. Nothing is deleted if the episode "
+                             "is running.",
+        })
+        cancel.setToolTip("Close without removing anything.")
         self.radios["project"].setChecked(True)
         self.choose("project")
 

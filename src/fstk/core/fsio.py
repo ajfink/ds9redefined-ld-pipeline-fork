@@ -25,6 +25,15 @@ from typing import Any
 from .errors import FstkError
 from .timeutil import utc_now_iso
 
+
+class JsonFileError(FstkError, ValueError):
+    """A file that is not valid JSON. Also a ``ValueError``, so ``except (OSError, ValueError)`` guards work."""
+
+
+class MissingFileError(FstkError, FileNotFoundError):
+    """A file that is not there. Also a ``FileNotFoundError`` (an ``OSError``) for the same reason."""
+
+
 REPLACE_ATTEMPTS = 60
 REPLACE_RETRY_SECONDS = 0.25
 
@@ -88,14 +97,50 @@ def atomic_write_bytes(path: str | os.PathLike, payload: bytes, *,
         temp.unlink(missing_ok=True)
 
 
+def keep_backup(path: str | os.PathLike) -> Path | None:
+    """Copy the current file to ``<name>.bak`` (one rolling previous version) before it is replaced.
+
+    A backup that cannot be made never blocks the write: the caller is saving the operator's work.
+    """
+    import shutil
+
+    p = Path(path)
+    if not p.is_file() or p.is_symlink():
+        return None
+    bak = p.with_name(p.name + ".bak")
+    try:
+        shutil.copy2(p, bak)
+    except OSError:
+        return None
+    return bak
+
+
+def move_aside(path: str | os.PathLike) -> Path | None:
+    """Rename a damaged file to ``<name>.bad-<stamp>`` so the next save does not overwrite the evidence."""
+    from .timeutil import utc_stamp
+
+    p = Path(path)
+    if not p.exists():
+        return None
+    target = p.with_name(f"{p.name}.bad-{utc_stamp()}")
+    try:
+        os.replace(p, target)
+    except OSError:
+        return None
+    return target
+
+
 def canonical_json(data: Any) -> bytes:
     """Deterministic JSON bytes (sorted keys, 2-space indent, LF, trailing newline)."""
     return (json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False)
             + "\n").encode("utf-8")
 
 
-def atomic_write_json(path: str | os.PathLike, data: Any, **kw) -> bytes:
+def atomic_write_json(path: str | os.PathLike, data: Any, *, backup: bool = False, **kw) -> bytes:
+    """Write canonical JSON atomically. ``backup=True`` first keeps the previous file as ``<name>.bak``."""
     payload = canonical_json(data)
+    if backup:
+        keep_backup(path)
     atomic_write_bytes(path, payload, **kw)
     return payload
 
@@ -105,11 +150,11 @@ def read_json(path: str | os.PathLike) -> Any:
     try:
         raw = p.read_bytes()
     except FileNotFoundError:
-        raise FstkError(f"file not found: {p}") from None
+        raise MissingFileError(f"file not found: {p}") from None
     try:
         return json.loads(decode_text(raw))
     except json.JSONDecodeError as exc:
-        raise FstkError(f"{p} is not valid JSON: {exc}") from None
+        raise JsonFileError(f"{p} is not valid JSON: {exc}") from None
 
 
 def decode_text(raw: bytes) -> str:
@@ -138,25 +183,60 @@ class LockInfo:
     host: str | None
     started_utc: str | None
     purpose: str | None
+    ptime: float | None = None          # the owner's process start time (epoch seconds), when it recorded one
 
     @property
     def local_process_alive(self) -> bool | None:
         """``True``/``False`` for a lock owned by this host; ``None`` when unknowable."""
         if self.pid is None or self.host != socket.gethostname():
             return None
-        return pid_alive(self.pid)
+        return pid_alive(self.pid, self.ptime)
 
 
-def pid_alive(pid: int) -> bool:
+#: a process whose start time differs from the one a lock recorded by more than this is a different process
+#: that was given the same pid later (Windows reuses pids quickly)
+PID_START_TOLERANCE_S = 2.0
+
+
+def process_start_time(pid: int | None = None) -> float | None:
+    """When process ``pid`` (default: this one) started, in epoch seconds; None if it cannot be told."""
+    try:
+        import psutil
+
+        return float(psutil.Process(pid or os.getpid()).create_time())
+    except Exception:
+        return None
+
+
+def pid_alive(pid: int, started: float | None = None) -> bool:
+    """Is ``pid`` a running process, and (when ``started`` is given) the same one that started then?
+
+    A process we cannot inspect (an elevated one, seen from a normal window) counts as alive: it exists.
+    """
     if pid <= 0:
         return False
-    if os.name == "nt":
+    try:
+        import psutil
+    except ImportError:  # pragma: no cover - psutil is a declared dependency
+        psutil = None
+    if psutil is not None:
+        try:
+            proc = psutil.Process(pid)
+            if proc.status() == psutil.STATUS_ZOMBIE:
+                return False
+            return started is None or abs(proc.create_time() - started) <= PID_START_TOLERANCE_S
+        except psutil.NoSuchProcess:
+            return False
+        except psutil.AccessDenied:
+            return True
+        except Exception:
+            pass
+    if os.name == "nt":  # pragma: no cover - windows only
         import ctypes
 
-        process_query_limited_information = 0x1000
-        handle = ctypes.windll.kernel32.OpenProcess(process_query_limited_information, False, pid)
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
         if not handle:
-            return False
+            return ctypes.windll.kernel32.GetLastError() == 5      # access denied: it exists
         ctypes.windll.kernel32.CloseHandle(handle)
         return True
     try:
@@ -190,7 +270,11 @@ def read_lock(path: str | os.PathLike) -> LockInfo | None:
             key, _, value = token.partition("=")
             fields[key] = value
     pid = int(fields["pid"]) if fields.get("pid", "").isdigit() else None
-    return LockInfo(p, pid, fields.get("host"), fields.get("started_utc"), fields.get("purpose"))
+    try:
+        ptime = float(fields["ptime"]) if "ptime" in fields else None
+    except ValueError:
+        ptime = None
+    return LockInfo(p, pid, fields.get("host"), fields.get("started_utc"), fields.get("purpose"), ptime)
 
 
 @contextmanager
@@ -209,8 +293,9 @@ def exclusive_lock(path: str | os.PathLike, *, purpose: str = ""):
         info = read_lock(p) or LockInfo(p, None, None, None, None)
         raise LockHeldError(info) from None
     try:
+        ptime = process_start_time()
         stream.write(f"pid={os.getpid()} host={socket.gethostname()} started_utc={utc_now_iso()} "
-                     f"purpose={purpose_token}\n")
+                     f"purpose={purpose_token}" + (f" ptime={ptime:.3f}" if ptime is not None else "") + "\n")
         stream.flush()
         os.fsync(stream.fileno())
         stream.close()

@@ -50,12 +50,14 @@ class AddSeveralDialog(QDialog):
         row = QHBoxLayout()
         row.addWidget(QLabel("Task:"))
         self.kind = QComboBox()
+        self.kind.setToolTip("What to queue for each ticked episode: intake, delivery, or both in order.")
         self.kind.addItem("Intake, then delivery", "both")
         for k, text in KINDS.items():
             self.kind.addItem(text, k)
         row.addWidget(self.kind, 1)
         lay.addLayout(row)
         self.list = QListWidget()
+        self.list.setToolTip("Tick the episodes to add to the queue.")
         for e in episodes:
             it = QListWidgetItem(e)
             it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -66,6 +68,9 @@ class AddSeveralDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         lay.addWidget(buttons)
+        from fstk.ui.tips import apply_common
+
+        apply_common(self)
 
     def chosen(self) -> tuple[list[str], str]:
         eps = [self.list.item(i).text() for i in range(self.list.count())
@@ -141,6 +146,16 @@ class QueuePanel(QWidget):
         self.table.itemSelectionChanged.connect(self._update_buttons)
         lay.addWidget(self.table, 1)
 
+        from fstk.ui.tips import apply_tips
+
+        apply_tips(self, {
+            "add_button": "Add the selected episode, or several, to the queue: intake, delivery, or a re-encode "
+                          "with the current settings.",
+            "sleep_box": "Put the computer to sleep a minute after the queue finishes (cancellable). Use it for "
+                         "overnight runs.",
+            "table": "The queue in running order. Each item shows its status, progress and what it is doing; "
+                     "items that need you are marked and the queue moves on.",
+        })
         self.tick = QTimer(self)
         self.tick.setInterval(1000)
         self.tick.timeout.connect(self.refresh)
@@ -162,6 +177,7 @@ class QueuePanel(QWidget):
             return None
 
     def refresh(self) -> None:
+        self.store.sync()                       # changes saved by another window
         keep = self._selected()
         items = list(self.store.items)
         self.table.setRowCount(len(items))
@@ -199,14 +215,16 @@ class QueuePanel(QWidget):
         from fstk.workflow.engine import HEAVY
 
         heavy = HEAVY.holder_label
-        parts = [("Queue running" if self.runner.running else "Queue stopped"),
+        other = self.runner.other_runner()
+        parts = [(f"Queue running in another window ({other})" if other and self.runner.running
+                  else "Queue running" if self.runner.running else "Queue stopped"),
                  f"{running} running", f"{waiting} waiting"]
         if attention:
             parts.append(f"{attention} need attention")
         if heavy:
             parts.append(f"heavy job: {heavy}")
         self.summary.setText(" · ".join(parts))
-        self.start_button.setText("Stop queue" if self.runner.running else "Start queue")
+        self.start_button.setText("Stop queue" if self.runner.running and not other else "Start queue")
         self.start_button.setToolTip("Start nothing new; running items carry on" if self.runner.running
                                      else self.start_button.toolTip())
         self._update_buttons()
@@ -253,10 +271,13 @@ class QueuePanel(QWidget):
             self.add(ep, ("intake", "delivery") if kind == "both" else (kind,))
 
     def toggle_running(self) -> None:
-        if self.runner.running:
-            self.runner.stop()
-        else:
-            self.runner.start()
+        try:
+            if self.runner.running and self.runner.other_runner() is None:
+                self.runner.stop()
+            else:
+                self.runner.start()
+        except FstkError as exc:
+            QMessageBox.information(self, "Queue", str(exc))
         self.refresh()
 
     def _move(self, delta: int) -> None:

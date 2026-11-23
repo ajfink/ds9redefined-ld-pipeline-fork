@@ -72,6 +72,9 @@ class MediaPane(QWidget):
         self.play_button.clicked.connect(self.play)
         self.pause_button.clicked.connect(self.pause)
         self.slider.sliderMoved.connect(self.seek_ms)
+        self.play_button.setToolTip("Play from the current position.")
+        self.pause_button.setToolTip("Pause playback, keeping the position.")
+        self.slider.setToolTip("Drag to move through the clip.")
         self.layout_ = QVBoxLayout(self)
         self.layout_.setContentsMargins(0, 0, 0, 0)
         self.video_holder = QVBoxLayout()
@@ -197,7 +200,18 @@ class EfmCaptureReview(QDialog):
         self.auto_button = QPushButton("Accept automatic choice")
         self.choose_button.clicked.connect(self.choose)
         self.auto_button.clicked.connect(self.accept_auto)
+        from fstk.ui.tips import apply_tips
+
+        apply_tips(self, {
+            "table": "One row per EFM decode with its quality measures. Select a row to audition that capture.",
+            "jump": "A position in the audio, in seconds, to jump to.",
+            "note": "Why you chose this capture. Required for a manual choice; stored with the decision.",
+            "choose_button": "Use the selected capture for this episode. Needs a note explaining why.",
+            "auto_button": "Accept the capture fstk picked by its quality measures.",
+        })
+        go.setToolTip("Jump the playback to the position on the left.")
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.button(QDialogButtonBox.StandardButton.Close).setToolTip("Close this window.")
         buttons.rejected.connect(self.reject)
         bottom = QHBoxLayout()
         bottom.addWidget(self.auto_button)
@@ -346,10 +360,26 @@ class DeliveryReview(QDialog):
         self.approve_button = QPushButton("Approve delivery")
         self.rerun_button = QPushButton("Rerun with corrections")
         self.reject_button = QPushButton("Reject…")
+        from fstk.ui.tips import apply_tips
+
+        apply_tips(self, {
+            "reports": "The QC reports for this episode, newest first.",
+            "chunks": "15-second chunks to judge by eye and ear. Double-click to play one, then mark it in sync, "
+                      "audio early or audio late.",
+            "gates": "Every automatic check with its result. The A/V check below needs your eyes.",
+            "intervals": "Places the checks flagged for a look (for example black frames inside a repaired frame "
+                         "range). Double-click to play.",
+            "warnings": "Anything that stops you approving yet.",
+            "approve_button": "Accept this delivery. Needs every chunk marked in sync; your name is recorded.",
+            "rerun_button": "Re-run the audio with a correction measured from the chunks you marked early or late "
+                            "(audio only; the video is not re-encoded).",
+            "reject_button": "Reject this delivery and say why.",
+        })
         self.approve_button.clicked.connect(lambda: self.decide("APPROVED"))
         self.rerun_button.clicked.connect(self.rerun)
         self.reject_button.clicked.connect(lambda: self.decide("REJECTED"))
         close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close.button(QDialogButtonBox.StandardButton.Close).setToolTip("Close this window.")
         close.rejected.connect(self.reject)
 
         left = QWidget()
@@ -363,6 +393,7 @@ class DeliveryReview(QDialog):
         split = QSplitter(Qt.Orientation.Horizontal)
         self.quality_text = QPlainTextEdit()
         self.quality_text.setReadOnly(True)
+        self.quality_text.setToolTip("The episode quality report: the verdict and each measurement.")
         self.contact_image = QLabel("No contact sheet.")
         self.contact_image.setAlignment(Qt.AlignmentFlag.AlignTop)
         scroll = QScrollArea()
@@ -432,12 +463,15 @@ class DeliveryReview(QDialog):
         lay.addWidget(QLabel("Worst moments (double-click to add a fix there). Frames are delivered-episode frames; "
                              "a rectangle is x,y,w,h in the full picture (even numbers)."))
         self.moments = QListWidget()
+        self.moments.setToolTip("The frames the quality check found worst. Double-click one to add a fix there.")
         self.moments.itemDoubleClicked.connect(self._add_fix_from_moment)
         lay.addWidget(self.moments, 1)
         self.fix_table = QTableWidget(0, 6)
         self.fix_table.setHorizontalHeaderLabels(["First", "Last", "Action", "Rectangle", "From (±1)", "What is wrong"])
         self.fix_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
         self.fix_table.verticalHeader().setVisible(False)
+        self.fix_table.setToolTip("Frame ranges to fix. Pick how each is fixed: interpolate from the LD neighbours, "
+                                  "patch a region from a clean LD frame, use the DVD, or leave as captured.")
         lay.addWidget(self.fix_table, 2)
         row = QHBoxLayout()
         add = QPushButton("Add range")
@@ -450,6 +484,13 @@ class DeliveryReview(QDialog):
         show.clicked.connect(self.show_fix_preview)
         self.apply_fixes_button = QPushButton("Apply fixes and re-encode…")
         self.apply_fixes_button.clicked.connect(self.apply_fixes)
+        add.setToolTip("Add a row for a range of frames to fix.")
+        rem.setToolTip("Remove the selected row.")
+        self.preview_button.setToolTip("Make a short before/after preview of the selected fix (nothing is "
+                                       "re-encoded).")
+        show.setToolTip("Show the most recent preview again.")
+        self.apply_fixes_button.setToolTip("Apply every fix in the table and make a new encode from the lossless "
+                                           "master. Earlier files are kept.")
         for b in (add, rem, self.preview_button, show, self.apply_fixes_button):
             row.addWidget(b)
         lay.addLayout(row)
@@ -464,6 +505,8 @@ class DeliveryReview(QDialog):
         clips = QHBoxLayout()
         self.play_captured = QPushButton("Play as captured")
         self.play_fixed = QPushButton("Play with the fix")
+        self.play_captured.setToolTip("Play the preview clip of the frames as captured.")
+        self.play_fixed.setToolTip("Play the preview clip with the fix applied.")
         self.play_captured.clicked.connect(lambda: self._play_fix_clip("captured"))
         self.play_fixed.clicked.connect(lambda: self._play_fix_clip("fixed"))
         clips.addWidget(self.play_captured)
@@ -496,6 +539,8 @@ class DeliveryReview(QDialog):
         self.fix_table.setItem(r, 0, QTableWidgetItem(str(first)))
         self.fix_table.setItem(r, 1, QTableWidgetItem(str(last)))
         box = QComboBox()
+        box.setToolTip("How to fix these frames: interpolate between good neighbours, patch a region from a clean "
+                       "LD frame, use the DVD (only if one is recorded), or leave them as captured.")
         for key, label in self.FIX_ACTIONS:
             if key == "dvd" and not self.fix_ctx.get("dvd"):
                 continue
@@ -611,7 +656,11 @@ class DeliveryReview(QDialog):
         self.stretches.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.stretches.verticalHeader().setVisible(False)
         self.stretches.cellDoubleClicked.connect(lambda row, _c: self.play_stretch(row))
+        self.stretches.setToolTip("Stretches where the source was shot on video (60 fields/s) rather than film. "
+                                  "Double-click a row to play its preview.")
         self.stretch_button = QPushButton("Re-encode with these choices…")
+        self.stretch_button.setToolTip("Make a new encode with the choice made for each stretch. Earlier files are "
+                                       "kept.")
         self.stretch_button.clicked.connect(self.apply_stretches)
         lay.addWidget(self.stretches, 1)
         lay.addWidget(self.stretch_button)
@@ -626,6 +675,8 @@ class DeliveryReview(QDialog):
             self.stretches.setItem(i, 2, QTableWidgetItem(r["kind"]))
             self.stretches.setItem(i, 3, QTableWidgetItem(r["encoded"] or "—"))
             box = QComboBox()
+            box.setToolTip("Nearest real frames: every output frame is a real captured frame (default). "
+                           "Interpolated: smoother, evenly spaced motion made by the interpolator.")
             box.addItem("Nearest real frames (default)", "nearest")
             box.addItem("Interpolated (even motion)", "interpolate")
             box.setCurrentIndex(0 if r["treatment"] == "nearest" else 1)
@@ -679,6 +730,8 @@ class DeliveryReview(QDialog):
             self.chunks.setItem(i, 0, QTableWidgetItem(str(i + 1)))
             self.chunks.setItem(i, 1, QTableWidgetItem(f"{_fmt_time(c['start_s'])} – {_fmt_time(c['end_s'])}"))
             box = QComboBox()
+            box.setToolTip("Your verdict for this chunk after watching it: in sync, audio early or audio late. "
+                           "Every chunk needs a mark before the delivery can be approved.")
             for value, label in VERDICT_CHOICES:
                 box.addItem(label, value)
             box.currentIndexChanged.connect(self._update_buttons)

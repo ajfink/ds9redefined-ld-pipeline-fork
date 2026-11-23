@@ -63,6 +63,7 @@ class ProgressPanel(QWidget):
         lay.addWidget(self.overall)
         lay.addWidget(self.detail)
         lay.addWidget(self.table, 1)
+        self.table.setToolTip("Every step of the plan: its status, progress, time and what it is doing now.")
 
     # ------------------------------------------------------------------ data
     def set_tracker(self, tracker: ProgressTracker | None) -> None:

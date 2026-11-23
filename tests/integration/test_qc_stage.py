@@ -127,8 +127,8 @@ def test_black_frame_at_a_pad_fails_with_a_review_interval(env):
     replacements(prof.root("probe", EP))
     setup(prof, out, d)
     st = run(prof, "q2")["steps"]["qc"]
-    assert "QC gate failed: full-decode + PAD black" in st["issues"]
     rep = _report(prof)
+    assert "QC gate failed: full-decode + PAD black" in st["issues"], json.dumps(rep["results"], indent=1)[:3000]
     ids = [iv["id"] for iv in rep["review_intervals"]]
     assert ids == [f"pad-black-f{PAD_BLACK}", f"pad-identity-f{PAD_BLACK}"]     # the black PAD also fails identity
     assert rep["review_intervals"][0]["start_s"] < PAD_BLACK / (24000 / 1001)

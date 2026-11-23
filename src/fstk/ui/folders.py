@@ -44,6 +44,16 @@ class FoldersDialog(QDialog):
         buttons.accepted.connect(self.save)
         buttons.rejected.connect(self.reject)
         lay.addWidget(buttons)
+        from fstk.ui.tips import apply_common, apply_tips
+
+        apply_tips(self, {
+            "data": "Where fstk keeps its own records: manifests, plans, reports and logs. Small; keep it on a "
+                    "drive that is always there.",
+            "media": "Where the big working files go: the stacked master (~40 GB per episode), decoded audio and "
+                     "encodes. Use a fast local drive with plenty of room.",
+            "out": "Optional separate folder for the finished files. Blank keeps them inside the working folder.",
+        })
+        apply_common(self)
 
     def _row(self, form, label, value, default: Path | None, placeholder: str = "") -> QLineEdit:
         edit = QLineEdit(value)

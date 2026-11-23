@@ -119,6 +119,12 @@ class MainWindow(QMainWindow):
         self.episodes.currentTextChanged.connect(self.show_episode)
         self.title = QLabel("No episode selected")
         self.title.setStyleSheet("font-size: 16px; font-weight: 600;")
+        self.override_flag = QPushButton()
+        self.override_flag.setFlat(True)
+        self.override_flag.setStyleSheet("text-align: left; color: #ef6c00; font-weight: 600;")
+        self.override_flag.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.override_flag.clicked.connect(self.open_settings)
+        self.override_flag.setVisible(False)
 
         self.values = QTableWidget(0, 5)
         self.values.setHorizontalHeaderLabels(["Field", "Value", "Unit", "Kind", "Set by"])
@@ -170,6 +176,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.queue_panel, "Queue")
         if self.queue_runner.running and any(i.status in ("queued", "held") for i in self.queue_runner.store.items):
             QTimer.singleShot(3000, self._resume_queue)
+        QTimer.singleShot(1500, self._check_volumes)
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -217,6 +224,7 @@ class MainWindow(QMainWindow):
         self.notify_button.setCheckable(True)
         self.notify_button.setChecked(bool((services.profile.ui or {}).get("notifications", True)))
         self.notify_button.setToolTip("Desktop notification when a step needs you, a step fails, or the run ends")
+        self._set_tips()
         self.tray = QSystemTrayIcon(self.windowIcon() or QApplication.windowIcon(), self)
         self.watch = QTimer(self)                         # follows a run that another window/process is doing
         self.watch.setInterval(3000)
@@ -229,6 +237,7 @@ class MainWindow(QMainWindow):
         centre = QWidget()
         cl = QVBoxLayout(centre)
         cl.addWidget(self.title)
+        cl.addWidget(self.override_flag)
         cl.addWidget(self.status_line)
         cl.addWidget(self.tabs, 1)
         bar = QHBoxLayout()
@@ -300,6 +309,7 @@ class MainWindow(QMainWindow):
             title += "   [also on: " + ", ".join(f"{p.device} ({p.state})" for p in others) + "]"
         self.title.setText(title)
         self.title.setToolTip(frozen or "\n".join(p.describe() for p in others))
+        self.show_override_flag(episode)
         self.run_button.setEnabled(not frozen)
         self.intake_button.setEnabled(not frozen)
         self.deliver_button.setEnabled(not frozen)
@@ -607,6 +617,103 @@ class MainWindow(QMainWindow):
     def _catalog_failed(self, message: str) -> None:
         self.append_log(f"Archive catalog check skipped (keeping current snapshot): {message}")
         self._catalog_end()
+
+    def _set_tips(self) -> None:
+        from fstk.ui.tips import apply_common, apply_tips
+
+        apply_tips(self, {
+            "episodes": "Episodes on this computer. Select one to see its values, jobs and reviews.",
+            "override_flag": "This episode has its own output settings. Click to open them.",
+            "values": "Every value recorded for this episode, and who or what set it (measured, imported from v38, "
+                      "entered by hand). Hover a field name for its meaning.",
+            "jobs": "The plans that have run, or are running, for this episode, step by step, with their status "
+                    "and any issues.",
+            "reviews": "Checks waiting for a person to look at the evidence. Select one to read what was measured.",
+            "review_detail": "What was measured, and what to look for before approving or rejecting.",
+            "open_evidence": "Open the evidence files for the selected review (images, videos, reports).",
+            "approve": "Record that you checked the evidence and it is right. Your name and a note are stored with "
+                       "the decision, and the next step may start.",
+            "reject": "Record that the evidence is wrong. The step stays blocked until it is fixed or redone.",
+            "log": "What fstk is doing, oldest first. The full log is in the logs folder (Open logs).",
+            "pick_button": "Find an episode in the archive catalog, or add one from a folder you already have, then "
+                           "create or open its workspace.",
+            "intake_button": "Intake: download the captures (if needed), inventory them, choose the stack reference "
+                             "and decode the EFM audio. Heavy steps run one at a time.",
+            "efm_button": "Review the decoded EFM audio of this episode's captures and choose which one to use.",
+            "delivery_button": "Review a finished delivery: the A/V check and the evidence, then approve or send it "
+                               "back for corrections.",
+            "run_button": "Run a saved plan file for this episode (advanced; Run intake and Run to delivery write "
+                          "and run the usual plans for you).",
+            "cancel_button": "Stop the running plan. Finished steps are kept; the step in progress starts over "
+                             "next time.",
+        })
+        self.tabs.setTabToolTip(0, "Progress of the running plan: each step, how far it is, and the time left.")
+        self.tabs.setTabToolTip(1, "All recorded values (the manifest) for the selected episode.")
+        self.tabs.setTabToolTip(2, "Plans that ran for the selected episode.")
+        self.tabs.setTabToolTip(3, "Checks waiting for a person.")
+        self.tabs.setTabToolTip(4, "Run several episodes one after another, unattended.")
+        apply_common(self)
+
+    def show_override_flag(self, episode: str) -> None:
+        """Flag an episode whose output settings are its own (not the defaults), with what differs and since when."""
+        try:
+            info = self.services.output_override_info(episode)
+        except FstkError:
+            info = None
+        if not info:
+            self.override_flag.setVisible(False)
+            return
+        from fstk.config.output import override_lines
+
+        lines = override_lines(info)
+        n = sum(len(v) for v in info["groups"].values())
+        self.override_flag.setText("⚑ Own output settings"
+                                   + (f" ({n} differ from the defaults)" if n else " (same as the defaults)")
+                                   + ("  — defaults changed since" if info["defaults_changed_since"] else ""))
+        self.override_flag.setToolTip("\n".join(lines) + "\n\nClick to open Settings for this episode.")
+        self.override_flag.setVisible(True)
+
+    def _check_volumes(self) -> None:
+        """Say so up front when a folder sits on a drive that cannot hold the work (first run on a small system drive)."""
+        from fstk.workspace.volumes import advise
+
+        try:
+            advice = [a for a in advise(self.services.profile) if a.level in ("warn", "block")]
+        except Exception:
+            LOG.exception("drive check failed")
+            return
+        for a in advice:
+            self.append_log(f"drive check: {a.text}")
+        blocking = [a for a in advice if a.level == "block"]
+        seen = list(self.services.profile.ui.get("volume_advice_seen") or [])
+        fresh = [a for a in blocking if f"{a.what}|{a.path}" not in seen]
+        if not fresh:
+            return
+        self.show_volume_advice(fresh)
+        self.services.profile.ui["volume_advice_seen"] = seen + [f"{a.what}|{a.path}" for a in fresh]
+        with contextlib.suppress(Exception):
+            self.services.profile.save()
+
+    def show_volume_advice(self, advice) -> None:
+        """One dialog per problem folder, once: the work cannot start there. (A method so tests can replace it.)"""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Not enough room for the work")
+        box.setText("\n\n".join(a.text for a in advice))
+        box.setInformativeText("Open Settings → Folders to pick a drive with more room. This message is shown once "
+                               "per folder; the same advice stays in Settings → Folders.")
+        box.exec()
+
+    def _resume_queue(self) -> None:
+        """The queue was running when the app last closed: carry on with what is waiting."""
+        try:
+            self.queue_runner.start()
+        except FstkError as exc:                       # another window already runs it
+            LOG.info("queue not resumed: %s", exc)
+            self.append_log(f"queue not resumed: {exc}")
+        else:
+            self.append_log("queue resumed: it was running when the app closed")
+        self.queue_panel.refresh()
 
     def closeEvent(self, event) -> None:
         """Closing mid-run stops it cleanly: tools are ended, unfinished files removed, state saved."""

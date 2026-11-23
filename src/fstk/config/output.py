@@ -126,6 +126,31 @@ DEFAULTS: dict[str, dict[str, Any]] = {
               "compat": True, "compat_codec": "aac", "compat_bitrate": 256},
 }
 
+#: plain-language names for each setting (used in tooltips and in "how this episode differs" lists)
+SETTING_LABELS: dict[str, str] = {
+    "encoder": "video encoder", "mode": "rate control", "quality": "quality (CRF/CQ)", "bitrate_kbps": "average bitrate (kb/s)",
+    "preset": "speed preset", "tune": "tune", "chroma": "chroma", "extra": "extra encoder options",
+    "stereo_codec": "LD stereo codec", "stereo_bitrate": "LD stereo bitrate", "include_51": "include the DVD 5.1 track",
+    "fiveone_codec": "5.1 codec", "fiveone_bitrate": "5.1 bitrate", "compat": "compatibility stereo track",
+    "compat_codec": "compatibility codec", "compat_bitrate": "compatibility bitrate (kb/s)",
+}
+
+
+def override_lines(info: dict[str, Any]) -> list[str]:
+    """Plain sentences for ``Services.output_override_info`` (the flag's tooltip and the Settings note)."""
+    when = str(info.get("set_utc", ""))[:16].replace("T", " ")
+    lines = [f"This episode has its own output settings (saved {when} UTC"
+             + (f" by {info['by']}" if info.get("by") else "") + ")."]
+    for group, diffs in info["groups"].items():
+        for key, own, default in diffs:
+            lines.append(f"{group.title()}: {SETTING_LABELS.get(key, key)} = {own} here, {default} in the defaults")
+    for group in info["same"]:
+        lines.append(f"{group.title()}: set separately but currently identical to the defaults")
+    if info.get("defaults_changed_since"):
+        lines.append("The defaults were changed after this was saved, so this episode does not follow them.")
+    return lines
+
+
 #: x265/x264 option keys the free-text "extra" field may never set (colour signalling, tune, profile).
 LOCKED_EXTRA_KEYS = ("colorprim", "transfer", "colormatrix", "range", "tune", "profile", "output-depth",
                      "film-grain", "input-depth", "pass", "stats")

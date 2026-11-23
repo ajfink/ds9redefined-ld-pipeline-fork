@@ -35,3 +35,13 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if "gui" in item.keywords:
                 item.add_marker(skip)
+
+
+@pytest.fixture(autouse=True)
+def _no_modal_volume_advice(monkeypatch):
+    """The sandbox's small disks would make the start-up drive check open a modal box and hang a GUI test."""
+    try:
+        from fstk.ui.app import MainWindow
+    except ImportError:                                   # no Qt in this environment
+        return
+    monkeypatch.setattr(MainWindow, "show_volume_advice", lambda self, advice: None)

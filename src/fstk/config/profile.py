@@ -254,11 +254,17 @@ class Profile:
         if not p.exists():
             raise ConfigError(f"no machine profile at {p}; create one with `fstk profile init` "
                               "or convert a v38 machine.json with `fstk profile import`")
-        return cls.from_dict(read_json(p), path=p)
+        try:
+            doc = read_json(p)
+        except ValueError as exc:
+            bak = p.with_name(p.name + ".bak")
+            hint = f" The previous version is kept at {bak}; copy it over {p.name} to go back." if bak.is_file() else ""
+            raise ConfigError(f"{exc}.{hint}") from None
+        return cls.from_dict(doc, path=p)
 
     def save(self, path: str | os.PathLike | None = None) -> Path:
         p = Path(path or self.path or default_profile_path())
-        atomic_write_json(p, self.to_dict())
+        atomic_write_json(p, self.to_dict(), backup=True)      # the previous version stays as <name>.bak
         self.path = p
         return p
 

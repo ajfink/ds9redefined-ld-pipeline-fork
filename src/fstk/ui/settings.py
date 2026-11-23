@@ -132,6 +132,30 @@ class VideoPage(QWidget):
         self.summary = _note("")
         form.addRow("Result:", self.summary)
 
+        from fstk.ui.tips import apply_common, apply_tips
+
+        apply_tips(self, {
+            "use_defaults": "Tick to give this episode the machine defaults. Untick to give it its own video "
+                            "settings (kept with the episode and shown by a flag on the main window).",
+            "encoder": "The video codec for the final encode. x265 (HEVC) is the default and the only one that "
+                       "keeps film grain well at sensible sizes; the others are for players that need them.",
+            "chroma": "How colour detail is stored. 4:2:2 keeps the LaserDisc's full colour resolution; 4:2:0 is more "
+                      "compatible and smaller.",
+            "mode_quality": "Constant quality: the encoder spends as many bits as each frame needs. Best for grain "
+                            "and the recommended mode.",
+            "quality": "Lower number = higher quality and a larger file (CRF/CQ scale of the chosen encoder).",
+            "mode_bitrate": "Average bitrate: the file size is fixed in advance (two passes). Wastes bits on easy "
+                            "scenes and starves grain; use only for a size target.",
+            "bitrate": "Target average video bitrate in kb/s (500–100,000). Only used in average-bitrate mode.",
+            "preset": "Speed against compression efficiency. Slower presets make a smaller file at the same "
+                      "quality; quality-first is the project's default, and CPU time is not a concern.",
+            "tune": "Encoder tuning. For x265 this is always grain (permanent: it protects the film grain).",
+            "extra": "Advanced encoder options as key=value pairs separated by colons. Colour, range, tune and "
+                     "profile are fixed and refused here.",
+        })
+        self.quality_value.setToolTip("The value of the quality slider.")
+        self.preset_value.setToolTip("The name of the selected preset.")
+        apply_common(self)
         self.encoder.currentIndexChanged.connect(self._encoder_changed)
         self.use_defaults.toggled.connect(lambda on: self.body.setEnabled(not on))
         for w in (self.quality, self.preset):
@@ -264,6 +288,19 @@ class AudioPage(QWidget):
         self.summary = _note("")
         b.addWidget(self.summary)
         b.addStretch(1)
+        from fstk.ui.tips import apply_tips
+
+        apply_tips(self, {
+            "use_defaults": "Tick to give this episode the machine defaults. Untick to give it its own audio "
+                            "settings.",
+            "include_51": "Add the DVD's 5.1 mix, retimed to the LaserDisc picture, as a second track. Only used "
+                          "when the episode has a DVD.",
+            "compat": "Add a lossy stereo copy last, for players and devices that cannot play FLAC.",
+        })
+        names = {"stereo": "LD stereo", "fiveone": "DVD 5.1", "compat": "compatibility"}
+        for key, (codec, rate) in self.rows.items():
+            codec.setToolTip(f"The codec for the {names[key]} track. FLAC is lossless; AAC, Opus and AC-3 are lossy.")
+            rate.setToolTip(f"The bitrate for the {names[key]} track in kb/s. A lossless codec has no bitrate.")
         self.use_defaults.toggled.connect(lambda on: self.body.setEnabled(not on))
         for _codec, rate in self.rows.values():
             rate.currentIndexChanged.connect(self._refresh)
@@ -363,6 +400,28 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self.save)
         buttons.rejected.connect(self.reject)
         outer.addWidget(buttons)
+        from fstk.ui.tips import apply_common, apply_tips
+
+        apply_tips(self, {
+            "scope": "Whose settings you are editing: the defaults for every episode on this computer, or just this "
+                     "episode.",
+            "groups": "Setting groups. Video and Audio can be set per episode; the others apply to the whole "
+                      "computer.",
+            "operator": "Your name, recorded with every review and decision. Blank uses user@computer.",
+            "notifications": "Show a desktop notification when a step needs you, a step fails, or a run ends.",
+            "catalog_days": "How old the Archive catalog may get before fstk offers to refresh it.",
+            "use_suggested": "Move the working folder to the drive suggested above. Only the setting changes; "
+                             "nothing is copied or deleted.",
+            "reserve": "Free space that must stay on a drive after a step's planned writes. A step that would "
+                       "leave less waits (blocked by disk space) instead of starting.",
+            "priority": "How much CPU the tools get against everything else you run. Takes effect for tools "
+                        "started from now on.",
+            "tool_table": "The external programs fstk uses. A blank path means the copy found on PATH.",
+            "log_level": "How much detail the application log records. Detailed is bigger but helps bug reports.",
+        })
+        self.advice_label.setToolTip("Where your folders sit against the room those drives have.")
+        self.volume_table.setToolTip("Every drive on this computer, with its free space.")
+        apply_common(self)
         self.scope.currentIndexChanged.connect(self._scope_changed)
         self._scope_changed()
 
@@ -392,8 +451,22 @@ class SettingsDialog(QDialog):
         self._show_folders()
         lay.addWidget(self.folders_text)
         change = QPushButton("Change folders…")
+        change.setToolTip("Choose the data folder, the working folder and (optionally) a separate folder for "
+                          "finished files.")
         change.clicked.connect(self._change_folders)
         lay.addWidget(change, 0, Qt.AlignmentFlag.AlignLeft)
+        self.advice_label = _note("")
+        self.advice_label.setTextFormat(Qt.TextFormat.RichText)
+        lay.addWidget(self.advice_label)
+        self.use_suggested = QPushButton("Use the suggested working folder")
+        self.use_suggested.clicked.connect(self._use_suggested)
+        lay.addWidget(self.use_suggested, 0, Qt.AlignmentFlag.AlignLeft)
+        self.volume_table = QLabel()
+        self.volume_table.setTextFormat(Qt.TextFormat.RichText)
+        self.volume_table.setWordWrap(True)
+        lay.addWidget(self.volume_table)
+        self._suggested = ""
+        self._show_advice()
         form = QFormLayout()
         self.reserve = QDoubleSpinBox()
         self.reserve.setRange(1, 10_000)
@@ -411,12 +484,40 @@ class SettingsDialog(QDialog):
         self.folders_text.setText(f"Data (state, reports, logs): {p.data_root}\nWorking folder (media): "
                                   f"{p.media_root}\nFinished files: {p.roots.get('out') or 'inside the working folder'}")
 
+    def _show_advice(self) -> None:
+        """Where the folders sit against the room those drives have (before work starts, not after it fails)."""
+        from fstk.workspace.volumes import advise, list_volumes
+
+        volumes = list_volumes()
+        advice = advise(self.services.profile, volumes)
+        colour = {"block": "#c62828", "warn": "#ef6c00", "info": "#1565c0", "ok": "#2e7d32"}
+        self.advice_label.setText("<br>".join(f"<span style='color:{colour[a.level]}'>●</span> {a.text}" for a in advice))
+        work = next((a for a in advice if a.what == "Working folder"), None)
+        self._suggested = work.suggestion if work and work.level in ("block", "warn") else ""
+        self.use_suggested.setVisible(bool(self._suggested))
+        if self._suggested:
+            self.use_suggested.setText(f"Use {self._suggested} for working files")
+        self.volume_table.setText("<b>Drives on this computer</b><br>" + "<br>".join(
+            ("&nbsp;&nbsp;" + v.label() + ("" if v.suggestible else " — not suggested for heavy work")) for v in volumes))
+
+    def _use_suggested(self) -> None:
+        from fstk.config.profile import change_folders
+
+        try:
+            change_folders(self.services.profile, media_root=self._suggested)
+        except FstkError as exc:
+            QMessageBox.warning(self, "Folders", str(exc))
+            return
+        self._show_folders()
+        self._show_advice()
+
     def _change_folders(self) -> None:
         from fstk.ui.folders import FoldersDialog
 
         dlg = FoldersDialog(self.services.profile, self)
         if dlg.exec():
             self._show_folders()
+            self._show_advice()
 
     def _output(self) -> QWidget:
         w = QWidget()
@@ -465,6 +566,7 @@ class SettingsDialog(QDialog):
             self.tool_table.setCellWidget(r, 2, browse)
         lay.addWidget(self.tool_table, 1)
         check = QPushButton("Check tools")
+        check.setToolTip("Run each tool to confirm it is found and report its version.")
         check.clicked.connect(self._check_tools)
         lay.addWidget(check, 0, Qt.AlignmentFlag.AlignLeft)
         self.tool_result = _note("")
@@ -503,6 +605,9 @@ class SettingsDialog(QDialog):
         for text, slot in (("Open logs folder", "open_logs"), ("Save debug bundle…", "save_bundle")):
             if parent is not None and hasattr(parent, slot):
                 b = QPushButton(text)
+                b.setToolTip({"open_logs": "Open the folder with the application log and crash log.",
+                              "save_bundle": "Zip the logs, settings and job state (no media) to attach to a "
+                                             "bug report."}[slot])
                 b.clicked.connect(getattr(parent, slot))
                 form.addRow("", b)
         return w
@@ -515,8 +620,13 @@ class SettingsDialog(QDialog):
             defaults = self.services.output_defaults()
             self.video.load(own.get("video") or defaults["video"], use_defaults="video" not in own)
             self.audio.load(own.get("audio") or defaults["audio"], use_defaults="audio" not in own)
-            self.scope_note.setText("Video and Audio can differ for this episode. Untick “Use the defaults” to give "
-                                    "it its own settings. The other groups apply to the whole computer.")
+            from fstk.config.output import override_lines
+
+            info = self.services.output_override_info(ep)
+            self.scope_note.setText(
+                "Video and Audio can differ for this episode. Untick “Use the defaults” to give it its own settings. "
+                "The other groups apply to the whole computer."
+                + ("\n\n⚑ " + "\n".join(override_lines(info)) if info else ""))
         else:
             d = self.services.output_defaults()
             self.video.load(d["video"], use_defaults=None)
