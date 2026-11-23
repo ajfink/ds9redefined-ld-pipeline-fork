@@ -377,3 +377,127 @@ def test_each_platform_has_a_launcher_that_reaches_the_core():
         assert text.startswith("#!/bin/sh") and "tools/launch.sh" in text
     sh = (ROOT / "tools" / "launch.sh").read_text(encoding="utf-8")
     assert "fstk_launch.py" in sh and "sha256" in sh
+
+
+# ---------------------------------------------------------------- first Mac run (debug bundle 2026-11-23)
+
+def _profile_with_vspipe(tmp_path: Path, venv_bin: Path) -> Path:
+    env, _ = _fake_machine(tmp_path)
+    _exe(venv_bin / "vspipe")
+    _exe(venv_bin / "vapoursynth")
+    path = tmp_path / "p" / "machine.json"
+    kw = {"system": "linux", "env": env, "home": tmp_path, "run_text": lambda c: " libx265", "install": False,
+          "doctor": _doctor_ok, "venv_bin": venv_bin}
+    wiz.run_setup(wiz.Console(interactive=False, out=lambda t: None), profile_path=path, **kw)
+    assert Path(Profile.load(path).tool("vspipe")).parent == venv_bin
+    return path
+
+
+def test_setup_runs_vapoursynth_config_when_vspipe_exits_non_zero(tmp_path):
+    """The Mac's vspipe exited 1 ("Python executable and library path couldn't be determined") until
+    `vapoursynth config` had run for that environment."""
+    venv_bin = tmp_path / "venv" / "bin"
+    path = _profile_with_vspipe(tmp_path, venv_bin)
+    configured = {"done": False}
+    calls: list[list[str]] = []
+
+    def run(cmd):
+        calls.append(cmd)
+        if cmd[-1] == "config":
+            configured["done"] = True
+            return 0
+        if cmd[-1] == "--version" and Path(cmd[0]).name == "vspipe":
+            return 0 if configured["done"] else 1
+        return 1                                   # the flatpak probe etc.
+
+    lines: list[str] = []
+    res = wiz.run_setup(wiz.Console(interactive=False, out=lines.append), profile_path=path, system="linux",
+                        env={"PATH": ""}, home=tmp_path, run=run, run_text=lambda c: " libx265", install=False,
+                        doctor=_doctor_ok, venv_bin=venv_bin)
+    assert [str(venv_bin / "vapoursynth"), "config"] in calls
+    assert "vapoursynth config" in res.changes
+    assert not [x for x in res.problems if "vspipe" in x]          # (Orc is absent in this fake machine)
+    assert any("vspipe now runs" in ln for ln in lines)
+
+
+def test_setup_leaves_a_working_vspipe_alone_and_check_only_never_configures(tmp_path):
+    venv_bin = tmp_path / "venv" / "bin"
+    path = _profile_with_vspipe(tmp_path, venv_bin)
+    kw = {"profile_path": path, "system": "linux", "env": {"PATH": ""}, "home": tmp_path,
+          "run_text": lambda c: " libx265", "doctor": _doctor_ok, "venv_bin": venv_bin}
+    seen: list[list[str]] = []
+    wiz.run_setup(wiz.Console(interactive=False, out=lambda t: None),
+                  run=lambda c: seen.append(c) or 0, install=False, **kw)
+    assert not [c for c in seen if c[-1] == "config"]
+    seen.clear()
+    res = wiz.run_setup(wiz.Console(interactive=False, out=lambda t: None),
+                        run=lambda c: seen.append(c) or 1, install=False, check_only=True, **kw)
+    assert not [c for c in seen if c[-1] == "config"]
+    assert any("not configured" in p for p in res.problems)
+
+
+def test_an_existing_profile_is_asked_for_a_missing_downloads_folder(tmp_path):
+    """The Mac's profile had no sources.downloads_root, so the first intake failed at the download step."""
+    env, _ = _fake_machine(tmp_path)
+    path = tmp_path / "p" / "machine.json"
+    kw = {"system": "linux", "env": env, "home": tmp_path, "run_text": lambda c: " libx265", "install": False,
+          "doctor": _doctor_ok, "venv_bin": tmp_path / "x"}
+    wiz.run_setup(wiz.Console(interactive=False, out=lambda t: None), profile_path=path, **kw)
+    assert not Profile.load(path).sources.get("downloads_root")
+    captures = tmp_path / "captures"
+    captures.mkdir()
+    asked: list[str] = []
+
+    def ask(question):
+        asked.append(question)
+        return str(captures) if "capture folders" in question else ""
+
+    wiz.run_setup(wiz.Console(ask_fn=ask, out=lambda t: None), profile_path=path, **kw)
+    assert Profile.load(path).sources["downloads_root"] == str(captures)
+    assert not [q for q in asked if "Shared workspace" in q]       # only the unset roots, not the whole tour
+    asked.clear()
+    wiz.run_setup(wiz.Console(ask_fn=ask, out=lambda t: None), profile_path=path, **kw)
+    assert not [q for q in asked if "capture folders" in q]       # once set, it is not asked again
+
+
+def test_the_download_error_says_where_to_fix_it(tmp_path):
+    from fstk.config.profile import ConfigError, EpisodeId
+
+    prof = Profile.from_dict({"schema": "fstk-machine-profile-v1", "machine": "m", "os": "linux",
+                              "data_root": str(tmp_path / "d"), "media_root": str(tmp_path / "m")})
+    with pytest.raises(ConfigError, match="Settings → Folders"):
+        prof.downloads_dir(EpisodeId.parse("DS9:S02E02"))
+
+
+def test_doctor_fails_a_vspipe_that_prints_an_error_and_exits_non_zero(tmp_path, monkeypatch):
+    from fstk.tools import doctor
+
+    fake = _exe(tmp_path / "bin" / "vspipe")
+
+    class Res:
+        returncode = 1
+        stdout = b"Failed to initialize VSScript. Run `vapoursynth config` to set it\n"
+        tail = ()
+
+    monkeypatch.setattr(doctor.process, "run", lambda *a, **k: Res())
+    ok, line = doctor._first_line([str(fake), "--version"], strict=True)
+    assert ok is False and "vapoursynth config" in line
+    assert doctor._first_line([str(fake), "--version"])[0] is True          # other tools keep the lenient rule
+
+
+def test_doctor_warns_when_state_lives_inside_the_shared_app_folder(tmp_path, monkeypatch):
+    from fstk.tools import doctor
+
+    app = tmp_path / "app"
+    app.mkdir()
+    monkeypatch.setenv("FSTK_APP_ROOT", str(app))
+    prof = Profile.from_dict({"schema": "fstk-machine-profile-v1", "machine": "m", "os": "linux",
+                              "data_root": str(app / "data"), "media_root": str(tmp_path / "elsewhere")})
+    rows = {c["name"]: c for c in doctor.run_doctor(prof)["checks"]}
+    assert rows["root:data_root:location"]["status"] == "WARN" and "app folder" in rows["root:data_root:location"]["detail"]
+    assert "root:media_root:location" not in rows
+
+
+def test_the_launcher_configures_vapoursynth_and_re_runs_it_for_existing_environments(launch):
+    assert launch.stamp()["vsconfig"] >= 1
+    assert callable(launch.configure_vapoursynth)

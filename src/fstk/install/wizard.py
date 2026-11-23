@@ -112,8 +112,11 @@ def run_setup(console: Console, *, profile_path: str | os.PathLike | None = None
         return result
     _tools(console, profile, system=system, env=env, home=home, run=run, run_text=run_text,
            install=install and not check_only, venv_bin=venv_bin, result=result)
+    _ensure_vspipe(console, profile, venv_bin, run, system, result, check_only=check_only)
     if result.created and not check_only:
-        _sources(console, profile, result)
+        _sources(console, profile, result, system=system)
+    elif not check_only and console.interactive and not profile.sources.get("downloads_root"):
+        _sources(console, profile, result, system=system, only_unset=True)
     if (result.changes or result.created) and not check_only:
         for root in (profile.data_root, profile.media_root):
             try:
@@ -300,12 +303,53 @@ def _ask_path(console: Console, name: str, label: str, required: bool, system: s
     return resolved
 
 
-def _sources(console: Console, profile: Profile, result: SetupResult) -> None:
+def _mounted_volumes(system: str) -> list[str]:
+    """Names of the drives and shares mounted here, as a hint for the folder questions (names only)."""
+    roots = {"macos": "/Volumes", "linux": "/media"}
+    base = roots.get(system)
+    try:
+        names = sorted(os.listdir(base)) if base else []
+    except OSError:
+        return []
+    return [f"{base}/{n}" for n in names if not n.startswith(".") and n != "Macintosh HD"]
+
+
+def _ensure_vspipe(console: Console, profile: Profile, venv_bin: Path, run, system: str, result: SetupResult, *,
+                   check_only: bool) -> None:
+    """The pip VapourSynth needs `vapoursynth config` once per environment, or vspipe exits 1 with
+    "Python executable and library path couldn't be determined". Repair it when vspipe is this environment's own."""
+    try:
+        vspipe = Path(profile.tool("vspipe"))
+    except Exception:
+        return
+    if vspipe.parent != venv_bin or run([str(vspipe), "--version"]) == 0:
+        return
+    exe = venv_bin / ("vapoursynth.exe" if system == "windows" else "vapoursynth")
+    if check_only or not exe.is_file():
+        result.problems.append("vspipe does not run: its VapourSynth runtime is not configured "
+                               "(run `setup` without --check to repair it)")
+        return
+    console.say("\nvspipe does not start yet: configuring this environment's VapourSynth (`vapoursynth config`)...")
+    run([str(exe), "config"])
+    if run([str(vspipe), "--version"]) == 0:
+        console.say("  vspipe now runs.")
+        result.changes.append("vapoursynth config")
+    else:
+        result.problems.append("vspipe still does not run after `vapoursynth config`")
+
+
+def _sources(console: Console, profile: Profile, result: SetupResult, *, system: str = "",
+             only_unset: bool = False) -> None:
     if not console.interactive:
         return
-    console.say("\nWhere your material is (all optional; change later in Settings → Folders):")
+    console.say("\nWhere your material is (change later in Settings → Folders):")
+    mounted = _mounted_volumes(system)
+    if mounted:
+        console.say("  Mounted here: " + ", ".join(mounted))
     for key, question in (("downloads_root", "Folder holding your LaserDisc capture folders"),
                           ("dvd_root", "Folder holding your DVD rips")):
+        if only_unset and profile.sources.get(key):
+            continue
         typed = console.ask(f"  {question} (Enter to skip):")
         if not typed:
             continue
@@ -315,6 +359,8 @@ def _sources(console: Console, profile: Profile, result: SetupResult) -> None:
             result.changes.append(f"sources.{key} = {p}")
         else:
             console.say(f"  {p} is not reachable from here; skipped (set it later in Settings).")
+    if only_unset:
+        return
     typed = console.ask("  Shared workspace folder, to hand episodes between your machines "
                         "(Enter = work alone on this machine):")
     if typed:

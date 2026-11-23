@@ -8,6 +8,7 @@ metadata" rather than guessed.
 from __future__ import annotations
 
 import importlib
+import os
 import platform
 import shutil
 import sys
@@ -24,14 +25,26 @@ VERSION_ARGS = {"ffmpeg": ["-version"], "ffprobe": ["-version"], "vspipe": ["--v
                 "sevenzip": [], "curl": ["--version"]}
 
 
-def _first_line(args: list[str]) -> tuple[bool, str]:
+def _inside(path, folder) -> bool:
+    try:
+        from pathlib import Path
+
+        Path(path).expanduser().resolve().relative_to(Path(folder).expanduser().resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def _first_line(args: list[str], strict: bool = False) -> tuple[bool, str]:
+    """Run a tool's version command. ``strict``: only exit code 0 counts (vspipe prints an error and exits 1 when
+    the VapourSynth runtime is not configured, and that must not look like a pass)."""
     try:
         res = process.run(args, capture_stdout=True, timeout=30)
     except Exception as exc:
         return False, str(exc)
     text = (res.stdout or b"").decode("utf-8", errors="replace").strip() or "\n".join(res.tail)
     line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
-    return res.returncode == 0 or bool(line), line[:200]
+    return res.returncode == 0 or (bool(line) and not strict), line[:200]
 
 
 def _shared_checks(profile, add) -> None:
@@ -89,11 +102,19 @@ def run_doctor(profile=None) -> dict[str, Any]:
             elif spec["kind"] == "dir":
                 add(f"tool:{name}", "PASS", str(path))
             elif VERSION_ARGS.get(name):
-                ran, line = _first_line([str(path), *VERSION_ARGS[name]])
+                ran, line = _first_line([str(path), *VERSION_ARGS[name]], strict=(name == "vspipe"))
+                if not ran and name == "vspipe" and "vapoursynth config" in line:
+                    line += " — fix: run `FromStunToKill setup` (it runs `vapoursynth config` for this environment)"
                 add(f"tool:{name}", "PASS" if ran else "FAIL", f"{path} — {line}")
             else:
                 add(f"tool:{name}", "PASS", str(path))
+        app = os.environ.get("FSTK_APP_ROOT")
         for label, root in (("data_root", profile.data_root), ("media_root", profile.media_root)):
+            if app and _inside(root, app):
+                add(f"root:{label}:location", "WARN",
+                    f"{root} is inside the app folder ({app}). The app folder is meant to be shared read-only by "
+                    "every computer; keep this machine's state on its own disk (Settings → Folders), and use the "
+                    "shared workspace setting to hand episodes between computers")
             if not root.exists():
                 add(f"root:{label}", "WARN", f"{root} does not exist yet (created on first use)")
                 continue

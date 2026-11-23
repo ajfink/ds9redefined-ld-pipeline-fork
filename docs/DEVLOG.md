@@ -908,3 +908,28 @@ macOS arm64 wheels load on macOS 27. Causes and fixes for the four warnings:
 
 Tests: `tests/unit/test_install.py` 24 → 32, plus a retired-tool test in `tests/unit/test_profile.py`. Verified on
 Linux only; the macOS behaviour (Homebrew install offer, shared-folder pickup) is still owed a real run.
+
+## CP34 — first real Mac run (debug bundle `fstk-debug-20261123-122450`): vspipe, downloads folder, state in the app folder
+
+The Mac launched, set itself up and ran the GUI on macOS 27.2 / Python 3.12.16 (all vendored wheels loaded, FFmpeg
+9.0.2 from martin-riedl.de, Orc from `~/Applications/orc-gui.app`). The first intake (DS9:S02E02) failed at `download`.
+What the bundle showed:
+
+- **`vspipe --version` exited 1 in the new environment**, on every call (setup, run start, debug bundle), so
+  `tool-versions.json` recorded `vspipe: null`. Reproduced on Linux: the pip VapourSynth needs `vapoursynth config`
+  once per environment ("Python executable and library path couldn't be determined"); it records the environment's
+  `libvsscript` against its Python library in the user's `~/.config/vapoursynth/vapoursynth.toml` (keyed by path, so
+  several environments coexist). The Legion only worked because its older environment had been configured by hand.
+  Fixes: the launcher runs `vapoursynth config` after building an environment and the stamp carries `vsconfig: 1`, so
+  every existing environment is re-run once; `fstk setup` re-tests `vspipe --version` and runs the config when it
+  fails (`--check` only reports it); **the doctor treated "printed a line and exited 1" as PASS** and now fails vspipe on
+  a non-zero exit and names the fix. Verified on a clean Linux HOME: setup ends with vspipe printing R82.
+- **`sources.downloads_root` was empty** (the setup prompts were skipped), and the error did not say where to set it.
+  Setup now asks again, on any interactive run, for the source folders that are still unset (not the whole tour), lists
+  what is mounted (`/Volumes`, `/media`) as a hint, and the error names Settings → Folders.
+- **`data_root` was the app folder itself** (`/Volumes/Swap Folder/FromStunToKill`; the episode's plans and manifest
+  were written into the shared source folder, and `roots.out` was the home folder). Not changed for the owner; the
+  doctor now WARNs when `data_root` or `media_root` lies inside the app folder (`FSTK_APP_ROOT`, set by the launcher),
+  because the folder is meant to be shared read-only and device state is never shared (ADR 0002).
+
+Tests: `tests/unit/test_install.py` 32 → 39. Full suite green; ruff clean.

@@ -110,6 +110,7 @@ def vendored_wheels() -> list[Path] | None:
 
 def stamp() -> dict:
     return {"python": platform.python_version(), "machine": platform.machine(), "system": platform.system(),
+            "vsconfig": 1,        # bump to make every environment run `vapoursynth config` again
             "requirements": hashlib.sha256("\n".join(sorted(requirements())).encode()).hexdigest()}
 
 
@@ -153,6 +154,8 @@ def ensure_env() -> Path | None:
             say("Installing the VapourSynth plugin set from the verified macOS arm64 wheels in vendor/.")
             subprocess.run([str(vpy), "-m", "pip", "install", *map(str, wheels)], check=True)
         subprocess.run([str(vpy), "-m", "pip", "install", *requirements()], check=True)
+        if not configure_vapoursynth():
+            say("Note: `vapoursynth config` did not run cleanly; `setup` will try again and report vspipe's state.")
     except (subprocess.CalledProcessError, OSError) as exc:
         say(f"\nCould not set up the Python environment: {exc}")
         if system() == "linux":
@@ -162,6 +165,20 @@ def ensure_env() -> Path | None:
     marker.write_text(json.dumps(want, indent=2), encoding="utf-8")
     say("Environment ready.\n")
     return vpy
+
+
+def configure_vapoursynth() -> bool:
+    """Tell the pip VapourSynth where this environment's Python library is (`vapoursynth config`).
+
+    Without it ``vspipe`` stops at "Python executable and library path couldn't be determined" and every VapourSynth
+    step fails. The setting is kept per environment in the user's own config file (never in the app folder), so
+    several environments on one computer do not disturb each other. Returns True when the command ran cleanly.
+    """
+    base = venv_dir()
+    exe = base / ("Scripts/vapoursynth.exe" if system() == "windows" else "bin/vapoursynth")
+    if not exe.is_file():
+        return False
+    return subprocess.run([str(exe), "config"], env=child_env(), check=False).returncode == 0
 
 
 def run_fstk(vpy: Path, args: list[str], *, cwd: str | None = None) -> int:

@@ -369,7 +369,9 @@ class Profile:
     def downloads_dir(self, episode: EpisodeId) -> Path:
         base = self.sources.get("downloads_root")
         if not base:
-            raise ConfigError("sources.downloads_root is not set in the machine profile")
+            raise ConfigError("sources.downloads_root is not set in the machine profile: set it in Settings → Folders "
+                              "to the folder that holds the LaserDisc capture folders (e.g. DS9-S01E20-LaserDisc-Copies), "
+                              "or run `FromStunToKill setup`")
         name = self.downloads_template.format(series=episode.series, episode=episode.code,
                                               code=episode.code)
         return Path(base) / name
