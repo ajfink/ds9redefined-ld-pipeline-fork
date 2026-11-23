@@ -36,11 +36,18 @@ def _profile(args):
 
 # ----------------------------------------------------------------------------- profile
 def cmd_profile_import(args) -> int:
-    from fstk.config.profile import Profile, convert_v38_profile, default_profile_path
+    from fstk.config.profile import (
+        Profile,
+        convert_v38_profile,
+        default_data_root,
+        default_media_root,
+        default_profile_path,
+    )
     from fstk.core.fsio import read_json
 
     v38 = read_json(args.v38_profile)
-    data, notes = convert_v38_profile(v38, data_root=args.data_root, media_root=args.media_root)
+    data, notes = convert_v38_profile(v38, data_root=str(Path(args.data_root or default_data_root()).absolute()),
+                                      media_root=str(Path(args.media_root or default_media_root()).absolute()))
     profile = Profile.from_dict(data)
     out = Path(args.out) if args.out else (Path(args.profile) if args.profile else default_profile_path())
     if out.exists() and not args.force:
@@ -54,7 +61,15 @@ def cmd_profile_import(args) -> int:
 def cmd_profile_init(args) -> int:
     import shutil as _sh
 
-    from fstk.config.profile import KNOWN_TOOLS, SCHEMA, Profile, current_os, default_profile_path
+    from fstk.config.profile import (
+        KNOWN_TOOLS,
+        SCHEMA,
+        Profile,
+        current_os,
+        default_data_root,
+        default_media_root,
+        default_profile_path,
+    )
 
     out = Path(args.out) if args.out else (Path(args.profile) if args.profile else default_profile_path())
     if out.exists() and not args.force:
@@ -65,14 +80,36 @@ def cmd_profile_init(args) -> int:
         if found:
             tools[name] = found
     profile = Profile.from_dict({"schema": SCHEMA, "machine": args.machine or socket.gethostname(),
-                                 "os": current_os(), "data_root": str(Path(args.data_root).absolute()),
-                                 "media_root": str(Path(args.media_root).absolute()), "tools": tools,
+                                 "os": current_os(),
+                                 "data_root": str(Path(args.data_root or default_data_root()).absolute()),
+                                 "media_root": str(Path(args.media_root or default_media_root()).absolute()),
+                                 "tools": tools,
                                  "limits": {"min_free_gb": args.min_free_gb}})
     profile.save(out)
     missing = [n for n, s in KNOWN_TOOLS.items() if s["required"] and n not in tools]
     _print(args, {"written": str(out), "tools": tools, "missing_required": missing},
            f"wrote {out}; found {', '.join(tools) or 'no tools'} on PATH"
            + (f"; set these by hand: {', '.join(missing)}" if missing else ""))
+    return 0
+
+
+def cmd_profile_folders(args) -> int:
+    """Show or change where fstk keeps its state (data root) and working media (media root, per-kind overrides)."""
+    from fstk.config.profile import change_folders
+
+    p = _profile(args)
+    roots = {}
+    for item in args.root or []:
+        name, _, value = item.partition("=")
+        roots[name] = value or None
+    if not (args.data_root or args.media_root or roots):
+        rows = {"data_root": str(p.data_root), "media_root": str(p.media_root),
+                **{f"roots.{k}": v for k, v in p.roots.items()}}
+        _print(args, rows, "\n".join(f"{k:<16} {v}" for k, v in rows.items()))
+        return 0
+    changes = change_folders(p, data_root=args.data_root, media_root=args.media_root, roots=roots, force=args.force)
+    _print(args, {"changed": changes},
+           "\n".join(f"{k}: {o or '(default)'} → {n or '(default)'}" for k, o, n in changes) or "nothing changed")
     return 0
 
 
@@ -492,20 +529,28 @@ def build_parser() -> argparse.ArgumentParser:
     prof = sub.add_parser("profile").add_subparsers(dest="sub", required=True)
     pi = prof.add_parser("import", help="convert a v38 machine.json")
     pi.add_argument("v38_profile")
-    pi.add_argument("--data-root", required=True)
-    pi.add_argument("--media-root")
+    pi.add_argument("--data-root", help="state folder (default: <home>/FromStunToKill/data)")
+    pi.add_argument("--media-root", help="working media folder (default: <home>/FromStunToKill/work)")
     pi.add_argument("--out")
     pi.add_argument("--force", action="store_true")
     pi.set_defaults(func=cmd_profile_import)
     pn = prof.add_parser("init", help="create a new profile (tools discovered on PATH)")
-    pn.add_argument("--data-root", required=True)
-    pn.add_argument("--media-root", required=True)
+    pn.add_argument("--data-root", help="state folder (default: <home>/FromStunToKill/data)")
+    pn.add_argument("--media-root", help="working media folder (default: <home>/FromStunToKill/work)")
     pn.add_argument("--machine")
     pn.add_argument("--min-free-gb", type=float, default=80.0)
     pn.add_argument("--out")
     pn.add_argument("--force", action="store_true")
     pn.set_defaults(func=cmd_profile_init)
     prof.add_parser("show").set_defaults(func=cmd_profile_show)
+    pf = prof.add_parser("folders", help="show or change the data/working folders (no options: show)")
+    pf.add_argument("--data-root", help="where manifests, plans, reports and logs go")
+    pf.add_argument("--media-root", help="where the master, audio, scripts and encodes are worked on")
+    pf.add_argument("--root", action="append", metavar="NAME=PATH",
+                    help="put one kind elsewhere, e.g. out=D:\\Deliveries (NAME= alone resets it); "
+                         "kinds: work probe scripts audio subs out prores stack upscale")
+    pf.add_argument("--force", action="store_true", help="change even though work exists under the old folder")
+    pf.set_defaults(func=cmd_profile_folders)
 
     man = sub.add_parser("manifest").add_subparsers(dest="sub", required=True)
     mi = man.add_parser("import", help="import a v38 episode manifest (never modifies the source)")
@@ -589,7 +634,7 @@ def build_parser() -> argparse.ArgumentParser:
     sm.add_argument("--reference", required=True, help="reference capture label in that project")
     sm.add_argument("--pad-frames", type=int, required=True, help="audio.pad_frames of the selected capture")
     sm.add_argument("--capture", required=True, help="selected audio capture label")
-    sm.add_argument("--sandbox", required=True)
+    sm.add_argument("--sandbox", help="scratch folder (default: <home>/FromStunToKill/smoke)")
     sm.add_argument("--seconds", type=float, default=200.0)
     sm.add_argument("--chroma", choices=("422", "420"), default="422")
     sm.add_argument("--steps", help="comma list from cadence,trim,audit,repair,encode (finished work is reused)")

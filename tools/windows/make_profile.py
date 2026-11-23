@@ -1,8 +1,9 @@
 """Write this machine's fstk profile from the v38 machine.json, pointing vspipe at this venv.
 
 Run with the venv's Python (setup-fstk.ps1 does):
-    python tools\\windows\\make_profile.py --v38 Z:\\ld-pipeline\\machine.json --data-root Z:\\fstk-data ^
-        --media-root X:\\fstk-media [--dvd-root Z:\\Video] [--downloads-root X:\\] [--force]
+    python tools\\windows\\make_profile.py --v38 Z:\\ld-pipeline\\machine.json [--data-root DIR] [--media-root DIR]
+        [--out-root DIR] [--dvd-root Z:\\Video] [--downloads-root X:\\] [--force]
+    Defaults: <home>\\FromStunToKill\\data and <home>\\FromStunToKill\\work on this machine's own disk.
 """
 from __future__ import annotations
 
@@ -11,21 +12,33 @@ import json
 import sys
 from pathlib import Path
 
-from fstk.config.profile import Profile, convert_v38_profile, default_profile_path
+from fstk.config.profile import (
+    Profile,
+    convert_v38_profile,
+    default_data_root,
+    default_media_root,
+    default_profile_path,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--v38", required=True, help="v38 machine.json (read only)")
-    ap.add_argument("--data-root", required=True, help="small durable state (manifests, reports, approvals)")
-    ap.add_argument("--media-root", required=True, help="large per-episode media (master, audio, encodes)")
+    ap.add_argument("--data-root", help="small durable state (manifests, reports, approvals); "
+                                         "default <home>\\FromStunToKill\\data")
+    ap.add_argument("--media-root", help="working media (master, audio, encodes); default <home>\\FromStunToKill\\work")
+    ap.add_argument("--out-root", help="optional separate folder for finished files")
     ap.add_argument("--dvd-root", help="folder holding the DVD rips (searched by `fstk episode dvd --find`)")
     ap.add_argument("--downloads-root", help="folder holding capture folders")
     ap.add_argument("--out", default=str(default_profile_path()))
     ap.add_argument("--force", action="store_true")
     a = ap.parse_args(argv)
     v38 = json.loads(Path(a.v38).read_bytes().decode("utf-8-sig"))
+    a.data_root = str(Path(a.data_root or default_data_root()).absolute())
+    a.media_root = str(Path(a.media_root or default_media_root()).absolute())
     data, notes = convert_v38_profile(v38, data_root=a.data_root, media_root=a.media_root)
+    if a.out_root:
+        data["roots"]["out"] = str(Path(a.out_root).absolute())
     scripts = Path(sys.prefix) / ("Scripts" if sys.platform == "win32" else "bin")
     vspipe = scripts / ("vspipe.exe" if sys.platform == "win32" else "vspipe")
     if not vspipe.is_file():

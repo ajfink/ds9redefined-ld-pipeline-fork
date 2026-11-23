@@ -14,8 +14,17 @@ Inputs used (all read-only, never modified):
 | v38 machine profile (tool paths) | `Z:\ld-pipeline\machine.json` |
 | v38 ProRes master + project (smoke check only) | `Z:\ld-pipeline-device\prores`, `...\stack` |
 
-New output goes to `X:\fstk-media` (large media: master ≈ 40 GB, audio, encodes) and `Z:\fstk-data`
-(manifests, plans, reports, logs). X: has about 170 GB free; the profile keeps 80 GB in reserve.
+**fstk only reads X: and Z:\Video.** Everything it writes goes under your user folder on the Legion's own
+disk by default:
+
+| Folder | Holds |
+|---|---|
+| `C:\Users\<you>\FromStunToKill\work` | working media: the lossless master (≈ 40 GB), audio, scripts, encodes, finished files |
+| `C:\Users\<you>\FromStunToKill\data` | manifests, plans, reports, logs, approvals (small) |
+| `C:\Users\<you>\FromStunToKill\smoke` | the smoke check's scratch copy |
+
+Plan on about 60 GB free for one episode plus the 80 GB reserve the profile keeps. Setup prints the free
+space; if the C: drive is short, choose another local folder (see "Changing the folders" below).
 
 ---
 
@@ -27,10 +36,10 @@ Open **PowerShell** (not as administrator) and run:
 powershell -NoProfile -ExecutionPolicy Bypass -File Z:\FromStunToKill\tools\windows\setup-fstk.ps1
 ```
 
-It installs Python 3.12 if missing (winget), creates a venv at `%LOCALAPPDATA%\fstk\venv` (kept off Z:
-on purpose), installs fstk with the GUI and VapourSynth plus every plugin as PyPI wheels (bestsource,
+It installs Python 3.12 if missing (winget), creates a venv at `%LOCALAPPDATA%\fstk\venv`, installs fstk with the GUI and VapourSynth plus every plugin as PyPI wheels (bestsource,
 TIVTC, MVTools, znedi3, eedi3, resize2, akarin, vszip, vsjetpack), writes the profile to
-`%APPDATA%\FromStunToKill\machine.json` from your v38 `machine.json`, and runs `fstk doctor`.
+`%APPDATA%\FromStunToKill\machine.json` from your v38 `machine.json` (tool paths only; the v38 `Z:\work`
+folders are not used), prints the free space where fstk will write, and runs `fstk doctor`.
 
 Then, for this session, put fstk on the path:
 
@@ -51,10 +60,10 @@ It proves VapourSynth, TIVTC, QTGMC, RIFE and x265 all work on Windows before co
 ```powershell
 fstk smoke --episode DS9:S01E20 --master "Z:\ld-pipeline-device\prores\S01E20-stack-master.mov" `
   --project "Z:\ld-pipeline-device\stack\stack-full-s01e20.orcprj" --reference P6 --pad-frames 118 `
-  --capture P2 --sandbox "X:\fstk-smoke" --seconds 100
+  --capture P2 --seconds 100
 ```
 
-Expect five stages `passed` and an HEVC file under `X:\fstk-smoke`. (No `--repair pp2` or
+Expect five stages `passed` and an HEVC file under `…\FromStunToKill\smoke`. (No `--repair pp2` or
 `--rife-standin` here: this is the real QTGMC and real RIFE.) A failure here is the most useful thing
 to send back; you can still continue to step 3.
 
@@ -109,7 +118,8 @@ Open the episode → **Delivery review…**:
   **Show latest preview** when the job finishes. Applying fixes or stretch choices re-encodes from the master
   (a new `-r2` file; the first encode is kept).
 
-The finished file is in `X:\fstk-media\ds9-s01e20\out\`, with `<name>.quality.md` beside it.
+The finished file is in `…\FromStunToKill\work\ds9-s01e20\out\` (or your finished-files folder), with
+`<name>.quality.md` beside it.
 
 ---
 
@@ -119,7 +129,7 @@ Check where a job stands: `fstk status DS9:S01E20 <job>` (the job name is the pl
 Send back:
 
 1. the failing **stage** and its **issues** (from `fstk status`, or the app's job panel),
-2. the stage's **log** from `Z:\fstk-data\episodes\DS9\S01E20\logs\` (newest files),
+2. the stage's **log** from `…\FromStunToKill\data\episodes\DS9\S01E20\logs\` (newest files),
 3. `fstk doctor` output if it is a tool or plugin problem.
 
 Known risks and what each looks like:
@@ -130,7 +140,22 @@ Known risks and what each looks like:
 | TIVTC drops the `FstkN` frame tag on Windows | video-trim: "FstkN frame property lost" | Send the log; the trim probe needs another tagging method. |
 | QTGMC / resize2 | video-trim or smoke: "No attribute … resize2" | Re-run setup; or plan the trim with `repair=pp2` (edit the plan step params) and tell me. |
 | RIFE (Vulkan) | pad-repair: RIFE output missing/wrong size | Send the log; check `rife_engine` and `rife_model_dir` in the profile. |
-| Disk space | a step "blocked" on space | Free space on X: or lower `limits.min_free_gb` in the profile (80 GB now). |
+| Disk space | a step "blocked" on space | Free space on that drive, move the working folder (below), or lower `limits.min_free_gb` (80 GB now). |
 | Cadence outside v38 ranges | job stops at `cadence-review` | Approve in the app's review panel after looking at the evidence, then run the plan again. |
+
+## Changing the folders
+
+Before the first episode, or any time with nothing in progress:
+
+```powershell
+fstk profile folders                                   # show them
+fstk profile folders --media-root D:\fstk-work         # move the working folder
+fstk profile folders --root out=E:\Deliveries          # finished files somewhere else (out= alone resets)
+fstk profile folders --data-root D:\fstk-data
+```
+
+or **Folders…** in the app. Setup takes the same choices: `setup-fstk.ps1 -MediaRoot D:\fstk-work -OutRoot E:\Deliveries`.
+fstk refuses to move a folder that already holds episode work (those episodes would no longer be found) unless
+you move the work yourself or confirm.
 
 Nothing in this run modifies the captures, the DVD, the v38 tree, or the v38 master.

@@ -64,6 +64,85 @@ SOURCE_ROOTS = ("downloads_root", "dvd_root", "cut_pad_images")
 ROOT_ALIASES = {"avs": "scripts"}
 
 
+def default_app_home() -> Path:
+    """Where fstk keeps its own state and working media unless the owner chooses other folders.
+
+    The user's home on the local machine (``C:\\Users\\<you>\\FromStunToKill`` on Windows): never a network or
+    USB share, and never next to the captures. ``FSTK_HOME`` overrides it.
+    """
+    env = os.environ.get("FSTK_HOME")
+    return Path(env).expanduser() if env else Path.home() / "FromStunToKill"
+
+
+def default_data_root() -> Path:
+    return default_app_home() / "data"
+
+
+def default_media_root() -> Path:
+    return default_app_home() / "work"
+
+
+def episodes_under(root: Path) -> list[Path]:
+    """Episode folders already holding work under a data or media root (used before moving a root)."""
+    if not root.is_dir():
+        return []
+    found = [p for p in (root / "episodes").glob("*/*") if p.is_dir()] if (root / "episodes").is_dir() else []
+    found += [p for p in root.iterdir() if p.is_dir() and "-" in p.name and any(p.iterdir())]
+    return sorted(set(found))
+
+
+def change_folders(profile: Profile, *, data_root: str | os.PathLike | None = None,
+                   media_root: str | os.PathLike | None = None, roots: Mapping[str, str | None] | None = None,
+                   force: bool = False) -> list[tuple[str, str | None, str | None]]:
+    """Point the profile at other state/working folders and save it. Returns (key, old, new) per change.
+
+    ``roots`` sets a per-kind override (``{"out": "D:/Deliveries"}``) or clears one (``None``/``""``). Refuses
+    (ConfigError) when work already exists under a folder being changed, unless ``force``: manifests record
+    paths relative to these folders, so episodes left behind would no longer be found.
+    """
+    changes: list[tuple[str, Path | None, Path | None]] = []
+    if data_root and Path(data_root).absolute() != profile.data_root:
+        changes.append(("data_root", profile.data_root, Path(data_root).absolute()))
+    if media_root and Path(media_root).absolute() != profile.media_root:
+        changes.append(("media_root", profile.media_root, Path(media_root).absolute()))
+    overrides = dict(profile.roots)
+    for name, value in (roots or {}).items():
+        if name not in MEDIA_ROOTS:
+            raise ConfigError(f"unknown working-folder kind {name!r}; one of {', '.join(MEDIA_ROOTS)}")
+        old = Path(overrides[name]) if overrides.get(name) else None
+        new = Path(value).absolute() if value else None
+        if old == new:
+            continue
+        if new is None:
+            overrides.pop(name, None)
+        else:
+            overrides[name] = str(new)
+        changes.append((f"roots.{name}", old, new))
+    busy: list[Path] = []
+    for key, old, _new in changes:
+        if old is None:
+            continue
+        if key in ("data_root", "media_root"):
+            busy += episodes_under(old)
+        elif old.is_dir():
+            busy += [x for x in old.iterdir() if x.is_dir()]
+    if busy and not force:
+        raise ConfigError("work already exists under a folder being changed (" + ", ".join(map(str, busy[:4]))
+                          + "); those episodes would no longer be found. Move them to the new place yourself, "
+                            "or change it anyway (force)")
+    for key, _old, new in changes:
+        if key == "data_root":
+            profile.data_root = new
+        elif key == "media_root":
+            profile.media_root = new
+        if new is not None:
+            new.mkdir(parents=True, exist_ok=True)
+    profile.roots = overrides
+    if changes:
+        profile.save()
+    return [(k, str(o) if o else None, str(n) if n else None) for k, o, n in changes]
+
+
 def default_profile_path() -> Path:
     env = os.environ.get("FSTK_PROFILE")
     if env:

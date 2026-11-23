@@ -740,3 +740,12 @@ only as a reviewed, opt-in source with side-by-side and in-context previews.
 - Parked: the residual-damage map + masked RIFE fill. Real S02E01 TBC JSON: dropouts in 3641 of 166048 fields per
   capture, median 17 samples; mapping capture fields to stack frames needs Orc's frame-map + alignment semantics,
   to be confirmed on a real render first.
+
+## CP22 — working folders off X:, setup script Python lookup
+- fstk writes only to local, owner-chosen folders: default `~/FromStunToKill/{data,work}` (`FSTK_HOME` overrides),
+  per-kind override (`roots.out` for finished files). `fstk profile folders`, app **Folders…**, `setup-fstk.ps1
+  -DataRoot/-MediaRoot/-OutRoot`. `change_folders` refuses to move a root that already holds episode work (force overrides).
+- `fstk smoke` sandbox defaults to `~/FromStunToKill/smoke`. X: and Z:\Video are read-only inputs.
+- setup-fstk.ps1: first Windows run failed (`py` not on PATH right after the winget install); now locates a real
+  CPython 3.12 by full path (py launcher, then the standard install folders, PATH refreshed), and uses it for the venv.
+- 414 tests, ruff clean.

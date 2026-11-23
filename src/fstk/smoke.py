@@ -50,6 +50,12 @@ def _log_line(log: list[dict], **kw) -> None:
     print(" ".join(f"{k}={v}" for k, v in kw.items()), flush=True)
 
 
+def _default_sandbox() -> Path:
+    from fstk.config.profile import default_app_home
+
+    return default_app_home() / "smoke"
+
+
 def build_profile(spec: SmokeSpec):
     from fstk.config.profile import KNOWN_TOOLS, SCHEMA, Profile, current_os
 
@@ -185,7 +191,8 @@ def to_markdown(summary: dict) -> str:
 def smoke_main(args) -> int:
     spec = SmokeSpec(episode=args.episode, master=Path(args.master), project=Path(args.project),
                      reference=args.reference, pad_frames=args.pad_frames, capture=args.capture,
-                     sandbox=Path(args.sandbox), seconds=args.seconds, chroma=args.chroma,
+                     sandbox=Path(args.sandbox) if args.sandbox else _default_sandbox(), seconds=args.seconds,
+                     chroma=args.chroma,
                      dvd=Path(args.dvd) if args.dvd else None, dvd_offset=args.dvd_offset,
                      steps=args.steps.split(",") if args.steps else ["cadence", "trim", "audit", "repair", "encode"],
                      preset=args.preset, repair=args.repair, rife_standin=args.rife_standin,

@@ -167,6 +167,9 @@ class MainWindow(QMainWindow):
         self.handoff_button.clicked.connect(self.ask_handoff)
         self.run_button = QPushButton("Run plan…")
         self.run_button.clicked.connect(self.choose_and_run)
+        self.folders_button = QPushButton("Folders…")
+        self.folders_button.setToolTip("Where fstk keeps its state and does its work")
+        self.folders_button.clicked.connect(self.open_folders)
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.cancel_run)
@@ -185,6 +188,7 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.run_button)
         bar.addWidget(self.cancel_button)
         bar.addStretch(1)
+        bar.addWidget(self.folders_button)
         cl.addLayout(bar)
 
         split = QSplitter(Qt.Orientation.Vertical)
@@ -376,6 +380,14 @@ class MainWindow(QMainWindow):
         matches = self.episodes.findItems(canonical, Qt.MatchFlag.MatchExactly)
         if matches:
             self.episodes.setCurrentItem(matches[0])
+
+    def open_folders(self) -> None:
+        from fstk.ui.folders import FoldersDialog
+
+        dlg = FoldersDialog(self.services.profile, self)
+        if dlg.exec() and dlg.changed:
+            self.log.appendPlainText("folders: " + "; ".join(f"{k} → {n or '(default)'}" for k, _o, n in dlg.changed))
+            self.refresh()
 
     def run_intake(self) -> None:
         if not self.episode:
