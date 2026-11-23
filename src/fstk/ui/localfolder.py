@@ -22,6 +22,21 @@ from PySide6.QtWidgets import (
 from fstk.workspace.local_source import find_capture_folders
 
 
+def running_elevated() -> bool:
+    """Windows: an Administrator process has a separate logon session and cannot see the user's mapped drives."""
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())  # type: ignore[attr-defined]
+    except (AttributeError, OSError):
+        return False
+
+
+ELEVATED_NOTE = ("This window is running as Administrator, so Windows hides your mapped network drives (X:, Y:, W:) "
+                 "from it. Close fstk and start it again from a normal (non-admin) PowerShell, or type the share "
+                 "path instead, e.g. \\\\Lenovoflex\\e hdd.")
+
+
 class LocalFolderDialog(QDialog):
     def __init__(self, start: str = "", parent=None):
         super().__init__(parent)
@@ -42,6 +57,11 @@ class LocalFolderDialog(QDialog):
             row.addWidget(w)
         lay.addLayout(row)
         self.status = QLabel("")
+        if running_elevated():
+            warn = QLabel(ELEVATED_NOTE)
+            warn.setWordWrap(True)
+            warn.setStyleSheet("color: #b71c1c;")
+            lay.addWidget(warn)
         lay.addWidget(self.status)
         self.found = QListWidget()
         self.found.itemDoubleClicked.connect(lambda *_: self.accept_selection())

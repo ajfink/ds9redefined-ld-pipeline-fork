@@ -159,3 +159,8 @@ fstk refuses to move a folder that already holds episode work (those episodes wo
 you move the work yourself or confirm.
 
 Nothing in this run modifies the captures, the DVD, the v38 tree, or the v38 master.
+
+## Mapped drives missing in the folder dialog
+Windows gives an Administrator PowerShell a separate session that cannot see mapped network drives (X:, Y:, W:).
+Start `fstk-gui` (and `setup-fstk.ps1` once Python is installed) from a **normal, non-admin** PowerShell. The setup
+script does not need admin. If you must stay elevated, type the share path (`\\Lenovoflex\e hdd`) instead of the drive letter.
