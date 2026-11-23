@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -40,11 +41,14 @@ class DvdDialog(QDialog):
         self.folder = QLineEdit(str((services.profile.sources or {}).get("dvd_root") or ""))
         self.folder.setPlaceholderText("Folder to search (a DVD rips folder, local, mapped drive or share)")
         self.folder.returnPressed.connect(self.search)
+        self.folder.textChanged.connect(lambda *_: self._update_remember())
         self.browse_folder = QPushButton("Folder…")
         self.browse_folder.clicked.connect(self._browse_folder)
         self.search_button = QPushButton("Search")
         self.search_button.clicked.connect(self.search)
-        for w in (self.folder, self.browse_folder, self.search_button):
+        self.remember = QPushButton("Remember folder")
+        self.remember.clicked.connect(self.remember_folder)
+        for w in (self.folder, self.browse_folder, self.search_button, self.remember):
             row.addWidget(w)
         lay.addLayout(row)
         self.every = QCheckBox("List every video file, not only those named with the episode number")
@@ -74,6 +78,7 @@ class DvdDialog(QDialog):
         self.folder.setToolTip("Where to look for this episode's DVD file. Starts as the DVD folder in Settings → Folders.")
         self.browse_folder.setToolTip("Pick the folder to search.")
         self.search_button.setToolTip("Look under this folder for video files named with the episode number.")
+        self.remember.setToolTip("Save this folder as the DVD folder in Settings → Folders, so every episode starts here.")
         self.every.setToolTip("Show every video file under the folder, for a rip whose name does not carry S01E20-style numbering.")
         self.found.setToolTip("Matching files. Double-click one to use it for this episode.")
         self.use_button.setToolTip("Record the selected file as this episode's DVD.")
@@ -84,10 +89,14 @@ class DvdDialog(QDialog):
 
         apply_common(self)
         self._show_state()
+        self._update_remember()
+        recorded = self.services.dvd_status(self.episode)
         if self.folder.text().strip():
             self.search()
+        elif recorded["state"] == "set":
+            self._show_recorded(recorded["path"])          # no DVD folder set: show where the recorded file lives
         else:
-            self.status.setText("No DVD folder is set (Settings → Folders). Type or choose a folder, or pick a file.")
+            self.status.setText("No DVD folder is set. Type or choose a folder and press Remember folder, or pick a file.")
 
     def _show_state(self) -> None:
         st = self.services.dvd_status(self.episode)
@@ -133,6 +142,37 @@ class DvdDialog(QDialog):
             return
         self.changed = True
         self._show_state()
+        if file:
+            self._show_recorded(str(file))
+        else:
+            self.status.setText("Recorded: no DVD for this episode.")
+
+    def _show_recorded(self, file: str) -> None:
+        """Make the choice visible: the file's folder in the search box, the file listed and selected."""
+        if not self.folder.text().strip():
+            self.folder.setText(str(Path(file).parent))
+        self.search()
+        match = self.found.findItems(file, Qt.MatchFlag.MatchExactly)
+        if not match:
+            self.found.addItem(file)
+            match = self.found.findItems(file, Qt.MatchFlag.MatchExactly)
+        self.found.setCurrentItem(match[0])
+        self.status.setText(f"Recorded for {self.episode}: {Path(file).name}")
+        self._update_remember()
+
+    def _update_remember(self) -> None:
+        text = self.folder.text().strip().strip('"')
+        self.remember.setEnabled(bool(text) and text != str((self.services.profile.sources or {}).get("dvd_root") or ""))
+
+    def remember_folder(self) -> None:
+        text = self.folder.text().strip().strip('"')
+        try:
+            self.services.set_dvd_root(text)
+        except Exception as exc:
+            QMessageBox.warning(self, "Folder not saved", str(exc))
+            return
+        self.status.setText(f"{text} is now the DVD folder for every episode.")
+        self._update_remember()
 
     def use_selected(self) -> None:
         item = self.found.currentItem()

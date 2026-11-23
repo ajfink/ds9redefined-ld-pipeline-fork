@@ -972,3 +972,11 @@ S02E02 still failed at `download`: `sources.downloads_root` is empty and the own
   are not visible from the new data folder; the owner starts them again or moves the folder.
 
 Tests: `test_folders.py` +2 (change_sources, dialog); full suite 566 passed.
+
+### CP36b — DVD dialog did not show the chosen file (Mac)
+
+On the Mac, after "Choose a file…" the recorded path was written (the heading line changed) but the rest of the dialog
+stayed empty — no folder, no list — so it looked as if nothing had been chosen. The dialog now puts the file's folder in the
+search box, lists and selects the file (even when its name lacks the episode number) and says "Recorded for <episode>:
+<name>"; reopening an episode with a recorded DVD shows it the same way. New **Remember folder** button saves the folder
+as `sources.dvd_root` (same as Settings → Folders) so later episodes start there. Test added; full suite re-run.

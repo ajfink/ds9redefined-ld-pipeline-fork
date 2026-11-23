@@ -204,6 +204,12 @@ class Services:
         root = folder or (self.profile.sources or {}).get("dvd_root") or ""
         return find_dvd(Path(root), ep.code, any_video=any_video) if root else []
 
+    def set_dvd_root(self, folder: str | Path | None) -> bool:
+        """Remember ``folder`` as the profile's DVD rips folder (what Settings → Folders edits). True if it changed."""
+        from fstk.config.profile import change_sources
+
+        return bool(change_sources(self.profile, {"dvd_root": str(folder) if folder else None}))
+
     def set_dvd(self, episode: str | EpisodeId, file: str | Path | None, actor: str) -> str | None:
         """Record the DVD file for this episode, or ``None`` for "no DVD (LD-only route)"."""
         from fstk.workspace.dvd import record_dvd

@@ -83,6 +83,25 @@ def test_dvd_dialog_without_a_folder_and_main_window_button(services, qtbot):  #
     dlg = DvdDialog(services, "DS9:S01E20", "op")
     qtbot.addWidget(dlg)
     assert "No DVD folder is set" in dlg.status.text()
+    assert not dlg.remember.isEnabled()
     w = MainWindow(services, actor="op")
     qtbot.addWidget(w)
     assert w.dvd_button.text() == "DVD…" and w.dvd_button.toolTip()
+
+
+@pytest.mark.gui
+def test_chosen_file_is_shown_and_its_folder_can_be_remembered(services, tmp_path, qtbot):  # noqa: F811
+    from fstk.ui.dvd import DvdDialog
+
+    root, hit, other, odd = _rips(tmp_path)
+    dlg = DvdDialog(services, "DS9:S01E20", "op")      # no DVD folder in the profile, nothing recorded yet
+    qtbot.addWidget(dlg)
+    dlg._record(str(odd))                              # what "Choose a file…" does with the picked path
+    assert dlg.folder.text() == str(odd.parent)
+    assert dlg.found.currentItem().text() == str(odd)  # listed and selected, even though its name has no S01E20
+    assert str(odd) in dlg.state.text() and dlg.remember.isEnabled()
+    dlg.remember_folder()
+    assert services.profile.sources["dvd_root"] == str(odd.parent) and not dlg.remember.isEnabled()
+    again = DvdDialog(services, "DS9:S01E20", "op")    # reopened: folder is the profile's, recorded file is visible
+    qtbot.addWidget(again)
+    assert again.folder.text() == str(odd.parent) and "Recorded DVD" in again.state.text()
