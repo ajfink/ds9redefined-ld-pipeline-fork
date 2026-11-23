@@ -933,3 +933,22 @@ What the bundle showed:
   because the folder is meant to be shared read-only and device state is never shared (ADR 0002).
 
 Tests: `tests/unit/test_install.py` 32 → 39. Full suite green; ruff clean.
+
+## CP35 — per-episode DVD choice in the app
+
+Owner question: "where do we input the DVD episode location, per episode?" It was only the command
+`fstk episode dvd <episode> --find | --file PATH | --none`; the GUI had no control for it, although the delivery
+plan refuses to build until the DVD reference is recorded (or declined).
+
+- New `src/fstk/workspace/dvd.py` holds `find_dvd`, `dvd_status` and `record_dvd`, shared by the command and the app so
+  both write exactly the same manifest fields (`artifacts.dvd.path`, `mode.dvd_reference_available`). `find_dvd` now
+  ignores spaces in the search code too, and can list every video file (`any_video`) for rips whose name has no
+  episode number.
+- `Services.dvd_status / dvd_search / set_dvd`; new `src/fstk/ui/dvd.py` (`DvdDialog`): shows what is recorded, searches
+  the profile's DVD folder (changeable, with Browse) for files named with the episode number, optionally lists every
+  video file, "Choose a file…" for anything else, and "This episode has no DVD" for the LaserDisc-only route.
+- Main window: **DVD…** button next to EFM capture / Delivery review, with a tooltip.
+- `dvd_status` reports a fourth state, "unfiled": a v38-imported manifest says a DVD exists but names no file (the
+  S01E20 fixture is one); the dialog tells the operator to choose the file.
+
+Tests: `tests/unit/test_dvd_choice.py` (5 cases incl. dialog and button), tooltip coverage via `missing_tips`.

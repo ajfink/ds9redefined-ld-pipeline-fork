@@ -191,6 +191,8 @@ class MainWindow(QMainWindow):
         self.deliver_button = QPushButton("Run to delivery")
         self.deliver_button.setToolTip("Stack render → … → QC, then the A/V check (DVD or no-DVD route)")
         self.deliver_button.clicked.connect(self.run_delivery)
+        self.dvd_button = QPushButton("DVD…")
+        self.dvd_button.clicked.connect(self.open_dvd)
         self.efm_button = QPushButton("EFM capture…")
         self.efm_button.clicked.connect(self.open_efm_review)
         self.delivery_button = QPushButton("Delivery review…")
@@ -244,6 +246,7 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.pick_button)
         bar.addWidget(self.intake_button)
         bar.addWidget(self.deliver_button)
+        bar.addWidget(self.dvd_button)
         bar.addWidget(self.efm_button)
         bar.addWidget(self.delivery_button)
         bar.addWidget(self.handoff_button)
@@ -396,6 +399,19 @@ class MainWindow(QMainWindow):
         self.show_episode(self.episode)
 
     # ---------------------------------------------------------------- review windows
+    def open_dvd(self) -> None:
+        from fstk.ui.dvd import DvdDialog
+
+        if not self.episode:
+            QMessageBox.information(self, "DVD", "Select an episode first.")
+            return
+        LOG.info("action open-dvd episode=%s", self.episode)
+        dlg = DvdDialog(self.services, self.episode, self.actor, self)
+        dlg.exec()
+        if dlg.changed:
+            self.log.appendPlainText(f"DVD for {self.episode}: " + str(self.services.dvd_status(self.episode)))
+            self.show_episode(self.episode)
+
     def open_efm_review(self):
         from fstk.ui.reviews import EfmCaptureReview
 
@@ -639,6 +655,8 @@ class MainWindow(QMainWindow):
                            "create or open its workspace.",
             "intake_button": "Intake: download the captures (if needed), inventory them, choose the stack reference "
                              "and decode the EFM audio. Heavy steps run one at a time.",
+            "dvd_button": "Choose this episode's DVD (a file found by its episode number, or one you browse to), "
+                          "or record that it has none. Needed before the delivery plan.",
             "efm_button": "Review the decoded EFM audio of this episode's captures and choose which one to use.",
             "delivery_button": "Review a finished delivery: the A/V check and the evidence, then approve or send it "
                                "back for corrections.",

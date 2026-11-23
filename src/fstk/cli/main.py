@@ -16,6 +16,7 @@ from typing import Any
 
 from fstk import __version__
 from fstk.core.errors import FstkError
+from fstk.workspace.dvd import find_dvd, record_dvd
 
 
 def _actor(args) -> str:
@@ -396,16 +397,6 @@ def cmd_episode_create(args) -> int:
     return 0
 
 
-def find_dvd(dvd_root: Path, code: str) -> list[Path]:
-    """Video files under ``dvd_root`` whose name carries the episode code (S01E20), case-insensitive."""
-    pat = code.casefold()
-    exts = {".mkv", ".mp4", ".m4v", ".mov", ".ts", ".m2ts", ".vob", ".iso"}
-    if not dvd_root.is_dir():
-        return []
-    return sorted(p for p in dvd_root.rglob("*") if p.is_file() and p.suffix.lower() in exts
-                  and pat in p.name.casefold().replace(" ", ""))
-
-
 def cmd_episode_dvd(args) -> int:
     """Record the episode's DVD reference (a file, found under dvd_root, or none)."""
     from fstk.core.identity import EpisodeId
@@ -415,8 +406,7 @@ def cmd_episode_dvd(args) -> int:
     ep = EpisodeId.parse(args.episode)
     actor = _actor(args)
     if args.none:
-        with ws.store.transaction(by=actor, reason="operator: no DVD reference for this episode") as m:
-            m.set("mode.dvd_reference_available", False, by=actor, note="operator: no DVD (fstk episode dvd --none)")
+        record_dvd(ws.store, actor, None)
         _print(args, {"episode": str(ep), "dvd": None}, f"{ep}: no DVD reference (LD-only route)")
         return 0
     if args.file:
@@ -430,11 +420,7 @@ def cmd_episode_dvd(args) -> int:
             raise FstkError(f"looked for a file named with {ep.code} under {root}: found {len(hits)} "
                             f"({', '.join(map(str, hits[:5]))}); pass --file")
         dvd = hits[0]
-    if not dvd.is_file():
-        raise FstkError(f"DVD file not found: {dvd}")
-    with ws.store.transaction(by=actor, reason=f"operator: DVD reference {dvd.name}") as m:
-        m.set_artifact("dvd", path=str(dvd))
-        m.set("mode.dvd_reference_available", True, by=actor, note=f"operator: {dvd}")
+    record_dvd(ws.store, actor, dvd)
     _print(args, {"episode": str(ep), "dvd": str(dvd)}, f"{ep}: DVD reference {dvd}")
     return 0
 

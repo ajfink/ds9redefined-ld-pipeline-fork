@@ -188,6 +188,28 @@ class Services:
         ep = episode if isinstance(episode, EpisodeId) else EpisodeId.parse(episode)
         return EpisodeWorkspace(self.profile, ep)
 
+    # ---------------------------------------------------------------- DVD reference
+    def dvd_status(self, episode: str | EpisodeId) -> dict:
+        """``{"state": "set"|"none"|"unset", "path": ...}`` for the episode's DVD reference."""
+        from fstk.workspace.dvd import dvd_status
+
+        return dvd_status(self.workspace(episode).store.load())
+
+    def dvd_search(self, episode: str | EpisodeId, folder: str | Path | None = None, *,
+                   any_video: bool = False) -> list[Path]:
+        """Candidate DVD files: named with the episode code under ``folder`` (default: the profile's dvd_root)."""
+        from fstk.workspace.dvd import find_dvd
+
+        ep = episode if isinstance(episode, EpisodeId) else EpisodeId.parse(episode)
+        root = folder or (self.profile.sources or {}).get("dvd_root") or ""
+        return find_dvd(Path(root), ep.code, any_video=any_video) if root else []
+
+    def set_dvd(self, episode: str | EpisodeId, file: str | Path | None, actor: str) -> str | None:
+        """Record the DVD file for this episode, or ``None`` for "no DVD (LD-only route)"."""
+        from fstk.workspace.dvd import record_dvd
+
+        return record_dvd(self.workspace(episode).store, actor, file)
+
     # ---------------------------------------------------------------- browse
     def episodes(self) -> list[EpisodeId]:
         root = self.profile.data_root / "episodes"
