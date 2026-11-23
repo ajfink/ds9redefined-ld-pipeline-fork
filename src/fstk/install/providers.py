@@ -41,20 +41,49 @@ INSTALLS_WITH = {"ffprobe": "ffmpeg"}
 
 MANAGERS = {"windows": ("winget",), "macos": ("brew",), "linux": ("apt", "dnf", "pacman")}
 MANAGER_BINARY = {"winget": "winget", "brew": "brew", "apt": "apt-get", "dnf": "dnf", "pacman": "pacman"}
+#: Where each manager lives when PATH does not mention it - the usual case after a Finder or Dock launch, which
+#: gives a process the system PATH and not the owner's shell PATH. Homebrew is at /opt/homebrew on Apple silicon.
+MANAGER_LOCATIONS: dict[str, tuple[str, ...]] = {
+    "brew": ("/opt/homebrew/bin/brew", "/usr/local/bin/brew", "/home/linuxbrew/.linuxbrew/bin/brew"),
+    "apt": ("/usr/bin/apt-get",),
+    "dnf": ("/usr/bin/dnf",),
+    "pacman": ("/usr/bin/pacman",),
+    "winget": (),
+}
+
+
+def find_manager(system: str, env: Mapping[str, str] | None = None,
+                 which: Callable[..., str | None] = shutil.which,
+                 exists: Callable[[str], bool] = os.path.isfile) -> tuple[str, str] | None:
+    """The package manager for this system as ``(name, program)``, or ``None``.
+
+    PATH first, then the manager's own known location, so a double-clicked launcher still finds Homebrew.
+    """
+    path = None if env is None else env.get("PATH")
+    for manager in MANAGERS.get(system, ()):
+        hit = which(MANAGER_BINARY[manager], path=path)
+        if hit:
+            return manager, hit
+        for spot in MANAGER_LOCATIONS.get(manager, ()):
+            if exists(spot):
+                return manager, spot
+    return None
 
 
 def detect_manager(system: str, env: Mapping[str, str] | None = None,
                    which: Callable[..., str | None] = shutil.which) -> str | None:
-    path = None if env is None else env.get("PATH")
-    for manager in MANAGERS.get(system, ()):
-        if which(MANAGER_BINARY[manager], path=path):
-            return manager
-    return None
+    found = find_manager(system, env, which)
+    return found[0] if found else None
 
 
-def install_command(tool: str, manager: str | None) -> list[str] | None:
+def install_command(tool: str, manager: str | None, program: str | None = None) -> list[str] | None:
+    """The command that installs ``tool``, with ``program`` (the manager's resolved path) in front when given."""
     tool = INSTALLS_WITH.get(tool, tool)
-    return (INSTALL.get(tool) or {}).get(manager or "")
+    cmd = (INSTALL.get(tool) or {}).get(manager or "")
+    if not cmd or not program:
+        return cmd
+    at = 1 if cmd[0] == "sudo" else 0               # keep `sudo` first; replace the manager's own name
+    return [*cmd[:at], program, *cmd[at + 1:]]
 
 
 def guidance(tool: str, system: str) -> str:
@@ -69,16 +98,25 @@ def guidance(tool: str, system: str) -> str:
                 f"owner's machines) from {ORC_DOCS}{page}.{extra.get(system, '')} The pipeline pins Orc's version, "
                 "so install the same one on every machine.")
     if tool in ("rife_engine", "rife_model_dir"):
+        extra = {"macos": " The macOS build runs on Metal through MoltenVK; unpack it to ~/tools/rife-ncnn-vulkan. "
+                          "Copy the *same* model folder the other machines use (rife-v4.26 on the owner's) next to "
+                          "it, or into the shared folder's `tools` directory, which setup also searches - a "
+                          "different model would repair frames differently on this machine.",
+                 "linux": " Unpack it to ~/tools/rife-ncnn-vulkan; it needs a working Vulkan driver."}
         return (f"RIFE (rife-ncnn-vulkan) is only needed to repair single-frame PAD blanks. Download it from "
                 f"{RIFE_RELEASES} and unpack it anywhere; keep the model folder next to the program. The model "
-                "(rife-v4.6 or rife-v4.26) changes the repaired frames, so it is never chosen for you.")
+                f"(rife-v4.6 or rife-v4.26) changes the repaired frames, so it is never chosen for you."
+                f"{extra.get(system, '')}")
     if tool in ("ffmpeg", "ffprobe"):
         where = {"windows": f"Install with `winget install Gyan.FFmpeg`, or download a full build from {FFMPEG_WINDOWS}.",
                  "macos": "Install with `brew install ffmpeg`, or use a static arm64 build with libx265.",
                  "linux": "Install ffmpeg with your package manager (it must include libx265)."}
         return "FFmpeg 9.x with libx265 is required. " + where.get(system, "")
     if tool == "sevenzip":
-        return "7-Zip is optional (unpacking archives). Install 7-Zip (7z/7zz) if you want it."
+        how = {"windows": "`winget install 7zip.7zip`", "macos": "`brew install sevenzip` (the program is 7zz)",
+               "linux": "your package manager's p7zip package"}
+        return ("7-Zip unpacks the .7z EFM archives; without it those captures cannot be read. Install it with "
+                + how.get(system, "your package manager") + ".")
     if tool == "curl":
         return "curl is optional (downloads); it comes with Windows 10+, macOS and most Linux systems."
     return f"{tool} is not installed."

@@ -36,7 +36,7 @@ def test_rejects_v38_profile_directly(tmp_path):
 
 @pytest.mark.parametrize("over,msg", [
     ({"data_root": "relative/path"}, "absolute"),
-    ({"tools": {"avisynth_plugin_dir": "/x"}}, "unknown tool"),
+    ({"tools": {"ffmpg": "/x"}}, "unknown tool"),            # a typo is refused; a *retired* tool is dropped
     ({"roots": {"nope": "/x"}}, "unknown media root"),
     ({"limits": {"min_free_gb": 0}}, "positive reserve"),
     ({"limits": {"resources": {"compute": 0}}}, ">= 1"),
@@ -100,3 +100,16 @@ def test_convert_v38_macos_example():
 def test_default_profile_path_env(monkeypatch, tmp_path):
     monkeypatch.setenv("FSTK_PROFILE", str(tmp_path / "p.json"))
     assert default_profile_path() == tmp_path / "p.json"
+
+
+def test_a_retired_tool_is_dropped_from_an_old_profile_with_a_note(tmp_path):
+    """vs_plugin_dir is gone (the plugin wheels autoload): an old profile must still load, not be refused."""
+    from fstk.config.profile import KNOWN_TOOLS, RETIRED_TOOLS, Profile
+
+    assert "vs_plugin_dir" not in KNOWN_TOOLS and "vs_plugin_dir" in RETIRED_TOOLS
+    doc = {"schema": "fstk-machine-profile-v1", "machine": "mac", "os": "macos",
+           "data_root": str(tmp_path / "d"), "media_root": str(tmp_path / "m"),
+           "tools": {"vs_plugin_dir": str(tmp_path / "plugins"), "curl": "/usr/bin/curl"}}
+    prof = Profile.from_dict(doc)
+    assert "vs_plugin_dir" not in prof.tools and prof.tools["curl"] == "/usr/bin/curl"
+    assert any("tools.vs_plugin_dir dropped" in n for n in prof.notes)

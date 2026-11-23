@@ -881,3 +881,30 @@ dependencies are checked, installation prompts run, work can begin.
 backup copy. Flow: commit in W:, then `git push backup main` (Z: has `receive.denyCurrentBranch=updateInstead`, so its
 working tree follows). GitHub (`fromstuntokill-app`) is pushed from W: when the owner asks. History is preserved (W: was
 cloned from Z: at c4df2da, then the CP32 work was committed on top).
+
+## CP33 — the Mac's missing dependencies: install what is safe, make the rest findable
+
+First `check` on the M5 Mac: 32 passed, 0 failures, 4 warnings (`vs_plugin_dir`, `rife_engine`, `rife_model_dir`,
+`sevenzip`). FFmpeg, FFprobe, vspipe and Orc were all found, and every `vs plugin <ns>` probe passed — the vendored
+macOS arm64 wheels load on macOS 27. Causes and fixes for the four warnings:
+
+- `vs_plugin_dir` was **dead**: nothing in `src/` ever read it (a leftover from the AviSynth era; the plugin wheels
+  in fstk's own environment autoload, and what actually matters is the per-namespace probe in
+  `tools/requirements.py`). Removed from `KNOWN_TOOLS`; `config/profile.py` gains `RETIRED_TOOLS`, dropped from a
+  profile on load with a `[retired]` note instead of failing validation, so older profiles still load. A *typo* in
+  `tools.*` is still refused.
+- `sevenzip` could have been installed and was not: a launcher started from Finder or the Dock inherits the system
+  PATH, so neither `7zz` nor `brew` was visible. `install/discover.py` now searches `GUI_PATH` (macOS
+  `/opt/homebrew/{bin,sbin}`, `/usr/local/bin`, `/opt/local/bin`, `~/.local/bin`; Linux linuxbrew, `/snap/bin`,
+  `~/.local/bin`) on top of the given PATH, and has real 7-Zip (`7zz`/`7z`/`7za`) and RIFE locations for macOS and
+  Linux. `install/providers.py` gains `find_manager`, which falls back to the manager's own location
+  (`/opt/homebrew/bin/brew`, …) and returns the program, and `install_command(tool, manager, program)` runs the
+  manager that was actually found (keeping `sudo` first). A declined or failed install now prints the guidance.
+- `rife_engine` / `rife_model_dir` stay manual **by decision** (the model changes the repaired frames, and the Mac
+  must use the same one as the Legion: `rife-v4.26`). To make that practical, discovery now also searches
+  `<shared_root>/tools` (and `tools/bin`), by file name so a share that dropped the executable bit still works, and
+  looks for `rife-v*` model folders there; the macOS guidance names MoltenVK, `~/tools/rife-ncnn-vulkan`, the shared
+  folder and the exact model.
+
+Tests: `tests/unit/test_install.py` 24 → 32, plus a retired-tool test in `tests/unit/test_profile.py`. Verified on
+Linux only; the macOS behaviour (Homebrew install offer, shared-folder pickup) is still owed a real run.

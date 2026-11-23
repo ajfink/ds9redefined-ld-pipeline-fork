@@ -38,12 +38,30 @@ KNOWN_TOOLS: dict[str, dict[str, Any]] = {
     "ffprobe": {"kind": "exe", "required": True, "path_names": ["ffprobe"]},
     "orc": {"kind": "exe", "required": True, "path_names": ["orc-cli", "orc"]},
     "vspipe": {"kind": "exe", "required": True, "path_names": ["vspipe"]},
-    "vs_plugin_dir": {"kind": "dir", "required": False, "path_names": []},
     "rife_engine": {"kind": "exe", "required": False, "path_names": ["rife-ncnn-vulkan"]},
     "rife_model_dir": {"kind": "dir", "required": False, "path_names": []},
     "sevenzip": {"kind": "exe", "required": False, "path_names": ["7z", "7zz", "7za"]},
     "curl": {"kind": "exe", "required": False, "path_names": ["curl"]},
 }
+
+#: Tools fstk once configured and no longer uses; dropped from a profile on load, with a note.
+#: ``vs_plugin_dir``: the VapourSynth plugins come with the pip wheels and autoload, so the folder is never
+#: consulted; what matters is the per-plugin probe in ``fstk.tools.requirements`` (``vs plugin <namespace>``).
+RETIRED_TOOLS: dict[str, str] = {
+    "vs_plugin_dir": "the plugin wheels in fstk's own environment autoload; the `vs plugin ...` probes check them",
+    "avisynth_plugin_dir": "AviSynth is retired (VapourSynth on every platform)",
+    "avisynth_loader": "AviSynth is retired (VapourSynth on every platform)",
+}
+
+def _without_retired(tools: Mapping[str, str]) -> tuple[dict[str, str], list[str]]:
+    """A profile's tools without the ones fstk no longer uses, plus a note for each one dropped.
+
+    An old profile keeps working: a retired entry is ignored rather than refused, and the note says why it went.
+    """
+    kept = {k: v for k, v in tools.items() if k not in RETIRED_TOOLS}
+    notes = [f"[retired] tools.{k} dropped: {RETIRED_TOOLS[k]}" for k in tools if k in RETIRED_TOOLS]
+    return kept, notes
+
 
 #: Logical artifact roots and their default sub-folder of ``media_root/<episode-slug>``.
 MEDIA_ROOTS: dict[str, str] = {
@@ -207,20 +225,21 @@ class Profile:
         if data.get("schema") != SCHEMA:
             raise ConfigError(f"{path or 'profile'}: schema must be {SCHEMA!r} "
                               f"(v38 machine.json files are converted with `fstk profile import`)")
+        tools, retired = _without_retired(data.get("tools") or {})
         try:
             limits_raw = dict(data.get("limits") or {})
             limits = Limits(min_free_gb=float(limits_raw.get("min_free_gb", 80)),
                             resources={**Limits().resources, **(limits_raw.get("resources") or {})})
             prof = cls(machine=str(data["machine"]), os=str(data.get("os") or current_os()),
                        data_root=Path(data["data_root"]), media_root=Path(data["media_root"]),
-                       tools=dict(data.get("tools") or {}), roots=dict(data.get("roots") or {}),
+                       tools=tools, roots=dict(data.get("roots") or {}),
                        sources=dict(data.get("sources") or {}),
                        downloads_template=str(data.get("downloads_template")
                                               or cls.downloads_template),
                        shared_root=Path(data["shared_root"]) if data.get("shared_root") else None,
                        instance_id=str(data.get("instance_id") or ""), limits=limits,
                        allow_newer_packages=bool(data.get("allow_newer_packages", False)),
-                       notes=list(data.get("notes") or []),
+                       notes=[*(data.get("notes") or []), *retired],
                        catalog_path=str(data.get("catalog_path") or ""),
                        volumes=dict(data.get("volumes") or {}),
                        output={k: dict(v) for k, v in (data.get("output") or {}).items()},

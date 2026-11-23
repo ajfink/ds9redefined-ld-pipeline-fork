@@ -58,6 +58,49 @@ def test_discover_rife_models_next_to_the_engine(tmp_path):
     assert sorted(Path(f.path).name for f in found) == ["rife-v4.26", "rife-v4.6"]
 
 
+def test_search_path_adds_the_folders_a_double_click_cannot_see(tmp_path):
+    path = disc.search_path("macos", {"PATH": "/usr/bin"}, tmp_path)
+    parts = path.split(":")
+    assert parts[0] == "/usr/bin"                       # what the process was given is never dropped or reordered
+    assert "/opt/homebrew/bin" in parts and "/opt/local/bin" in parts and f"{tmp_path}/.local/bin" in parts
+    assert "/opt/homebrew/bin" not in disc.search_path("windows", {"PATH": "C:/w"}, tmp_path)
+    assert "/home/linuxbrew/.linuxbrew/bin" in disc.search_path("linux", {"PATH": ""}, tmp_path)
+    once = disc.search_path("macos", {"PATH": "/opt/homebrew/bin"}, tmp_path).split(":")
+    assert once.count("/opt/homebrew/bin") == 1
+
+
+def test_a_tool_on_a_homebrew_style_path_is_found_with_no_PATH_at_all(tmp_path):
+    """The real macOS case: Finder gives the launcher the system PATH, so Homebrew must be searched by location."""
+    brew = tmp_path / "opt" / "homebrew" / "bin"
+    _exe(brew / "7zz")
+    monkey = {"macos": (str(brew),)}
+    original, disc.GUI_PATH = disc.GUI_PATH, monkey
+    try:
+        found = disc.discover("sevenzip", system="macos", env={"PATH": ""}, home=tmp_path)
+    finally:
+        disc.GUI_PATH = original
+    assert [Path(f.path) for f in found] == [brew / "7zz"]
+
+
+def test_sevenzip_and_rife_are_looked_for_where_they_really_live_on_a_mac():
+    spots = disc._locations("sevenzip", "macos", Path("/t"))
+    assert "/opt/homebrew/bin/7zz" in spots and "/usr/local/bin/7z" in spots
+    assert disc._locations("sevenzip", "linux", Path("/t")) != []
+    rife = disc._locations("rife_engine", "macos", Path("/t"))
+    assert any("~/tools/rife-ncnn-vulkan" in r for r in rife) and any("Downloads" in r for r in rife)
+
+
+def test_a_shared_tools_folder_serves_every_machine(tmp_path):
+    shared = tmp_path / "shared" / "tools"
+    shared.mkdir(parents=True)
+    (shared / "7zz").write_text("", encoding="utf-8")        # no exec bit: a Windows share often drops it
+    (shared / "rife-v4.26").mkdir()
+    found = disc.discover("sevenzip", system="macos", env={"PATH": ""}, home=tmp_path, extra_dirs=[shared])
+    assert [f.how for f in found] == ["shared folder"] and Path(found[0].path) == shared / "7zz"
+    models = disc.discover("rife_model_dir", system="macos", env={"PATH": ""}, home=tmp_path, extra_dirs=[shared])
+    assert [Path(f.path) for f in models] == [shared / "rife-v4.26"]
+
+
 def test_tools_dir_is_per_machine_never_the_app_folder(tmp_path):
     assert disc.tools_dir("windows", {"LOCALAPPDATA": str(tmp_path / "L")}, tmp_path) == tmp_path / "L" / "fstk" / "tools"
     assert "Application Support" in str(disc.tools_dir("macos", {}, tmp_path))
@@ -80,11 +123,34 @@ def test_detect_manager_uses_the_given_path():
     assert prov.detect_manager("windows", {"PATH": "p"}, which) is None
 
 
+def test_homebrew_is_found_by_its_own_location_when_it_is_not_on_PATH():
+    nothing = lambda name, path=None: None                                    # noqa: E731
+    assert prov.find_manager("macos", {"PATH": ""}, nothing, lambda p: False) is None
+    found = prov.find_manager("macos", {"PATH": ""}, nothing, lambda p: p == "/opt/homebrew/bin/brew")
+    assert found == ("brew", "/opt/homebrew/bin/brew")
+    assert prov.detect_manager("macos", {"PATH": ""}, lambda n, path=None: "/usr/local/bin/brew") == "brew"
+
+
+def test_the_install_runs_the_manager_that_was_actually_found():
+    assert prov.install_command("sevenzip", "brew", "/opt/homebrew/bin/brew") == \
+        ["/opt/homebrew/bin/brew", "install", "sevenzip"]
+    assert prov.install_command("ffmpeg", "apt", "/usr/bin/apt-get")[:2] == ["sudo", "/usr/bin/apt-get"]
+    assert prov.install_command("ffmpeg", "brew") == ["brew", "install", "ffmpeg"]
+    assert prov.install_command("orc", "brew", "/opt/homebrew/bin/brew") is None
+
+
 def test_guidance_names_the_version_pin_and_the_mac_quarantine_step():
     text = prov.guidance("orc", "macos")
     assert "2.11.1" in text and "xattr" in text
     assert "libx265" in prov.guidance("ffmpeg", "linux")
     assert "never chosen for you" in prov.guidance("rife_engine", "windows")
+
+
+def test_mac_guidance_says_how_to_install_7zip_and_to_keep_the_same_rife_model():
+    assert "brew install sevenzip" in prov.guidance("sevenzip", "macos")
+    assert "winget" in prov.guidance("sevenzip", "windows")
+    rife = prov.guidance("rife_engine", "macos")
+    assert "MoltenVK" in rife and "rife-v4.26" in rife and "shared folder" in rife
 
 
 def test_flatpak_wrapper_runs_orc_cli_inside_the_flatpak(tmp_path):
@@ -199,7 +265,24 @@ def test_setup_offers_the_package_manager_install_and_only_after_confirmation(tm
     wiz.run_setup(accepted, profile_path=path, system="linux", env=env, home=tmp_path, run=run,
                   run_text=lambda c: " libx265", doctor=_doctor_ok, venv_bin=tmp_path / "x")
     # (7-Zip is the observed tool: a real ffmpeg in /usr/bin would be found without any install)
-    assert ["sudo", "apt-get", "install", "-y", "p7zip-full"] in ran
+    assert [["sudo", str(tmp_path / "pm" / "apt-get"), "install", "-y", "p7zip-full"]] == ran
+
+
+def test_setup_takes_a_tool_from_the_shared_folder_when_the_machine_has_none(tmp_path):
+    shared = tmp_path / "shared"
+    (shared / "tools").mkdir(parents=True)
+    (shared / "tools" / "7zz").write_text("", encoding="utf-8")
+    env, _ = _fake_machine(tmp_path)
+    path = tmp_path / "p" / "machine.json"
+    kw = {"system": "linux", "env": env, "home": tmp_path, "run_text": lambda c: " libx265", "install": False,
+          "doctor": _doctor_ok, "venv_bin": tmp_path / "x"}
+    wiz.run_setup(wiz.Console(interactive=False, out=lambda t: None), profile_path=path, **kw)
+    prof = Profile.load(path)
+    assert prof.tools.get("sevenzip") is None           # not shared with this profile yet
+    prof.shared_root = shared
+    prof.save(path)
+    wiz.run_setup(wiz.Console(interactive=False, out=lambda t: None), profile_path=path, **kw)
+    assert Path(Profile.load(path).tool("sevenzip")) == shared / "tools" / "7zz"
 
 
 def test_user_path_for_a_mac_app_bundle_becomes_its_cli(tmp_path):

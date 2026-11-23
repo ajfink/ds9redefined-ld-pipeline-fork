@@ -196,10 +196,18 @@ def _pick_ffmpeg(found: list[Found], run_text: Callable[[list[str]], str], conso
     return first
 
 
+def _shared_tool_dirs(profile: Profile) -> list[Path]:
+    """Folders the owner may keep shared tools in, so every machine can use the same RIFE model and programs."""
+    root = profile.shared_root
+    return [root / "tools", root / "tools" / "bin", root] if root else []
+
+
 def _tools(console: Console, profile: Profile, *, system, env, home, run, run_text, install, venv_bin,
            result: SetupResult) -> None:
     say = console.say
-    manager = providers.detect_manager(system, env) if install else None
+    found_manager = providers.find_manager(system, env) if install else None
+    manager, manager_program = found_manager if found_manager else (None, None)
+    extra_dirs = _shared_tool_dirs(profile)
     say("\nTools:")
     for name in TOOL_ORDER:
         spec = KNOWN_TOOLS[name]
@@ -211,10 +219,11 @@ def _tools(console: Console, profile: Profile, *, system, env, home, run, run_te
         if configured:
             say(f"  changed  {label}: {configured} is gone; looking again")
         engine = profile.tools.get("rife_engine")
-        found = discover(name, system=system, env=env, home=home, venv_bin=venv_bin, engine=engine)
+        found = discover(name, system=system, env=env, home=home, venv_bin=venv_bin, engine=engine,
+                         extra_dirs=extra_dirs)
         if not found and install:
             found = _try_install(console, name, system, env, home, venv_bin, manager, run, engine=engine,
-                                 profile=profile)
+                                 profile=profile, program=manager_program, extra_dirs=extra_dirs)
         choice = _choose(console, name, found, run_text, sibling_of=profile.tools.get("ffmpeg"))
         if choice is None:
             choice = _ask_path(console, name, label, spec["required"], system)
@@ -230,19 +239,25 @@ def _tools(console: Console, profile: Profile, *, system, env, home, run, run_te
 
 
 def _try_install(console: Console, name: str, system: str, env, home: Path, venv_bin, manager, run, *, engine,
-                 profile: Profile) -> list[Found]:
+                 profile: Profile, program: str | None = None, extra_dirs=()) -> list[Found]:
+    def look() -> list[Found]:
+        return discover(name, system=system, env=env, home=home, venv_bin=venv_bin, engine=engine,
+                        extra_dirs=extra_dirs)
+
     flatpak_orc = name == "orc" and system == "linux" and providers.flatpak_has_orc(run)
     if flatpak_orc and console.confirm("  Decode-Orc is installed as a Flatpak. Create an `orc-cli` wrapper for it?"):
         providers.write_orc_flatpak_wrapper(tools_dir(system, env, home) / "bin")
-        return discover(name, system=system, env=env, home=home, venv_bin=venv_bin, engine=engine)
-    cmd = providers.install_command(name, manager)
+        return look()
+    cmd = providers.install_command(name, manager, program)
     if cmd:
         pretty = " ".join(cmd)
         if console.confirm(f"  {LABELS[name]} is missing. Install it now with `{pretty}`?"):
             rc = run(cmd)
             if rc != 0:
                 console.say(f"  the installer exited with code {rc}")
-            return discover(name, system=system, env=env, home=home, venv_bin=venv_bin, engine=engine)
+                console.say("  " + providers.guidance(name, system))
+            return look()
+        console.say("  " + providers.guidance(name, system))
         return []
     if name not in ("vspipe", "rife_model_dir", "ffprobe"):
         console.say("  " + providers.guidance(name, system))

@@ -8,13 +8,23 @@ from __future__ import annotations
 import glob
 import os
 import shutil
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from fstk.config.profile import KNOWN_TOOLS
 
 TOOL_ORDER = ("vspipe", "ffmpeg", "ffprobe", "orc", "rife_engine", "rife_model_dir", "sevenzip", "curl")
+
+#: Folders a program started from Finder, the Dock or a desktop shortcut has no PATH for: a GUI process inherits
+#: the system PATH (``/usr/bin:/bin:...``), not the one the owner's shell sets up, so Homebrew and MacPorts are
+#: invisible. Searching them is what lets setup find - and offer to install - tools after a double-click.
+GUI_PATH: dict[str, tuple[str, ...]] = {
+    "macos": ("/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/opt/local/bin",
+              "~/.local/bin", "~/bin"),
+    "linux": ("/usr/local/bin", "~/.local/bin", "~/bin", "/home/linuxbrew/.linuxbrew/bin", "/snap/bin"),
+    "windows": (),
+}
 
 
 @dataclass(frozen=True)
@@ -31,6 +41,17 @@ def tools_dir(system: str, env: Mapping[str, str], home: Path) -> Path:
     if system == "macos":
         return home / "Library" / "Application Support" / "FromStunToKill" / "tools"
     return Path(env.get("XDG_DATA_HOME") or home / ".local" / "share") / "fstk" / "tools"
+
+
+def search_path(system: str, env: Mapping[str, str], home: Path, extra: Iterable[Path] = ()) -> str:
+    """The PATH to search: what the process was given, then the folders a GUI launch leaves out, then ``extra``
+    (the shared folder's own tools, when the owner keeps them there). Nothing is removed and nothing is run."""
+    parts = [p for p in (env.get("PATH") or "").split(os.pathsep) if p]
+    for spot in (*GUI_PATH.get(system, ()), *(str(p) for p in extra)):
+        text = spot.replace("~", str(home))
+        if text not in parts:
+            parts.append(text)
+    return os.pathsep.join(parts)
 
 
 def _expand(pattern: str, env: Mapping[str, str], home: Path) -> list[str]:
@@ -69,24 +90,36 @@ def _locations(name: str, system: str, tools: Path) -> list[str]:
         if system == "windows":
             return [*own, "%LOCALAPPDATA%/Flowframes/FlowframesData/pkgs/rife-ncnn/rife-ncnn-vulkan.exe",
                     "~/tools/rife-ncnn-vulkan/rife-ncnn-vulkan.exe"]
-        return [*own, "~/tools/rife-ncnn-vulkan/rife-ncnn-vulkan", "/usr/local/bin/rife-ncnn-vulkan"]
+        # the macOS and Linux releases are unpacked wherever the owner put them; look where downloads land too
+        return [*own, "~/tools/rife-ncnn-vulkan/rife-ncnn-vulkan", "~/tools/rife-ncnn-vulkan*/rife-ncnn-vulkan",
+                "/opt/homebrew/bin/rife-ncnn-vulkan", "/usr/local/bin/rife-ncnn-vulkan",
+                "~/Applications/rife-ncnn-vulkan*/rife-ncnn-vulkan", "~/Downloads/rife-ncnn-vulkan*/rife-ncnn-vulkan"]
     if name == "sevenzip":
         if system == "windows":
             return ["%ProgramFiles%/7-Zip/7z.exe", "%ProgramFiles(x86)%/7-Zip/7z.exe"]
-        return []
+        # Homebrew installs the program as 7zz; p7zip and MacPorts use 7z / 7za
+        return [f"{d}/{exe}" for d in ("/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin", "/usr/bin",
+                                       "/usr/lib/p7zip", "~/tools") for exe in ("7zz", "7z", "7za")]
     if name == "curl":
         return ["%SystemRoot%/System32/curl.exe"] if system == "windows" else []
     return own
 
 
-def _model_dirs(engine: str | None, system: str, env: Mapping[str, str], home: Path) -> list[str]:
-    """RIFE model folders next to the engine, or in the places Flowframes keeps them."""
+def _model_dirs(engine: str | None, system: str, env: Mapping[str, str], home: Path,
+                extra: Iterable[Path] = ()) -> list[str]:
+    """RIFE model folders next to the engine, in the places Flowframes keeps them, or in a shared tools folder.
+
+    The model decides what a repaired frame looks like, so every machine must use the same one: a folder the
+    owner shares between machines is searched as well, and the choice is never made automatically.
+    """
     spots: list[str] = []
     if engine:
         spots.append(str(Path(engine).parent / "rife-v*"))
     if system == "windows":
         spots.append("%LOCALAPPDATA%/Flowframes/FlowframesData/pkgs/rife-ncnn-vs/rife-v*")
-    spots += ["~/tools/rife-ncnn-vulkan/rife-v*"]
+    spots += ["~/tools/rife-ncnn-vulkan/rife-v*", "~/tools/rife-v*"]
+    spots += [f"{d}/rife-v*" for d in (str(p) for p in extra)]
+    spots += [f"{d}/rife-ncnn-vulkan/rife-v*" for d in (str(p) for p in extra)]
     out: list[str] = []
     for spot in spots:
         for p in _expand(spot, env, home):
@@ -96,10 +129,16 @@ def _model_dirs(engine: str | None, system: str, env: Mapping[str, str], home: P
 
 
 def discover(name: str, *, system: str, env: Mapping[str, str] | None = None, home: Path | None = None,
-             venv_bin: Path | None = None, engine: str | None = None) -> list[Found]:
-    """Every copy of ``name`` that can be found, best first. Never runs anything."""
+             venv_bin: Path | None = None, engine: str | None = None,
+             extra_dirs: Iterable[Path] = ()) -> list[Found]:
+    """Every copy of ``name`` that can be found, best first. Never runs anything.
+
+    ``extra_dirs`` are folders the owner keeps tools in (typically ``<shared folder>/tools``), searched after the
+    machine's own PATH and the GUI folders.
+    """
     env = os.environ if env is None else env
     home = Path.home() if home is None else home
+    extra_dirs = list(extra_dirs)
     spec = KNOWN_TOOLS[name]
     found: list[Found] = []
     seen: set[str] = set()
@@ -112,17 +151,24 @@ def discover(name: str, *, system: str, env: Mapping[str, str] | None = None, ho
 
     if spec["kind"] == "dir":
         if name == "rife_model_dir":
-            for p in _model_dirs(engine, system, env, home):
+            for p in _model_dirs(engine, system, env, home, extra_dirs):
                 add(p, "known location")
         return found
     if venv_bin is not None and name == "vspipe":
         for exe in ("vspipe.exe", "vspipe"):
             if (venv_bin / exe).is_file():
                 add(str(venv_bin / exe), "this environment")
+    path = search_path(system, env, home, extra_dirs)
     for candidate in spec["path_names"]:
-        hit = shutil.which(candidate, path=env.get("PATH"))
+        hit = shutil.which(candidate, path=path)
         if hit:
             add(hit, "PATH")
+    exe = ".exe" if system == "windows" else ""
+    for folder in extra_dirs:            # a shared tools folder: by file name, since a share can drop the exec bit
+        for candidate in spec["path_names"]:
+            spot = Path(folder) / f"{candidate}{exe}"
+            if spot.is_file():
+                add(str(spot), "shared folder")
     for pattern in _locations(name, system, tools_dir(system, env, home)):
         for p in _expand(pattern, env, home):
             if os.path.isfile(p):
