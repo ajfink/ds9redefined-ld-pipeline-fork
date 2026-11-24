@@ -143,3 +143,21 @@ def test_vspipe_follows_the_running_environment_not_a_stale_one(tmp_path, monkey
     monkeypatch.setattr(sys, "base_prefix", sys.prefix)        # not running in a virtual environment: no rewrite
     p.tools["vspipe"] = str(old)
     assert p.tool("vspipe") == old
+
+
+def test_vspipe_follows_the_running_environment_even_when_the_old_one_was_deleted(tmp_path, monkeypatch):
+    """Legion 2026-11-23: the profile named …\\fstk\\venv\\Scripts\\vspipe.exe; that environment was removed, and the
+    cadence step failed after a 7-hour render instead of using the running environment's vspipe."""
+    import shutil
+    import sys
+
+    from fstk.config.profile import SCHEMA, Profile
+
+    old = _venv(tmp_path / "fstk" / "venv", bin_name="Scripts", exe="vspipe.exe")
+    mine = _venv(tmp_path / "fstk" / "venvs" / "6e00de08", bin_name="Scripts", exe="vspipe.exe")
+    shutil.rmtree(old.parent.parent)
+    p = Profile.from_dict({"schema": SCHEMA, "machine": "T", "os": "windows", "data_root": "C:/d",
+                           "media_root": "C:/m", "tools": {"vspipe": str(old)}})
+    monkeypatch.setattr(sys, "prefix", str(mine.parent.parent))
+    monkeypatch.setattr(sys, "base_prefix", "/usr")
+    assert p.tool("vspipe") == mine

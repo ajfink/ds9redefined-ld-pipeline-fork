@@ -62,6 +62,38 @@ STATUS_COLOURS = {"passed": "#2e7d32", "failed": "#c62828", "blocked": "#ef6c00"
                   "cancelled": "#616161"}
 
 
+def code_stamp() -> tuple[int, int]:
+    """(file count, newest change) of the app's Python files, to notice an update made while it runs."""
+    root = Path(__file__).resolve().parent.parent
+    newest, count = 0, 0
+    try:
+        for f in root.rglob("*.py"):
+            count += 1
+            newest = max(newest, f.stat().st_mtime_ns)
+    except OSError:
+        pass
+    return count, newest
+
+
+def _report_ui_error(exc_type, exc, tb) -> None:
+    """An error in a button or window: tell the person instead of nothing happening (it is also logged)."""
+    if _report_ui_error.busy or QApplication.instance() is None:
+        return
+    _report_ui_error.busy = True
+    try:
+        updated = code_stamp() != _report_ui_error.stamp
+        hint = ("\n\nThe app's files were updated while it was open, so old and new parts are mixed. Quit and start "
+                "it again." if updated else "\n\nThe details are in the log (Open logs); Save debug bundle… collects "
+                "them for a bug report.")
+        QMessageBox.critical(None, "Something went wrong", f"{exc_type.__name__}: {exc}{hint}")
+    finally:
+        _report_ui_error.busy = False
+
+
+_report_ui_error.busy = False
+_report_ui_error.stamp = (0, 0)
+
+
 class PlanWorker(QObject):
     event = Signal(dict)
     finished = Signal(dict)
@@ -273,6 +305,11 @@ class MainWindow(QMainWindow):
         self.tick.setInterval(1000)
         self.tick.timeout.connect(self.update_progress)
         self._taskbar = None
+        self._code_at_start = code_stamp()
+        self.code_watch = QTimer(self)                    # the app's own files replaced while it runs (a sync)
+        self.code_watch.setInterval(120_000)
+        self.code_watch.timeout.connect(self.check_code_updated)
+        self.code_watch.start()
 
         centre = QWidget()
         cl = QVBoxLayout(centre)
@@ -560,6 +597,16 @@ class MainWindow(QMainWindow):
         if not todo:
             return "the remaining steps"
         return ", ".join(todo[:3]) + (f" and {len(todo) - 3} more" if len(todo) > 3 else "")
+
+    def check_code_updated(self) -> bool:
+        """The app's files changed since it started: parts loaded later would mix old and new code."""
+        if code_stamp() == self._code_at_start:
+            return False
+        self.code_watch.stop()
+        self.append_log("the app's files were updated while it was open; restart it to use the new version")
+        self.set_banner("FromStunToKill was updated while it was open. Quit and start it again to use the new "
+                        "version" + (" (after this run: finished steps are kept)." if self.thread else "."), "warn")
+        return True
 
     def set_banner(self, text: str, tone: str = "info") -> None:
         from fstk.ui.visual import tone_colour
@@ -1173,6 +1220,14 @@ class MainWindow(QMainWindow):
     def on_failed(self, message: str) -> None:
         self.append_log(f"ERROR: {message}")
         self._done()
+        first = message.splitlines()[0] if message else "The run stopped."
+        self.set_banner(first, "bad")
+        if message.startswith("Not started:"):            # a tool check failed before anything ran
+            self.show_run_problem(message)
+
+    def show_run_problem(self, message: str) -> None:
+        """Say why a plan did not start (a method so tests can replace the dialog)."""
+        QMessageBox.warning(self, "Plan not started", message)
 
     def append_log(self, text: str) -> None:
         LOG.info("%s", text)
@@ -1200,6 +1255,15 @@ def main(argv: list[str] | None = None) -> int:
     if real_run:
         applog.log_environment(services.profile)
     window = MainWindow(services)
+    if real_run:                                     # errors in buttons/windows are shown, not only logged
+        _report_ui_error.stamp = window._code_at_start
+        previous = sys.excepthook
+
+        def hook(exc_type, exc, tb):
+            previous(exc_type, exc, tb)
+            _report_ui_error(exc_type, exc, tb)
+
+        sys.excepthook = hook
     window.show()
     code = app.exec()
     if real_run:

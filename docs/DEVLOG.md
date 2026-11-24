@@ -1181,3 +1181,29 @@ names that no longer exist; required tools never found) and, if any, lists them 
 - Tests: cadence pictures (fake ffmpeg), audio overview (block boundaries, fades, cache), Reviews tab spot viewer +
   timeline + blink, delivery marking/auto-advance/close, EFM strips + listen, queued plans.
 - **Unverified on real footage:** cadence close-up choice and the drop-out detector on real EFM decodes.
+
+## CP50 — Legion bundle 2026-11-23 21:29: no more failing 8 hours in; resume instead of redo (and the Mac bundle)
+
+- **What happened (Legion).** A delivery run started at 13:25 with `vspipe --version` already exiting 1 (the profile
+  named the old `…\fstk\venv` environment). Orc rendered the stack master for 7 h 13 min, the master was
+  decode-counted for 48 min over Z:, and the cadence step then failed ("tools.vspipe points at a missing exe").
+  After `setup` repaired the profile, Run to delivery made a *new* job, which started the 48-minute recount again.
+  Also: the app's files were synced while it was open, and Settings → Folders… crashed five times on mixed code
+  (`ImportError: change_sources`) with nothing shown; Orc's percentage restarted (65% → 10%) and the bar sat at 57%
+  for over three hours.
+- `config.profile.Profile.tool("vspipe")`: follows the running fstk environment's vspipe *before* the existence check,
+  and recognises an older fstk environment by its path even after it was deleted (the CP-era rule only worked while
+  the old one still existed).
+- New `workflow/preflight.py`, run by `Engine.run` before anything starts: the tools the plan's stages use
+  (`ctx.tool("…")` found per stage module, or a stage's `tools`) must resolve, and ffmpeg/ffprobe/vspipe must answer
+  their version flag with exit 0. A configured-but-missing/broken tool stops the plan (`PreflightError`, event
+  `preflight-failed`; the app shows a red banner and a dialog saying to restart with the launcher or run setup). A
+  tool not set up at all is only a warning (`preflight-warning`): some stages use a tool for some inputs only.
+- `Services.resumable_job`: Run to delivery / Run intake resume the unfinished job with the same steps (disk
+  estimates ignored) that is furthest along, never a finished one or one running in another window.
+- App: notices its own files changing while open (`code_stamp`, checked every 2 min) and says to restart; an
+  uncaught error in a button/window is shown in a dialog (with the restart hint when the files changed).
+- `LineProgress`: a drop of more than 25 points is a restarted pass and is followed (small dips still ignored).
+- Mac bundle 21:32: the still-open pre-CP48 app finished the run and stopped at the DVD-alignment review as expected
+  (its picture check ran on 11 spots); restart to get the CP49 viewer.
+- Tests: preflight (3), deleted-environment vspipe, resumable job, update notice, restarted percentage. 623 pass.

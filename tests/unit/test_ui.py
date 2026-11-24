@@ -457,3 +457,45 @@ def test_reviews_tab_shows_the_stage_pictures_not_a_file_list(services, tmp_path
     view = w.review_spots.view
     w.review_spots._flip()
     assert w.review_spots.view != view
+
+
+def test_run_again_resumes_the_unfinished_job_furthest_along(services, tmp_path, monkeypatch):
+    """Legion 2026-11-23: Run to delivery after a failure must not start a new job that redoes finished steps."""
+    from fstk.core.fsio import atomic_write_json
+
+    ws = services.workspace("S01E20")
+    steps = [{"id": "a", "stage": "t-measure", "after": [], "params": {"planned_gib": 1.0}},
+             {"id": "b", "stage": "t-review", "after": ["a"], "params": {}}]
+
+    def job(name, statuses, gib=1.0):
+        plan = {"schema": "fstk-workflow-plan-v1", "episode": "DS9:S01E20", "job": name,
+                "steps": [{**steps[0], "params": {"planned_gib": gib}}, steps[1]]}
+        atomic_write_json(ws.job_dir(name) / "plan.json", plan)
+        atomic_write_json(ws.job_dir(name) / "state.json",
+                          {"steps": {sid: {"status": st} for sid, st in zip(("a", "b"), statuses, strict=True)}})
+
+    job("delivery-ds9-s01e20-20261123t212519", ["passed", "failed"])          # furthest along
+    job("delivery-ds9-s01e20-20261124t052905", ["interrupted", "pending"])    # newer, less done
+    job("delivery-ds9-s01e20-20261120t000000", ["passed", "passed"])          # finished: never resumed
+    new = {"job": "delivery-ds9-s01e20-20261124t060000",
+           "steps": [{**steps[0], "params": {"planned_gib": 2.5}}, steps[1]]}  # estimate moved: still the same job
+    found = services.resumable_job("S01E20", new)
+    assert found is not None and found.parent.name == "delivery-ds9-s01e20-20261123t212519"
+    monkeypatch.setattr(services, "job_runner", lambda ep, j: 4242 if j.endswith("212519") else None)
+    assert services.resumable_job("S01E20", new).parent.name == "delivery-ds9-s01e20-20261124t052905"
+    other = {"job": "delivery-ds9-s01e20-20261124t060000", "steps": steps[:1]}
+    assert services.resumable_job("S01E20", other) is None                     # different steps: start fresh
+
+
+@pytest.mark.gui
+def test_an_update_while_the_app_is_open_is_noticed(services, qtbot, monkeypatch):
+    """Legion 2026-11-23: files synced under a running app; Folders… then crashed silently on mixed code."""
+    from fstk.ui import app as app_mod
+    from fstk.ui.app import MainWindow
+
+    w = MainWindow(services, actor="op")
+    qtbot.addWidget(w)
+    assert w.check_code_updated() is False
+    monkeypatch.setattr(app_mod, "code_stamp", lambda: (999, 1))
+    assert w.check_code_updated() is True
+    assert "updated while it was open" in w.banner.text() and not w.code_watch.isActive()

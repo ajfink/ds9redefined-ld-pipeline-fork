@@ -33,6 +33,9 @@ def _hms(seconds: float) -> str:
     return f"{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}"
 
 
+RESTART_DROP = 0.25
+
+
 class LineProgress:
     """``on_line`` callback: ``(stream, line)``. ``report(fraction, message)`` is ``StageContext.report`` shaped
     with the arguments swapped: it is called as ``report(base + span * fraction, message)``."""
@@ -55,7 +58,10 @@ class LineProgress:
         if now - self._last < self.min_interval and fraction < 1.0:
             return
         self._last = now
-        self._best = max(self._best, min(max(fraction, 0.0), 1.0))
+        fraction = min(max(fraction, 0.0), 1.0)
+        # small dips are jitter (keep the best); a big drop is the tool starting its main pass again (Orc printed
+        # 41% → 5% → 65% → 10%, and the bar then sat at 57% for three hours while the render went 10% → 60%)
+        self._best = fraction if fraction < self._best - RESTART_DROP else max(self._best, fraction)
         self.report(self.base + self.span * self._best, f"{self.label} {text}".strip())
 
     def parse(self, line: str) -> tuple[float, str] | None:

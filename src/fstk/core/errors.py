@@ -45,3 +45,7 @@ class SpaceError(GateError):
 
 class WorkflowError(FstkError):
     """Plan, state, or execution-engine failure."""
+
+
+class PreflightError(WorkflowError):
+    """A plan was not started because a tool it needs is missing or broken."""

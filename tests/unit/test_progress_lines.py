@@ -66,3 +66,14 @@ def test_orc_stacker_blocks_give_render_progress_when_the_total_is_known():
     assert len(got) == 1 and abs(got[0][0] - 3500 / 83335) < 1e-9
     assert got[0][1] == "Orc render frame 3500/83335"
     assert run([("stderr-orc-cli", REPORT)]) == []                      # without a total there is nothing to scale to
+
+
+def test_a_restarted_percentage_is_followed_small_dips_are_not():
+    from fstk.tools.progress_lines import LineProgress
+
+    seen = []
+    t = iter(range(100))
+    lp = LineProgress(lambda f, m: seen.append(round(f, 2)), min_interval=0.0, clock=lambda: next(t))
+    for pct in (41, 5, 65, 10, 15, 12, 60, 100):          # Legion's Orc render, 2026-11-23
+        lp("stderr", f"Processing: {pct}%")
+    assert seen == [0.41, 0.05, 0.65, 0.10, 0.15, 0.15, 0.60, 1.0]

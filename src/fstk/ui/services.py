@@ -165,6 +165,9 @@ class Services:
         m = ws.store.load()
         plan = intake_plan(m.episode, download=bool(m.doc["sources"].get("archive_item")),
                            include_stack_reference=include_stack_reference, include_efm=expects_efm(m))
+        resume = self.resumable_job(episode, plan)
+        if resume is not None:
+            return resume
         path = ws.state_dir / "plans" / f"{plan['job']}.plan.json"
         atomic_write_json(path, plan)
         return path
@@ -176,9 +179,42 @@ class Services:
 
         ws = self.workspace(episode)
         plan = delivery_plan(ws.store.load())
+        resume = self.resumable_job(episode, plan)
+        if resume is not None:
+            return resume
         path = ws.state_dir / "plans" / f"{plan['job']}.plan.json"
         atomic_write_json(path, plan)
         return path
+
+    def resumable_job(self, episode: str | EpisodeId, plan: dict[str, Any]) -> Path | None:
+        """The saved plan of an unfinished job with exactly these steps, to resume instead of starting over.
+
+        Legion 2026-11-23: after a failed delivery, Run to delivery made a new job, which re-checked the finished
+        stack master (a 48-minute decode-count over the network) and redid every finished step. Resuming keeps them:
+        the engine re-verifies their files by fingerprint. Of several candidates the one furthest along wins (then
+        the newest); jobs that are finished, or running in another window, are never picked."""
+        def shape(steps) -> str:                               # disk estimates move as measurements arrive
+            return json.dumps([{**st, "params": {k: v for k, v in (st.get("params") or {}).items()
+                                                 if k not in ("planned_gib", "estimate_basis")}}
+                               for st in steps or []], sort_keys=True)
+
+        want = shape(plan["steps"])
+        prefix = plan["job"].rsplit("-", 1)[0]               # e.g. "delivery-ds9-s01e20"
+        best: tuple[int, str, Path] | None = None
+        for job in self.jobs(episode):
+            if not job.startswith(prefix + "-"):
+                continue
+            saved = self.job_plan(episode, job)
+            if saved is None or shape(saved.get("steps")) != want:
+                continue
+            steps = self.job_state(episode, job).get("steps", {})
+            done = sum(1 for st in steps.values() if st.get("status") == "passed")
+            if done == len(steps) or self.job_runner(episode, job):
+                continue
+            key = (done, job, self.job_plan_path(episode, job))
+            if best is None or key[:2] > best[:2]:
+                best = key
+        return best[2] if best else None
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> Services:

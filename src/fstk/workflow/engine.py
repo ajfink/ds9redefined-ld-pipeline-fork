@@ -319,6 +319,20 @@ class Engine:
             level = logging.WARNING if kind in ("step-failed", "step-blocked", "tool-version-drift") else logging.INFO
             LOG.log(level, "%s job=%s step=%s %s", kind, self.job, sid, detail if detail else "")
 
+    def _preflight(self) -> None:
+        """Every tool the plan's steps use must resolve and run before anything starts (``workflow.preflight``)."""
+        from fstk.core.errors import PreflightError
+        from fstk.workflow import preflight
+
+        warnings: list[str] = []
+        problems = preflight.tool_problems(self.profile, preflight.plan_tools(self.plan), skip=self.tool_overrides,
+                                           warnings=warnings)
+        if warnings:
+            self._emit("preflight-warning", issues=warnings)
+        if problems:
+            self._emit("preflight-failed", issues=problems)
+            raise PreflightError(preflight.describe(problems))
+
     def _record_tool_versions(self) -> None:
         """Trace which tool/library versions this run used; report drift (never blocks a run)."""
         from fstk.tools.requirements import record_versions
@@ -377,6 +391,7 @@ class Engine:
         frozen = frozen_reason(self.profile, self.episode)
         if frozen:
             raise WorkflowError(frozen)
+        self._preflight()
         PAUSE.resume()
         try:
             return self._run_locked()

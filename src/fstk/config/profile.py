@@ -182,7 +182,11 @@ def _own_environment_vspipe(configured: Path) -> Path | None:
 
     if sys.prefix == sys.base_prefix:
         return None
-    mine, theirs = Path(sys.prefix), _fstk_environment(configured)
+    mine = Path(sys.prefix)
+    env = configured.parent.parent
+    # the configured one may already be deleted: recognise an fstk environment by where it sits
+    theirs = env if (env.parent.name == "venvs" or env.name == "venv") and configured.parent.name in ("Scripts", "bin") \
+        else None
     if theirs is None or _fstk_environment(mine / "Scripts" / "x") is None or theirs == mine:
         return None
     for sub, exe in (("Scripts", "vspipe.exe"), ("bin", "vspipe")):
@@ -408,6 +412,8 @@ class Profile:
         configured = self.tools.get(name) or ""
         if configured:
             p = Path(configured)
+            if name == "vspipe" and (own := _own_environment_vspipe(p)) is not None:
+                return own              # an older fstk environment's vspipe, broken or already deleted
             ok = p.is_dir() if spec["kind"] == "dir" else p.is_file()
             if not ok:
                 elsewhere = next((w for c in spec["path_names"] if (w := shutil.which(c))), None)
@@ -415,7 +421,7 @@ class Profile:
                        if elsewhere else "")
                 raise ConfigError(f"tools.{name} points at a missing {spec['kind']}: {p} (the file was there when setup "
                                   f"ran; reinstall it or run `FromStunToKill setup` to find or install it again{fix})")
-            return (_own_environment_vspipe(p) or p) if name == "vspipe" else p
+            return p
         if allow_path_lookup:
             for candidate in spec["path_names"]:
                 found = shutil.which(candidate)
