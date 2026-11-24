@@ -60,15 +60,15 @@ Sequential 48×36 descriptors of the stack master and DVD; continuity-constraine
 - human review: dvd-alignment (only when an automatic check fails)
 - requires: value:mode.dvd_reference_available==True, artifact:dvd, artifact:stack_master
 - writes: video.dvd_alignment, video.dvd_origin_master_frame
-- artifacts: master_descriptors, dvd_descriptors, align_npy, alignment_report, alignment_summary, alignment_sheet (the picture sheet)
+- artifacts: master_descriptors, dvd_descriptors, align_npy, alignment_report, alignment_summary, alignment_sheet
 
-## `dvd-free-audio` — LD audio without a DVD (duration/PAD rate + capture-pad origin)
+## `dvd-free-audio` — LD audio without a DVD (native rate + capture-pad origin)
 
-Operator-chosen no-DVD route: rate from native audio vs stack duration, ±1-frame PAD endpoint check, AudioSkip from capture-pad geometry, exact output sample budget.
+Operator-chosen no-DVD route: native 44.1 kHz rate, ±2-frame audio vs stack duration check, AudioSkip from capture-pad geometry, exact output sample budget.
 
 - resource: compute
 - human review: —
-- requires: value:mode.dvd_reference_available==False, value:mode.no_dvd_proceed_approved==True, ld-only, value:audio.capture, value:audio.pad_frames, value:stack.reference, value:stack.frames, value:video.frames, value:video.head_trim, value:video.delta_s, artifact:ld_native, artifact:stack_project
+- requires: value:mode.dvd_reference_available==False, value:mode.no_dvd_proceed_approved==True, ld-only, value:audio.capture, value:audio.pad_frames, value:stack.reference, value:stack.frames, value:video.frames, value:video.head_trim, value:video.delta_s, artifact:ld_native
 - writes: audio.rate_method, audio.duration_candidate_rate_hz, audio.asetrate, audio.resampler, audio.skip_s, audio.skip_method, audio.wav0_master_frame, audio.endpoint_residual_frames, audio.endpoint_tolerance_frames, audio.origin_verified_by_duration, audio.absolute_av_reference_available, audio.dvd_free_approved, audio.corrected_duration_s, deliverable.ld_audio_source, deliverable.tracks, deliverable.mux_tracks
 - artifacts: ld_corrected, ld_synced, audio_timing_report
 
@@ -126,14 +126,14 @@ Chosen automatically: the unique Pareto-dominant verified decode, otherwise the 
 - writes: audio.capture, audio.pad_frames, audio.capture_selection, audio.capture_selection_history
 - artifacts: ld_native
 
-## `encode-final` — Final x265 encode (video only)
+## `encode-final` — Final encode (video only)
 
-CRF 14 / slow / grain 10-bit single pass from the measured IVTC script (4:2:2 by default, keeping the master's chroma); verified before use.
+One fresh encode from the measured IVTC script with the episode's output settings (default x265 CRF 14 / slow / grain, 10-bit 4:2:2); verified before use.
 
 - resource: compute
 - human review: —
 - requires: value:video.frames, value:video.duration_s, value:audio.capture, artifact:encode_script, artifact:stack_master
-- writes: —
+- writes: deliverable.video_encoding
 - artifacts: padfixed_video
 
 ## `episode-report` — Per-episode quality report and contact sheet
@@ -158,7 +158,7 @@ Shows one proposed fix before it is chosen: the frames around it as captured and
 
 ## `frame-fixes` — Operator frame fixes (interpolate / region patch / DVD)
 
-Applies the frame fixes chosen in the final review to the chain the final encode reads (after the PAD splice, before finishing). With none chosen it records an unchanged chain.
+Applies the frame fixes chosen in the final review to the chain the final encode reads (before finishing). With none chosen it records an unchanged chain.
 
 - resource: compute
 - human review: —
@@ -166,34 +166,14 @@ Applies the frame fixes chosen in the final review to the chain the final encode
 - writes: —
 - artifacts: manualfix_script, manualfix_report
 
-## `pad-audit` — PAD audit (which placeholder frames rendered, and where the cuts are)
-
-One pass of the IVTC chain: blackdetect and 48×36 descriptors; every reference-map PAD is accounted for, proved black over the full raster, and classified as cut or non-cut.
-
-- resource: compute
-- human review: —
-- requires: value:video.frames, value:video.head_trim, value:audio.pad_frames, value:stack.reference, artifact:encode_script, artifact:stack_project
-- writes: pads.map_pads, pads.rendered_isolated, pads.trimmed_away, pads.inside_break_black, pads.never_rendered, pads.cut_pads, pads.cut_pad_frames, pads.content_blacks_left_alone
-- artifacts: pad_audit
-
-## `pad-repair` — PAD repair (RIFE, DVD-borrowed frame on cuts, hold without a DVD)
-
-Replaces every audited PAD: RIFE midpoint when not on a cut; on a cut the correct frame is borrowed from the aligned DVD (registered, colour-matched to the neighbour) or, without a DVD, the previous frame is held. Writes the padfix script encode-final uses.
-
-- resource: compute
-- human review: —
-- requires: value:video.frames, value:video.head_trim, value:audio.pad_frames, artifact:encode_script, artifact:pad_audit
-- writes: pads.repaired
-- artifacts: pad_repair_frames, pad_repair_report, pad_replacements, padfix_script, pad_payload
-
 ## `qc-report` — Delivery QC report
 
-Full decode + PAD black, frame count, stream inventory, seekability, packet hashes, subtitles and retime gaps; evidence for the human delivery review.
+Full decode + single black frames, frame count, stream inventory, seekability, packet hashes, subtitles and retime gaps; evidence for the human delivery review.
 
 - resource: compute
 - human review: delivery (the A/V check: several 15 s chunks marked in sync / audio early / audio late)
 - requires: deliverable, value:video.frames, value:video.duration_s
-- writes: qc.video_md5, qc.ld_audio_md5, qc.fiveone_md5, qc.srt_md5, qc.pad_aligned_black_hits, qc.full_decode_errors, qc.delivered_bytes, qc.identity_own_ncc_min, qc.identity_other_ncc_max, qc.av_constant_ms, qc.av_slope_ppm, qc.av_rms_ms, qc.track_offset_ms
+- writes: qc.video_md5, qc.ld_audio_md5, qc.fiveone_md5, qc.srt_md5, qc.full_decode_errors, qc.delivered_bytes, qc.av_constant_ms, qc.av_slope_ppm, qc.av_rms_ms, qc.track_offset_ms
 - artifacts: —
 
 ## `remux` — Remux (stream copy)
@@ -203,7 +183,7 @@ Stream-copy only; LD stereo default; packet-identity proof per copied stream (v3
 - resource: prep
 - human review: —
 - requires: artifact:padfixed_video, value:deliverable.mux_tracks, value:deliverable.ld_audio_source, value:video.duration_s, value:audio.capture
-- writes: —
+- writes: deliverable.audio_layout
 - artifacts: padfixed
 
 ## `stack-reference` — Select stack reference (Orc refresh)
@@ -223,8 +203,8 @@ Orc --process with artifact evidence validation; no human review (owner decision
 - resource: compute
 - human review: —
 - requires: value:stack.reference, value:stack.alignment_map, value:stack.frames, artifact:stack_project
-- writes: —
-- artifacts: —
+- writes: stack.frames
+- artifacts: stack_master
 
 ## `stretch-preview` — Preview video-origin stretches (nearest vs interpolated)
 
@@ -238,7 +218,7 @@ Renders one side-by-side clip per video-origin stretch for the final review: nea
 
 ## `video-quality` — Picture quality: measure, conceal dropouts, crop/aspect lock, optional chroma denoise
 
-One sequential pass over the PAD-repaired chain: levels, grain, chroma noise, dropouts, active area. Builds the finishing script (LD-only dropout concealment, locked crop, chroma-only denoise when measured necessary). Never alters luma grain; the DVD is only a measuring reference.
+One sequential pass over the chain: levels, grain, chroma noise, dropouts, active area. Builds the finishing script (LD-only dropout concealment, locked crop, chroma-only denoise when measured necessary). Never alters luma grain; the DVD is only a measuring reference.
 
 - resource: compute
 - human review: —

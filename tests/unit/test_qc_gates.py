@@ -7,23 +7,22 @@ from fstk.qc.gates import (
     F24,
     Gate,
     allowed_skips,
-    pad_black_hits,
     parse_srt,
     retime_gap_status,
     seek_points,
     seekability,
+    single_black_frames,
     stream_inventory,
     subtitle_timeline,
     summarize,
 )
 
 
-def test_pad_black_hits_align_within_one_and_a_quarter_frames():
-    events = [(240 / F24 + 0.02, 240 / F24 + 0.06, 0.042),    # single-frame black at PAD 240
-              (500 / F24, 500 / F24 + 2.0, 2.0),               # long fade: not a blip
-              (900 / F24 + 0.06, 900 / F24 + 0.10, 0.042)]     # 1.44 frames away from PAD 900
-    hits = pad_black_hits([100, 240, 500, 900], events)
-    assert [h["frame"] for h in hits] == [240]
+def test_single_black_frames_are_blips_not_fades():
+    events = [(240 / F24, 240 / F24 + 0.042, 0.042),           # one black frame
+              (500 / F24, 500 / F24 + 2.0, 2.0)]                # long fade: not a blip
+    blips = single_black_frames(events)
+    assert [b["frame"] for b in blips] == [240]
 
 
 def stream(kind, **kw):

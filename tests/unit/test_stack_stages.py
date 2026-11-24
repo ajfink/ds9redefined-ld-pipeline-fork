@@ -58,6 +58,9 @@ class FakeFF:
     def count_frames(self, path, stream="v:0"):
         return FRAMES
 
+    def packet_index(self, path, cancel=None):
+        return {"pts": list(range(FRAMES)), "size": [1000] * FRAMES, "key": [True] * FRAMES, "time_base": "1/1000"}
+
     def probe(self, path):
         from types import SimpleNamespace
         stream = SimpleNamespace(raw={"codec_name": self.codec})
@@ -201,3 +204,65 @@ def test_finished_refresh_passes_are_reused_after_a_stop(env):
     state = run(env, [REF], "ref-b", orc=again)
     assert state["steps"]["ref"]["status"] == "passed", state["steps"]["ref"]
     assert again.refreshes == 1                     # pass 1 came from the saved result; only pass 2 ran
+
+
+def _master_with_zero_frames(path, frames=2000, zero=(900, 1800)):
+    import shutil
+    import subprocess
+
+    if not shutil.which("ffmpeg"):
+        pytest.skip("needs ffmpeg")
+    cond = "+".join(f"eq(N\\,{z})" for z in zero)
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=64x48:r=30000/1001",
+                    "-frames:v", str(frames), "-vf",
+                    f"format=yuv422p10le,geq=lum='if({cond},0,lum(X,Y))':cb='if({cond},0,cb(X,Y))'"
+                    f":cr='if({cond},0,cr(X,Y))'",
+                    "-c:v", "ffv1", "-g", "1", str(path)], check=True)
+
+
+class _Ctx:
+    def __init__(self):
+        import threading
+
+        self.cancel = threading.Event()
+        self.messages = []
+
+    def report(self, fraction, message):
+        self.messages.append(message)
+
+    def check_cancel(self):
+        pass
+
+
+def test_a_master_rendered_with_timecode_pads_loses_them_by_a_lossless_copy(tmp_path):
+    import numpy as np
+
+    from fstk.stages.stack import StackRender
+    from fstk.tools.ffmpeg import FFmpeg
+
+    master = tmp_path / "S01E20-stack-master.mkv"
+    _master_with_zero_frames(master)
+    ff = FFmpeg("ffmpeg", "ffprobe", log_dir=tmp_path)
+    before = ff.gray_thumbnails(master, 16, 12)
+    index = ff.packet_index(master)
+    got = StackRender()._drop_timecode_pads(_Ctx(), ff, master, index, [900, 1800])
+    assert got["frames"] == 1998 and got["original_kept_as"] == "S01E20-stack-master-with-timecode-pads.mkv"
+    after = ff.gray_thumbnails(master, 16, 12)
+    keep = np.ones(len(before), bool)
+    keep[[900, 1800]] = False
+    assert np.array_equal(after, before[keep]) and (tmp_path / got["original_kept_as"]).is_file()
+    assert ff.count_frames(master) == 1998
+
+
+def test_a_master_is_not_touched_unless_every_predicted_frame_is_blank(tmp_path):
+    from fstk.core.errors import ArtifactError
+    from fstk.stages.stack import StackRender
+    from fstk.tools.ffmpeg import FFmpeg
+
+    master = tmp_path / "m.mkv"
+    _master_with_zero_frames(master, zero=(900,))
+    ff = FFmpeg("ffmpeg", "ffprobe", log_dir=tmp_path)
+    size = master.stat().st_size
+    with pytest.raises(ArtifactError, match=r"not blank|not all-zero"):
+        StackRender()._drop_timecode_pads(_Ctx(), ff, master, ff.packet_index(master), [900, 1800])
+    assert master.stat().st_size == size and not list(tmp_path.glob("*timecode*"))

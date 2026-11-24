@@ -45,7 +45,7 @@ def remux_args(*, video: Path, ld_audio: Path, fiveone: Path | None, srt: Path |
                  "-disposition:s:0", "0"]
     args = ["-y", "-loglevel", "warning", *inputs, *maps,
             "-c", "copy", "-map_metadata", "1",
-            "-metadata:s:v:0", f"title=LaserDisc {capture}, 3:2 pulldown removed, 23.976p, PAD blips repaired",
+            "-metadata:s:v:0", f"title=LaserDisc {capture}, 3:2 pulldown removed, 23.976p",
             "-disposition:v:0", "default", *meta,
             "-color_primaries", "smpte170m", "-color_trc", "smpte170m", "-colorspace", "smpte170m",
             "-color_range", "tv", "-max_interleave_delta", "0", "-t", str(duration_s), str(out)]
@@ -79,7 +79,7 @@ def remux_tracks_args(*, video: Path, audio: list[tuple[Path, object]], srt: Pat
                  "-disposition:s:0", "0"]
     args = ["-y", "-loglevel", "warning", *inputs, *maps,
             "-c", "copy", "-map_metadata", "1",
-            "-metadata:s:v:0", f"title=LaserDisc {capture}, 3:2 pulldown removed, 23.976p, PAD blips repaired",
+            "-metadata:s:v:0", f"title=LaserDisc {capture}, 3:2 pulldown removed, 23.976p",
             "-disposition:v:0", "default", *meta,
             "-color_primaries", "smpte170m", "-color_trc", "smpte170m", "-colorspace", "smpte170m",
             "-color_range", "tv", "-max_interleave_delta", "0", "-t", str(duration_s), str(out)]

@@ -1,13 +1,14 @@
-"""Finishing script: the PAD-repaired chain plus crop, optional chroma-only denoise and dropout concealment.
+"""Finishing script: the chain (encode script + operator fixes) plus crop, optional chroma-only denoise and
+dropout concealment.
 
-Stacked on the same base text the PAD splice uses (``# fstk-finish-base-sha256`` guards staleness the
-same way). Order is fixed and deliberate: PAD splice → dropout concealment (needs the real neighbours) →
+Stacked on that chain's text (``# fstk-finish-base-sha256`` guards staleness). Order is fixed and
+deliberate: chain → dropout concealment (needs the real neighbours) →
 chroma denoise (luma, i.e. grain, is never touched) → crop.
 """
 from __future__ import annotations
 
 from fstk.core.errors import ArtifactError
-from fstk.media.pad_repair import base_sha
+from fstk.media.frame_replace import base_sha
 
 TAIL = "out.set_output()"
 

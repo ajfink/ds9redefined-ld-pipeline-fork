@@ -2,7 +2,7 @@
 
 The fixes live in the manifest (``video.manual_fixes``), chosen in the final review from the contact sheet. The
 chain the final encode reads is always resolved the same way (:func:`resolve_chain`): the IVTC encode script,
-then the PAD splice, then the operator fixes, each guarded against being built on an older link, and the
+then the operator fixes, each guarded against being built on an older link, and the
 finishing script (crop / concealment / chroma) on top. Everything is applied to the lossless master's chain and
 encoded once; no encoded file is ever patched.
 """
@@ -16,13 +16,13 @@ import numpy as np
 from fstk.core.errors import ArtifactError, GateError
 from fstk.core.fsio import atomic_write_bytes, atomic_write_json
 from fstk.core.timeutil import utc_now_iso, utc_stamp
+from fstk.media import frame_replace as pr
 from fstk.media import manual_fix as mf
-from fstk.media import pad_repair as pr
 from fstk.quality.measure import grain_retention
 from fstk.tools import process
 
 from .base import ArtifactExists, Stage, StepOutput, StepPlan, ValueSet, register
-from .pads import dvd_borrow
+from .dvdborrow import dvd_borrow
 
 #: interpolated frames whose grain falls below this share of their neighbours' are flagged in the report
 GRAIN_FLAG = 0.7
@@ -31,14 +31,9 @@ MIN_NEIGHBOUR_NCC = 0.6
 
 
 def resolve_chain(ctx, m) -> Path:
-    """The script the finishing step builds on: encode script → PAD splice → operator fixes (each verified)."""
+    """The script the finishing step builds on: encode script → operator fixes (verified)."""
     base = ctx.artifact_path("encode_script", m)
     text = base.read_text(encoding="utf-8")
-    if m.artifact("padfix_script"):
-        p = ctx.artifact_path("padfix_script", m)
-        if not pr.padfix_matches_base(p.read_text(encoding="utf-8"), text):
-            raise GateError("padfix_script was built from an older encode script; re-run pad-audit and pad-repair")
-        base, text = p, p.read_text(encoding="utf-8")
     if m.artifact("manualfix_script"):
         p = ctx.artifact_path("manualfix_script", m)
         if not mf.manualfix_matches_base(p.read_text(encoding="utf-8"), text):
@@ -48,14 +43,8 @@ def resolve_chain(ctx, m) -> Path:
 
 
 def _pre_fix_chain(ctx, m) -> Path:
-    """The chain operator fixes are applied to (encode script → PAD splice)."""
-    base = ctx.artifact_path("encode_script", m)
-    if m.artifact("padfix_script"):
-        p = ctx.artifact_path("padfix_script", m)
-        if not pr.padfix_matches_base(p.read_text(encoding="utf-8"), base.read_text(encoding="utf-8")):
-            raise GateError("padfix_script was built from an older encode script; re-run pad-audit and pad-repair")
-        return p
-    return base
+    """The chain operator fixes are applied to: the encode script."""
+    return ctx.artifact_path("encode_script", m)
 
 
 def _fixes(m) -> list[mf.Fix]:
@@ -134,7 +123,7 @@ class FrameFixes(Stage):
     id = "frame-fixes"
     title = "Operator frame fixes (interpolate / region patch / DVD)"
     description = ("Applies the frame fixes chosen in the final review to the chain the final encode reads "
-                   "(after the PAD splice, before finishing). With none chosen it records an unchanged chain.")
+                   "(before finishing). With none chosen it records an unchanged chain.")
     requires = (ArtifactExists("encode_script"), ValueSet("video.frames"), ValueSet("video.head_trim"),
                 ValueSet("audio.pad_frames"))
     writes = ()

@@ -29,10 +29,22 @@ def test_choose_spots_covers_the_programme_and_puts_suspects_first():
     res = result(spans=[[40.0, 44.0]])
     spots = vis.choose_spots(res, dvd_frames=5000)
     assert 3 <= len(spots) <= vis.MAX_POINTS
-    assert [s.kind for s in spots[:3]] == ["suspect"] * 3
-    assert all(40 * vis.FPS - 2 <= s.master_frame <= 44 * vis.FPS + 2 for s in spots[:3])
+    assert spots[0].kind == "suspect" and abs(spots[0].master_frame - 42 * vis.FPS) <= 6
     assert all(s.dvd_frame == s.master_frame - 5 for s in spots)
     assert spots[-1].master_frame >= 2900
+
+
+def test_every_flagged_stretch_is_checked_longest_first():
+    # the S02E03 case: many short flagged stretches; v1 looked at the first two only
+    spans = [[10.0 + 6 * i, 10.5 + 6 * i + (0.3 if i == 5 else 0.0)] for i in range(8)]
+    spots = vis.choose_spots(result(spans=spans, end=3000 * 4), dvd_frames=20000)
+    suspects = [s for s in spots if s.kind == "suspect"]
+    assert len(suspects) == 8 and len(spots) <= vis.MAX_POINTS
+    assert "0:40.0–0:40.8" in suspects[0].label                 # the longest stretch comes first
+    assert len(spots) - len(suspects) >= vis.MIN_ORDINARY
+    many = [[10.0 + 3 * i, 10.5 + 3 * i] for i in range(30)]
+    capped = vis.choose_spots(result(spans=many, end=3000 * 4), dvd_frames=20000)
+    assert sum(s.kind == "suspect" for s in capped) == vis.MAX_POINTS - vis.MIN_ORDINARY
 
 
 def test_choose_spots_stays_inside_the_dvd_and_without_evidence_returns_nothing():
@@ -58,6 +70,25 @@ def test_judge_notices_a_shift_and_unlike_pictures():
     assert other.verdict == vis.UNSURE
     empty = vis.judge(vis.Spot(100, 95, "act", "x"), picture(1), {})
     assert empty.verdict == vis.UNSURE
+
+
+def test_judge_does_not_call_a_still_or_slow_picture_a_shift():
+    still = {95 + k: picture(10) for k in range(-vis.SEARCH, vis.SEARCH + 1)}
+    s = vis.judge(vis.Spot(100, 95, "act", "x"), picture(10), still)
+    assert s.verdict == vis.STILL
+    slow = {95 + k: picture(10 + k) for k in range(-vis.SEARCH, vis.SEARCH + 1)}
+    slow[97] = slow[95].copy()                                       # a near-identical frame two away
+    slow[97][0, 0] = 0
+    s = vis.judge(vis.Spot(100, 95, "act", "x"), slow[95], slow)
+    assert s.verdict == vis.GOOD
+
+
+def test_assess_counts_still_pictures_as_neither_good_nor_bad():
+    ok = vis.Spot(1, 1, "act", "a", verdict=vis.GOOD)
+    still = vis.Spot(5, 5, "act", "c", verdict=vis.STILL)
+    out = vis.assess([ok, still])
+    assert out["verdict"] == "LOOKS GOOD" and out["still"] == 1 and "still" in out["text"]
+    assert vis.assess([still])["verdict"] == "NOT CHECKED"
 
 
 def test_assess_wording():

@@ -1,14 +1,13 @@
 """``fstk smoke`` — run the video half of the delivery chain on a short real excerpt.
 
 The point is to find which seam breaks first on a real machine (real VapourSynth/TIVTC, real
-x265, real PAD scan) in minutes instead of discovering it on hour 14 of a full episode. It builds an
+x265) in minutes instead of discovering it on hour 14 of a full episode. It builds an
 isolated sandbox (its own profile, workspace and manifest; nothing in the real data root is touched),
 cuts the first ``seconds`` of an existing stack master with stream copy, and runs
 
-    cadence-evidence → video-trim (no-DVD route) → pad-audit → pad-repair → encode-final
+    cadence-evidence → video-trim (no-DVD route) → encode-final
 
-then, when a DVD and its alignment are available, repeats ``pad-repair`` on the DVD route to exercise
-the borrowed-frame path. Every step's status, timing and issues go into a log (JSON + Markdown).
+Every step's status, timing and issues go into a log (JSON + Markdown).
 Audio stages are not part of the smoke run: they need whole-capture timing.
 """
 from __future__ import annotations
@@ -29,18 +28,15 @@ from fstk.core.timeutil import utc_now_iso
 class SmokeSpec:
     episode: str
     master: Path                      # an existing stack master (FFV1 .mkv; a legacy ProRes .mov is accepted with a warning)
-    project: Path                     # the Orc stack project (reference frame map → PAD positions)
+    project: Path                     # the Orc stack project
     reference: str                    # label of the reference capture in that project
     pad_frames: int                   # audio.pad_frames of the selected capture
     capture: str                      # selected audio capture label (only used in the video title)
     sandbox: Path
     seconds: float = 200.0
     chroma: str = "422"
-    dvd: Path | None = None
-    dvd_offset: float | None = None   # DVD − master offset (grid frames) near the excerpt, for the DVD-borrow pass
     repair: str = "qtgmc"
-    rife_standin: bool = False        # CPU-only sandboxes: blend stand-in instead of RIFE (labelled STANDIN)
-    steps: list[str] = field(default_factory=lambda: ["cadence", "trim", "audit", "repair", "encode"])
+    steps: list[str] = field(default_factory=lambda: ["cadence", "trim", "encode"])
     preset: str = "ultrafast"         # smoke checks seams, not the recipe; recorded as a recipe override
     profile: Path | None = None       # the machine profile whose tool paths are reused (default location if None)
 
@@ -60,7 +56,7 @@ def build_profile(spec: SmokeSpec):
     from fstk.config.profile import KNOWN_TOOLS, SCHEMA, Profile, current_os
 
     tools = {}
-    try:                     # the machine's own profile first (RIFE and Orc are usually not on PATH) …
+    try:                     # the machine's own profile first (Orc is usually not on PATH) …
         from fstk.config.profile import default_profile_path
 
         real = Profile.load(spec.profile) if getattr(spec, "profile", None) else Profile.load(default_profile_path())
@@ -74,15 +70,6 @@ def build_profile(spec: SmokeSpec):
         if found:
             tools[name] = found
     root = spec.sandbox.absolute()
-    if spec.rife_standin and "rife_engine" not in tools:
-        import stat
-        import sys
-        model = root / "rife-models" / "rife-v0-smoke-STANDIN"
-        model.mkdir(parents=True, exist_ok=True)
-        wrapper = root / "rife-standin.sh"
-        wrapper.write_text(f'#!/bin/sh\nexec "{sys.executable}" -m fstk.smoke_rife_standin "$@"\n')
-        wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
-        tools["rife_engine"], tools["rife_model_dir"] = str(wrapper), str(model)
     prof = Profile.from_dict({"schema": SCHEMA, "machine": "SMOKE", "os": current_os(),
                               "data_root": str(root / "data"), "media_root": str(root / "media"),
                               "tools": tools, "limits": {"min_free_gb": 0.5}})
@@ -130,8 +117,7 @@ def run_smoke(spec: SmokeSpec) -> dict:
         m.set_artifact("stack_master", root="prores", name=master.name)
         m.set_artifact("stack_project", path=str(spec.project))
 
-    stage_of = {"cadence": ("cadence-evidence", {}), "trim": ("video-trim", {"repair": spec.repair}), "audit": ("pad-audit", {}),
-                "repair": ("pad-repair", {}), "encode": ("encode-final", {"planned_gib": 3.0,
+    stage_of = {"cadence": ("cadence-evidence", {}), "trim": ("video-trim", {"repair": spec.repair}), "encode": ("encode-final", {"planned_gib": 3.0,
                                                                           "estimate_basis": "smoke excerpt", "preset": spec.preset})}
     results: dict[str, dict] = {}
     for key in spec.steps:
@@ -166,9 +152,8 @@ def run_smoke(spec: SmokeSpec) -> dict:
     m = ws.store.load()
     summary = {"schema": "fstk-smoke-v1", "created_utc": utc_now_iso(), "spec": {k: str(v) for k, v in vars(spec).items()},
                "results": results, "manifest_values": {k: m.get(k) for k in (
-                   "video.frames", "video.head_trim", "video.tail_trim", "video.repair_frames", "pads.map_pads",
-                   "pads.rendered_isolated", "pads.trimmed_away", "pads.cut_pads", "pads.cut_pad_frames",
-                   "pads.repaired", "pads.content_blacks_left_alone", "video.tfm_period5_pct", "video.tfm_unmatched")},
+                   "video.frames", "video.head_trim", "video.tail_trim", "video.repair_frames",
+                   "video.tfm_period5_pct", "video.tfm_unmatched")},
                "log": log}
     (spec.sandbox / "smoke-result.json").write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
     return summary
@@ -193,9 +178,8 @@ def smoke_main(args) -> int:
                      reference=args.reference, pad_frames=args.pad_frames, capture=args.capture,
                      sandbox=Path(args.sandbox) if args.sandbox else _default_sandbox(), seconds=args.seconds,
                      chroma=args.chroma,
-                     dvd=Path(args.dvd) if args.dvd else None, dvd_offset=args.dvd_offset,
-                     steps=args.steps.split(",") if args.steps else ["cadence", "trim", "audit", "repair", "encode"],
-                     preset=args.preset, repair=args.repair, rife_standin=args.rife_standin,
+                     steps=args.steps.split(",") if args.steps else ["cadence", "trim", "encode"],
+                     preset=args.preset, repair=args.repair,
                      profile=Path(args.profile) if getattr(args, "profile", None) else None)
     try:
         summary = run_smoke(spec)

@@ -24,7 +24,7 @@ DEFAULT_SECONDS: dict[str, float] = {
     "archive-download": 3600, "capture-inventory": 600, "efm-decode": 1800, "efm-select": 60,
     "stack-reference": 900, "stack-render": 14400, "video-trim": 120, "cadence-evidence": 1800,
     "dvd-probe": 60, "dvd-alignment": 1800, "dvd-free-audio": 300, "dvd-ld-audio": 600, "dvd-retime": 600,
-    "av-correction": 120, "pad-audit": 300, "pad-repair": 300, "video-quality": 900, "audio-quality": 300,
+    "av-correction": 120, "video-quality": 900, "audio-quality": 300,
     "stretch-preview": 120, "frame-fixes": 120, "fix-preview": 60, "encode-final": 21600, "remux": 300,
     "qc-report": 900, "episode-report": 300,
 }

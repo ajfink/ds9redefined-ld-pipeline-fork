@@ -3,7 +3,7 @@
 Tools whose output does not depend on the exact build are installed with the package manager (FFmpeg with
 libx265, 7-Zip). Decode-Orc is *pinned* by the pipeline (its version changes the pixels and the audio): it is
 downloaded from its GitHub release by ``fstk.install.orc`` (the pinned version, after asking), never through a
-package manager. RIFE's engine is downloaded by ``fstk.install.rife``; its model is the standard ``RIFE_MODEL`` on every platform.
+package manager.
 """
 from __future__ import annotations
 
@@ -20,9 +20,6 @@ ORC_VERSION = "2.11.1"
 #: Flatpak application ids, current first (upstream renamed it from the simoninns one)
 ORC_FLATPAKS = ("io.github.decode_orc.decode-orc", "io.github.simoninns.decode-orc")
 ORC_FLATPAK = ORC_FLATPAKS[0]
-#: the standard model on every platform (owner decision): it decides what a repaired PAD frame looks like
-RIFE_MODEL = "rife-v4.26"
-RIFE_RELEASES = "https://github.com/nihui/rife-ncnn-vulkan/releases"
 FFMPEG_WINDOWS = "https://www.gyan.dev/ffmpeg/builds/"
 
 #: (tool -> manager -> command). ``None`` means "this manager cannot do it safely": the wizard gives instructions.
@@ -106,16 +103,6 @@ def guidance(tool: str, system: str) -> str:
                 f"owner's machines) from {ORC_RELEASES} (instructions: {ORC_DOCS}{page}).{extra.get(system, '')} "
                 "The pipeline pins Orc's version, "
                 "so install the same one on every machine.")
-    if tool in ("rife_engine", "rife_model_dir"):
-        extra = {"macos": " The macOS build runs on Metal through MoltenVK; unpack it to ~/tools/rife-ncnn-vulkan. "
-                          "Put the rife-v4.26 folder next to it, or into the shared folder's `tools` directory, "
-                          "which setup also searches.",
-                 "linux": " Unpack it to ~/tools/rife-ncnn-vulkan; it needs a working Vulkan driver."}
-        return (f"RIFE (rife-ncnn-vulkan) is only needed to repair single-frame PAD blanks. Download it from "
-                f"{RIFE_RELEASES} and unpack it anywhere; keep the model folder next to the program. "
-                f"The standard model on every machine is {RIFE_MODEL} (it changes the repaired frames); the public "
-                "download only has older ones, so copy that folder next to the engine or into the shared `tools` folder."
-                f"{extra.get(system, '')}")
     if tool in ("ffmpeg", "ffprobe"):
         where = {"windows": f"Install with `winget install Gyan.FFmpeg`, or download a full build from {FFMPEG_WINDOWS}.",
                  "macos": "Install with `brew install ffmpeg`, or use a static arm64 build with libx265.",

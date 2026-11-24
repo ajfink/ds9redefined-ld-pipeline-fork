@@ -85,7 +85,7 @@ def final_encode_args(*, aspect: str, frames: int, duration_s: float, capture: s
     settings = OutputSettings(video, settings.audio, settings.overridden)
     codec = video_args(settings, base_params=X265_PARAMS, pass_no=pass_no, stats=stats)
     target = ["-f", "null", "-"] if pass_no == 1 else [out]
-    title = ["-metadata:s:v:0", f"title=LaserDisc {capture}, measured IVTC with source PAD repairs, 23.976p"]
+    title = ["-metadata:s:v:0", f"title=LaserDisc {capture}, measured IVTC, 23.976p"]
     return ["-map", "0:v:0", "-an", "-sn", "-aspect", aspect, *codec,
             "-color_primaries", "smpte170m", "-color_trc", "smpte170m",
             "-colorspace", "smpte170m", "-color_range", "tv",

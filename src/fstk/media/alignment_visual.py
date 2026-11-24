@@ -3,7 +3,8 @@
 The alignment itself is measured on 48×36 descriptors (``fstk.media.alignment``). Here the aligned pairs are
 re-checked on real pictures: at chosen master frames the LaserDisc frame is compared with the DVD frames around
 the frame the alignment says it matches (±``SEARCH``), at 160×120 grey. A spot check *agrees* when the best match
-is the predicted frame (±1) and the pictures are alike. The sheet shows LD | DVD | difference for each check, the
+is the predicted frame (±1) and the pictures are alike, or when the predicted frame matches within ``TIE`` of the
+best (a still or slow picture: neighbouring DVD frames look the same, so a "best" elsewhere means nothing). The sheet shows LD | DVD | difference for each check, the
 suspicious stretches first. Pure numpy/Pillow; the frames come from the caller.
 """
 from __future__ import annotations
@@ -20,9 +21,12 @@ SHOT = (240, 180)           # size the frames are extracted at (4:3, like the de
 LIKE = 0.80                 # grey-picture correlation that counts as "the same picture"
 UNLIKE = 0.60               # below this nothing around the predicted frame resembles the LD frame
 MAX_POINTS = 14
+MIN_ORDINARY = 4            # start, end and two act points always stay, however many stretches were flagged
+TIE = 0.02                  # predicted frame this close to the best match: not a shift
 SHEET_PAD, SHEET_HEAD = 10, 64
 VIEWS = ("LaserDisc", "DVD", "Difference")
 GOOD, SHIFTED, UNSURE = "agrees", "off by frames", "no similar picture"
+STILL = "still picture, can't tell"     # every DVD frame around the prediction matches equally well
 
 
 @dataclass
@@ -54,8 +58,8 @@ def clock(seconds: float) -> str:
 
 
 def choose_spots(res: AlignmentResult, dvd_frames: int, limit: int = MAX_POINTS) -> list[Spot]:
-    """Checkpoints: the stretches the alignment could not explain first, then every act's start, middle and
-    end of the programme, always on textured pictures the alignment trusted."""
+    """Checkpoints: every stretch the alignment could not explain (longest first, one point in its middle), then
+    each act's quarters and the start and end of the programme, always on pictures the alignment trusted."""
     ok = np.flatnonzero(res.evidenced)
     if not len(ok) or not res.acts:
         return []
@@ -65,13 +69,11 @@ def choose_spots(res: AlignmentResult, dvd_frames: int, limit: int = MAX_POINTS)
         j = int(np.argmin(np.abs(frames - master_frame)))
         return int(frames[j])
 
+    spans = sorted(((s1 - s0, s0, s1, n) for n, act in enumerate(res.acts, 1)
+                    for s0, s1 in act.inconsistent_spans), reverse=True)
+    suspects = [((s0 + s1) / 2 * FPS, "suspect", f"act {n}: stretch {clock(s0)}–{clock(s1)} that the checks flagged")
+                for _, s0, s1, n in spans][:max(limit - MIN_ORDINARY, 0)]
     wanted: list[tuple[float, str, str]] = []
-    for n, act in enumerate(res.acts, 1):
-        for s0, s1 in act.inconsistent_spans:
-            if s1 - s0 >= 0.5:
-                for frac, what in ((0.15, "start"), (0.5, "middle"), (0.85, "end")):
-                    wanted.append(((s0 + (s1 - s0) * frac) * FPS, "suspect",
-                                   f"act {n}: stretch {clock(s0)}–{clock(s1)} that the checks flagged ({what})"))
     wanted.append((float(res.idxs[ok[0]]), "start", "first picture matched to the DVD"))
     for n, act in enumerate(res.acts, 1):
         span = act.end_frame - act.start_frame
@@ -81,8 +83,7 @@ def choose_spots(res: AlignmentResult, dvd_frames: int, limit: int = MAX_POINTS)
 
     spots: list[Spot] = []
     seen: set[int] = set()
-    suspects = [w for w in wanted if w[1] == "suspect"][:6]
-    rest = [w for w in wanted if w[1] != "suspect"]
+    rest = wanted
     # thin the ordinary points evenly if there are too many, keeping the first and the last
     room = max(limit - len(suspects), 2)
     if len(rest) > room:
@@ -127,8 +128,13 @@ def judge(spot: Spot, ld: np.ndarray, dvd_by_index: dict[int, np.ndarray]) -> Sp
         return spot
     best = max(scores, key=lambda k: (scores[k], -abs(k)))
     spot.best_shift, spot.ncc, spot.ncc_predicted = best, scores[best], scores.get(0, float("nan"))
+    near = [k for k, v in scores.items() if v >= spot.ncc - TIE]
     if spot.ncc < UNLIKE:
         spot.verdict = UNSURE
+    elif spot.ncc >= LIKE and len(near) == len(scores) and len(scores) > 1:
+        spot.verdict = STILL            # the whole window looks the same: this point cannot show a shift
+    elif spot.ncc >= LIKE and 0 in near:
+        spot.verdict = GOOD             # the predicted frame is as good a match as any (slow movement)
     elif abs(best) <= 1 and spot.ncc >= LIKE:
         spot.verdict = GOOD
     elif spot.ncc >= LIKE:
@@ -142,14 +148,21 @@ def assess(spots: list[Spot]) -> dict:
     """Plain-language outcome of all the spot checks."""
     n = len(spots)
     good = [s for s in spots if s.verdict == GOOD]
-    bad = [s for s in spots if s.verdict != GOOD]
+    still = [s for s in spots if s.verdict == STILL]
+    bad = [s for s in spots if s.verdict not in (GOOD, STILL)]
     suspect_bad = [s for s in bad if s.kind == "suspect"]
     if not n:
         verdict, text = "NOT CHECKED", "No picture spot checks could be made."
+    elif not good:
+        verdict = "NOT CHECKED" if not bad else "CHECK THE FLAGGED POINTS"
+        text = ("Every checked point is a still picture, so the pictures cannot confirm the alignment."
+                if not bad else f"None of the {n} spot checks agree.")
     elif not bad:
         verdict = "LOOKS GOOD"
-        text = (f"All {n} picture spot checks agree: at every checked point the DVD frame the alignment chose is "
-                "the best-matching picture for the LaserDisc frame.")
+        text = (f"All {len(good)} picture spot checks that can tell agree: at every such point the DVD frame the "
+                "alignment chose is the best-matching picture for the LaserDisc frame.")
+        if still:
+            text += f" {len(still)} more were still pictures (every nearby DVD frame matches equally)."
     else:
         verdict = "CHECK THE FLAGGED POINTS"
         parts = [f"{len(good)} of {n} spot checks agree; {len(bad)} need a look"]
@@ -160,7 +173,7 @@ def assess(spots: list[Spot]) -> dict:
         text = "; ".join(parts[:1]) + (": " + ", ".join(parts[1:]) if len(parts) > 1 else "") + "."
         if not suspect_bad and any(s.kind == "suspect" for s in spots):
             text += " The stretches the numeric checks flagged look right on the pictures."
-    return {"verdict": verdict, "text": text, "checked": n, "agree": len(good),
+    return {"verdict": verdict, "text": text, "checked": n, "agree": len(good), "still": len(still),
             "recommendation": ("approve" if verdict == "LOOKS GOOD" else "look at the sheet before deciding")}
 
 
@@ -211,7 +224,7 @@ def tile_rect(row: int, col: int) -> list[int]:
 
 
 def tone(verdict: str) -> str:
-    return {GOOD: "good", SHIFTED: "warn", UNSURE: "bad"}.get(verdict, "neutral")
+    return {GOOD: "good", STILL: "neutral", SHIFTED: "warn", UNSURE: "bad"}.get(verdict, "neutral")
 
 
 def review_view(res: AlignmentResult, spots: list[Spot], fit: dict, *, sheet: str, duration_s: float,

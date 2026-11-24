@@ -1,4 +1,5 @@
-"""Characterization: v38 tests/test_audio_timing_v5.py (all 8 tests), ported verbatim."""
+"""Characterization: v38 tests/test_audio_timing_v5.py, ported verbatim except the two duration tests
+rewritten for ADR 0004 (CLV time-code PADs removed from the stack)."""
 from __future__ import annotations
 
 import csv
@@ -9,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from fstk.media.audio_timing import (
-    NO_DVD_PAD_TOLERANCE_FRAMES,
+    NO_DVD_TOLERANCE_FRAMES,
     diagnostic_skip,
     no_dvd_audio_plan_gib,
     rate_filter,
@@ -21,27 +22,23 @@ from fstk.media.audio_timing import (
 
 
 class V5AudioTimingTests(unittest.TestCase):
-    def test_duration_candidate_and_pad_counts_remain_separate(self):
-        # E07's native L1 WAV and measured stack dimensions. The frame map has
-        # 84 PAD_1 nodes, one before the measured output head trim.
+    # ADR 0004 (deliberate change from v38): Orc's CLV time-code PAD frames are removed from the stack
+    # master, so the duration model compares audio with the pad-free stack directly and the PAD
+    # counts are gone. Same E06/E07 measurements as v38's tests, with all 84 PADs removed.
+    def test_e07_duration_against_pad_free_stack(self):
         samples = 122_172_213
-        report = summarize_timing(44_100, samples, 83_110, 84, 83)
-        self.assertAlmostEqual(report["duration_candidate_effective_rate_hz"], 44_056.1, delta=0.1)
-        self.assertEqual(report["map_pad_count_full"], 84)
-        self.assertEqual(report["map_pad_count_projected_into_output"], 83)
-        self.assertAlmostEqual(report["audio_minus_map_content_frames"], 1.3216579, places=5)
-        self.assertAlmostEqual(report["audio_minus_projected_content_frames"], 0.3216579, places=5)
+        report = summarize_timing(44_100, samples, 83_110 - 84)
+        self.assertAlmostEqual(report["audio_minus_projected_content_frames"], 1.3216579, places=5)
+        self.assertLessEqual(abs(report["audio_minus_projected_content_frames"]), NO_DVD_TOLERANCE_FRAMES)
+        # the duration-derived rate is now within 0.1 Hz-scale of the disc's own 44.1 kHz
+        self.assertAlmostEqual(report["duration_candidate_effective_rate_hz"], 44_100.0, delta=1.0)
         self.assertFalse(report["is_approval"])
 
-    def test_e06_no_dvd_contrast_keeps_intrinsic_rate_and_pad_stretch_distinct(self):
-        # E06 measured ~0 intrinsic rate change but needed a separate PAD stretch.
-        # The duration/PAD model is an effective timeline rate, not an intrinsic-disc fit.
+    def test_e06_duration_against_pad_free_stack(self):
         samples = round(2776.250794 * 44_100)
-        report = summarize_timing(44_100, samples, 83_288, 84, 83)
-        self.assertAlmostEqual(report["duration_candidate_effective_rate_hz"], 44_055.69, delta=0.02)
-        self.assertAlmostEqual(report["audio_minus_projected_content_frames"], -0.68, delta=0.02)
-        self.assertLessEqual(abs(report["audio_minus_projected_content_frames"]),
-                             NO_DVD_PAD_TOLERANCE_FRAMES)
+        report = summarize_timing(44_100, samples, 83_288 - 84)
+        self.assertAlmostEqual(report["audio_minus_projected_content_frames"], 0.32, delta=0.02)
+        self.assertLessEqual(abs(report["audio_minus_projected_content_frames"]), NO_DVD_TOLERANCE_FRAMES)
 
     def test_no_soxr_build_uses_recorded_default_resampler_fallback(self):
         filt, name = rate_filter(88_112, use_soxr=False)

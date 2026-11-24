@@ -1,7 +1,7 @@
 """LD audio timing math (pure; no processes).
 
 Ported verbatim from v38:
-* ``audio_timing_diagnostic.py`` – duration/PAD (no-DVD) rate model, intermediate 2× asetrate,
+* ``audio_timing_diagnostic.py`` – duration (no-DVD) rate model, intermediate 2× asetrate,
   resampler filter chains, space plan;
 * ``measure_audio_rate.py`` – envelope cross-correlation, robust Theil–Sen line fit with
   leave-one-window-out range, saved-report summaries;
@@ -30,7 +30,8 @@ from fstk.core.errors import ArtifactError as PipelineError
 FPS = 30000.0 / 1001.0
 BASE_RATE = 44100
 INTERMEDIATE_FACTOR = 2
-NO_DVD_PAD_TOLERANCE_FRAMES = 1.0
+NO_DVD_TOLERANCE_FRAMES = 2.0   # measured +0.32 (E06) and +1.32 (E07) against the pad-free stack (ADR 0004)
+NO_DVD_PAD_TOLERANCE_FRAMES = NO_DVD_TOLERANCE_FRAMES   # old name
 GIB = 1024 ** 3
 # measure_audio_rate.py
 SR = 8000
@@ -67,8 +68,13 @@ def wav_info(path: Path) -> dict:
         raise PipelineError(f"cannot read exact PCM WAV sample count from {path}: {e}") from e
 
 
-def summarize_timing(sample_rate: int, sample_count: int, stack_frames: int,
-                     map_pad_count: int, projected_output_pad_count: int | None = None) -> dict:
+def summarize_timing(sample_rate: int, sample_count: int, stack_frames: int) -> dict:
+    """The no-DVD duration model: the native EFM audio spans the same disc time as the stack.
+
+    The stack has no inserted frames (ADR 0004 removed Orc's CLV time-code PADs), so the audio's
+    frame-equivalent length should equal ``stack_frames``; the residual is checked by the caller. The key
+    ``audio_minus_projected_content_frames`` keeps its v38 name so earlier reports still read the same.
+    """
     if sample_rate <= 0 or sample_count <= 0 or stack_frames <= 0:
         raise PipelineError("sample rate, sample count, and stack frame count must be positive")
     raw_duration = sample_count / sample_rate
@@ -77,28 +83,21 @@ def summarize_timing(sample_rate: int, sample_count: int, stack_frames: int,
     rate = sample_rate * raw_duration / stack_duration
     intermediate_rate = round(INTERMEDIATE_FACTOR * rate)
     effective_rate = intermediate_rate / INTERMEDIATE_FACTOR
-    model_content_frames = stack_frames - map_pad_count
-    result = {
+    return {
         "native_audio_duration_s": raw_duration,
         "native_audio_equiv_video_frames": raw_equiv_frames,
         "stack_frames": stack_frames,
         "stack_duration_s": stack_duration,
         "duration_delta_frames_stack_minus_audio": stack_frames - raw_equiv_frames,
-        "map_pad_count_full": map_pad_count,
-        "map_content_frames_if_all_map_pads_inserted": model_content_frames,
-        "audio_minus_map_content_frames": raw_equiv_frames - model_content_frames,
+        "audio_minus_projected_content_frames": raw_equiv_frames - stack_frames,
         "duration_candidate_effective_rate_hz": rate,
         "duration_candidate_two_x_asetrate_hz": intermediate_rate,
         "duration_candidate_effective_rate_rounded_hz": effective_rate,
         "duration_candidate_quantization_error_hz": effective_rate - rate,
         "dvd_opened": False,
         "is_approval": False,
-        "caveat": "Duration/PAD estimate only. Verify matching endpoints, EFM structural trim, map counts, and origin; do not auto-commit.",
+        "caveat": "Duration estimate only. Verify matching endpoints, EFM structural trim and origin; do not auto-commit.",
     }
-    if projected_output_pad_count is not None:
-        result["map_pad_count_projected_into_output"] = projected_output_pad_count
-        result["audio_minus_projected_content_frames"] = raw_equiv_frames - (stack_frames - projected_output_pad_count)
-    return result
 
 
 def rate_filter(rate_2x: int, use_soxr: bool) -> tuple[str, str]:

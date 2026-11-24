@@ -491,7 +491,7 @@ class Services:
                            note: str) -> Path:
         """Record the per-stretch treatments and plan a fresh encode from the master with them.
 
-        video-trim (new encode script) → pad-audit → pad-repair → frame-fixes → video-quality → encode-final → remux →
+        video-trim (new encode script) → frame-fixes → video-quality → encode-final → remux →
         qc-report → episode-report. Audio, trims and frame numbering are unaffected by the choice.
         """
         from fstk.core.fsio import atomic_write_json
@@ -508,7 +508,7 @@ class Services:
         with ws.store.transaction(by=actor, reason="video-origin stretch treatments chosen in the final review") as m:
             m.set("video.hybrid_choices", dict(sorted(choices.items())), by=actor, note=note.strip())
         job = f"stretches-{utc_stamp()[:15].lower()}"
-        chain = [("video-trim", "video-trim"), ("pad-audit", "pad-audit"), ("pad-repair", "pad-repair"),
+        chain = [("video-trim", "video-trim"),
                  ("frame-fixes", "frame-fixes"), ("video-quality", "video-quality"), ("encode", "encode-final"), ("remux", "remux"),
                  ("qc", "qc-report"), ("episode-report", "episode-report")]
         steps, prev = [], None

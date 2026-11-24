@@ -10,7 +10,7 @@ nothing ever patches an encoded file. Actions, by how wide the defect is:
                   is frozen, which the review preview shows.
 ``dvd``           whole frames, or only a rectangle, taken from the DVD: found by matching the LD frames either
                   side in the aligned DVD window, registered to the LD raster and colour-matched to the LD
-                  neighbour (the PAD-borrow method). Opt-in only, never automatic (owner decision 2026-11-22).
+                  neighbour (v38's PAD-borrow method). Opt-in only, never automatic (owner decision 2026-11-22).
 ``leave``         reviewed and left as captured (recorded so the report says so).
 
 Frame numbers are those of the delivered episode (after trims); rectangles are in the chain's full raster
@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from itertools import pairwise
 
 from fstk.core.errors import ArtifactError
-from fstk.media.pad_repair import base_sha
+from fstk.media.frame_replace import base_sha
 
 INTERPOLATE, LD_PATCH, DVD, LEAVE = "interpolate", "ld-patch", "dvd", "leave"
 ACTIONS = (INTERPOLATE, LD_PATCH, DVD, LEAVE)
@@ -99,7 +99,7 @@ def manualfix_matches_base(text: str, base_text: str) -> bool:
 
 def manualfix_script(base_text: str, *, fixes: list[Fix], expected_frames: int, payload: str | None = None,
                      slots: dict[int, int] | None = None) -> str:
-    """The chain (PAD-repaired or base) plus the operator's fixes, as one script for the single final encode.
+    """The encode-script chain plus the operator's fixes, as one script for the single final encode.
 
     ``slots``: delivered frame → index in the lossless ``payload`` clip (DVD frames, already registered and
     colour-matched). With no fixes the script is the base plus the guard header (so the chain is always

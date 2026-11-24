@@ -18,7 +18,6 @@ ADAPTERS: dict[str, tuple[str, ...]] = {
     "ffmpeg": ("ffmpeg", "ffprobe"),
     "vapoursynth": ("vspipe",),
     "orc": ("orc",),
-    "rife": ("rife_engine", "rife_model_dir"),
     "sevenzip": ("sevenzip",),
 }
 VERSION_ARGS: dict[str, list[str]] = {"ffmpeg": ["-version"], "ffprobe": ["-version"], "vspipe": ["--version"]}

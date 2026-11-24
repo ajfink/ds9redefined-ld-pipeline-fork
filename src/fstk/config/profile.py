@@ -38,8 +38,6 @@ KNOWN_TOOLS: dict[str, dict[str, Any]] = {
     "ffprobe": {"kind": "exe", "required": True, "path_names": ["ffprobe"]},
     "orc": {"kind": "exe", "required": True, "path_names": ["orc-cli", "orc"]},
     "vspipe": {"kind": "exe", "required": True, "path_names": ["vspipe"]},
-    "rife_engine": {"kind": "exe", "required": False, "path_names": ["rife-ncnn-vulkan"]},
-    "rife_model_dir": {"kind": "dir", "required": False, "path_names": []},
     "sevenzip": {"kind": "exe", "required": False, "path_names": ["7z", "7zz", "7za"]},
     "curl": {"kind": "exe", "required": False, "path_names": ["curl"]},
 }
@@ -51,6 +49,8 @@ RETIRED_TOOLS: dict[str, str] = {
     "vs_plugin_dir": "the plugin wheels in fstk's own environment autoload; the `vs plugin ...` probes check them",
     "avisynth_plugin_dir": "AviSynth is retired (VapourSynth on every platform)",
     "avisynth_loader": "AviSynth is retired (VapourSynth on every platform)",
+    "rife_engine": "RIFE only filled Orc's CLV time-code PAD frames, which are no longer in the stack (ADR 0004)",
+    "rife_model_dir": "RIFE only filled Orc's CLV time-code PAD frames, which are no longer in the stack (ADR 0004)",
 }
 
 def _without_retired(tools: Mapping[str, str]) -> tuple[dict[str, str], list[str]]:
@@ -475,12 +475,11 @@ def _is_absolute(path: Path | str, os_name: str) -> bool:
 
 
 # ---------------------------------------------------------------------- v38 conversion
-V38_TOOL_MAP = {"ffmpeg": "ffmpeg", "ffprobe": "ffprobe", "orc": "orc", "rife_engine": "rife_engine",
-                "rife_model_dir": "rife_model_dir", "sevenzip": "sevenzip", "curl": "curl",
+V38_TOOL_MAP = {"ffmpeg": "ffmpeg", "ffprobe": "ffprobe", "orc": "orc", "sevenzip": "sevenzip", "curl": "curl",
                 "vspipe": "vspipe"}
 OS_ALIASES = {"windows": "windows", "win32": "windows", "darwin": "macos", "macos": "macos",
               "mac": "macos", "linux": "linux"}
-V38_DROPPED_TOOLS = ("avisynth_plugin_dir", "avisynth_loader")
+V38_DROPPED_TOOLS = ("avisynth_plugin_dir", "avisynth_loader", "rife_engine", "rife_model_dir")
 
 
 def convert_v38_profile(v38: Mapping[str, Any], *, data_root: str, media_root: str | None = None

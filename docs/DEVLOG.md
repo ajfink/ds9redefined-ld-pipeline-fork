@@ -1243,3 +1243,41 @@ names that no longer exist; required tools never found) and, if any, lists them 
   plugin stops the plan at the start instead of at video-trim.
 - Note: `fstk-crash.log` "Windows fatal exception: code 0x8001010d" at `app.main` is COM's
   RPC_E_CANTCALLOUT_ININPUTSYNCCALL reported by faulthandler, not a crash (the sessions continued normally).
+
+## CP53 — Orc's CLV time-code PADs removed; the PAD machinery goes (ADR 0004) (2026-11-24)
+
+- Diagnosis (S02E03 alignment, debug bundles 07:57/08:09 + `s02e03-align` frames): the LD→DVD offset is flat
+  between seams and slips −0.94 frames at every multiple of 900. Orc's frame maps insert a `PAD_1` for every CLV
+  time-code skip (30 fps count vs 29.97 fps video); the rendered PAD is an all-zero frame (7,664-byte packet vs
+  ~445 KB median on S01E20). S02E03's master has 84 (83 on the grid, one at 57,653). Project doc
+  `FINDING-CLV-PAD-FRAMES.md`; decision in **ADR 0004** (owner: drop the pads, simplify the app).
+- `orc_project.strip_timecode_pads`: per capture, the most common phase mod 900; grid gaps must be 900/1800; all
+  captures must have the grid and line up after their `alignmentMap` offsets, else `PipelineError`. Irregular
+  PADs stay. Verified on the real S01E20 project (83 removed per capture; kept L1 1, L2 1, L3 4, P3 2, P4 1, P5 1),
+  redacted fixture `tests/fixtures/orc/s01e20-stack-with-timecode-pads.orcprj`. v38's `source_id_for_capture` /
+  `reference_map_ranges` removed (unused).
+- `stack-reference` strips the project before rendering and reports `timecode_pads_removed`; `stack.frames` is the
+  pad-free count. `stack-render` reusing an old master drops the PADs **losslessly** (FFV1 intra-only: `noise=drop`
+  + `setts` bsf, stream copy) after checking keyframes, rising pts, tiny packets and all-zero decodes; the copy's
+  packets must equal the originals; the original stays as `…-with-timecode-pads.mkv`. New `FFmpeg.packet_index`,
+  `frame_at`, `drop_frames`.
+- No-DVD audio (`dvd-free-audio`): native 44,100 Hz + reviewer drift only (`audio.rate_method =
+  dvd-free-native-rate`); duration residual tolerance ±2 frames (measured +0.32 E06, +1.32 E07 on the pad-free
+  stack). QC accepts v38-recipe deliveries (`dvd-free-duration-pad`) under their own rule. The two v38
+  characterization duration tests were rewritten as a **deliberate change** (docstring says so).
+- Removed: `pad-audit`, `pad-repair` (stages, `media/pads.py`, `media/pad_repair.py`), the identity QC gate
+  (`qc/identity.py`) and the PAD-black gate, RIFE entirely (`tools/rife.py`, `install/rife.py`, smoke stand-in,
+  wizard/discover/providers/preflight/requirements; `rife_engine`/`rife_model_dir` are RETIRED_TOOLS so old
+  profiles load with a note). Kept: DVD-borrow as `media/frame_replace.py` + `stages/dvdborrow.py` (Frame fixes).
+  QC decode gate → "full decode + single black frames": WARN + a review interval per single black frame.
+  Registry keeps `pads.*`/`qc.identity_*`/`qc.pad_aligned_black_hits` as legacy. Plans, re-encode chain,
+  progress weights, smoke, CLI, docstrings, inventory (`--check` clean) and `docs/stage-reference.md` updated.
+- Alignment picture spot check: every flagged stretch gets a point, longest first (cap `MAX_POINTS −
+  MIN_ORDINARY`), instead of the first two; a predicted frame within `TIE` (0.02) of the best counts as agreeing,
+  and a window where every frame matches equally is "still picture, can't tell" (neutral, not a failure).
+- Tests: full suite 602 passed (exit 139 is the known Qt teardown after the summary); ruff clean.
+- **Migration on the owner's machines:** the next run of an episode whose master still has PADs rewrites the
+  master without them (needs free space equal to the master) and re-runs everything downstream. Delete the
+  `…-with-timecode-pads.mkv` originals once satisfied. v38-delivered episodes keep their invented PAD frames until
+  re-run.
+- Next: re-run S02E03 from stack-render on the Legion and confirm the alignment is flat across the old seams.

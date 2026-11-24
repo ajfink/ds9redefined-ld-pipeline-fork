@@ -19,10 +19,8 @@ from fstk.workflow.engine import PLAN_SCHEMA, Engine, EpisodeWorkspace
 pytestmark = [pytest.mark.media, pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg")]
 EP = EpisodeId.parse("DS9:S01E07")
 FPS = 30000 / 1001
-STACK_FRAMES = 3000
-PADS = (500, 1000, 1500, 2000)            # PAD_1 output positions in the reference frame map
+STACK_FRAMES = 3000                       # the pad-free stack master (ADR 0004)
 OUT_FRAMES = 2380
-RANGES = "0-499,PAD_1,500-998,PAD_1,999-1497,PAD_1,1498-1996,PAD_1,1997-2995"
 
 
 def write_native(path, equiv_frames: float):
@@ -42,17 +40,10 @@ def env(tmp_path):
     return prof
 
 
-def setup(prof, *, audio_equiv_frames=STACK_FRAMES - 4, no_dvd=True):  # 4 = len(PADS)
-    audio, stack = prof.root("audio", EP), prof.root("stack", EP)
+def setup(prof, *, audio_equiv_frames=STACK_FRAMES - 0.4, no_dvd=True):
+    audio = prof.root("audio", EP)
     audio.mkdir(parents=True)
-    stack.mkdir(parents=True)
     write_native(audio / "P2-efm.wav", audio_equiv_frames)
-    (stack / "stack.orcprj").write_text(
-        "project:\n  video_format: NTSC\n  source_format: Composite\n  amplitude_unit: 10bit\ndag:\n  nodes:\n"
-        "    - id: 1\n      stage: tbc_source\n      user_label: TBC Source P2\n"
-        "    - id: 2\n      stage: frame_map\n      user_label: Frame Map P2\n      parameters:\n"
-        f"        ranges:\n          type: string\n          value: {RANGES}\n"
-        "  edges:\n    - from: 1\n      to: 2\n", encoding="utf-8")
     m = Manifest.new(EP, title="The Passenger")
     for key, value, note in (("mode.dvd_reference_available", False, "no DVD for this episode"),
                              ("mode.no_dvd_proceed_approved", no_dvd, "operator chose LD-only")):
@@ -65,7 +56,6 @@ def setup(prof, *, audio_equiv_frames=STACK_FRAMES - 4, no_dvd=True):  # 4 = len
     m.set("video.head_trim", 0, by="t")
     m.set("video.delta_s", 1.0, by="t")
     m.set_artifact("ld_native", root="audio", name="P2-efm.wav")
-    m.set_artifact("stack_project", root="stack", name="stack.orcprj")
     ws = EpisodeWorkspace(prof, EP)
     ws.store.create(m, by="t", reason="setup")
     return ws
@@ -82,8 +72,11 @@ def test_builds_exact_sample_budget_and_passes_the_qc_check(env):
     st = run(env, "a1")["steps"]["audio"]
     assert st["status"] == "passed", st
     m = ws.store.load()
-    assert m.get("audio.rate_method") == "dvd-free-duration-pad" and m.get("audio.dvd_free_approved") is True
-    assert m.get("audio.duration_candidate_rate_hz") == pytest.approx(44100 * (STACK_FRAMES - 4) / STACK_FRAMES, rel=1e-6)
+    assert m.get("audio.rate_method") == "dvd-free-native-rate" and m.get("audio.dvd_free_approved") is True
+    # the duration rate is recorded for information; the audio plays at the disc's own 44.1 kHz
+    assert m.get("audio.duration_candidate_rate_hz") == pytest.approx(44100 * (STACK_FRAMES - 0.4) / STACK_FRAMES,
+                                                                      rel=1e-5)
+    assert m.get("audio.asetrate") == 44100.0
     assert m.get("audio.skip_s") == pytest.approx(1.0) and abs(m.get("audio.endpoint_residual_frames")) < 1
     assert m.get("deliverable.ld_audio_source") == "ld_synced" and m.get("deliverable.mux_tracks") == ["ld"]
     ff = FFmpeg("ffmpeg", "ffprobe")
@@ -92,7 +85,8 @@ def test_builds_exact_sample_budget_and_passes_the_qc_check(env):
     synced_stream = ff.probe(paths["ld_synced"]).only("audio").raw
     assert exact_audio_samples(synced_stream) == target_samples(OUT_FRAMES)
     report = json.loads(paths["audio_timing_report"].read_text())
-    assert report["dvd_opened"] is False and report["map_pad_count_projected_into_output"] == 4
+    assert report["dvd_opened"] is False and report["effective_rate_hz"] == 44100.0
+    assert not any(k.startswith("map_pad") for k in report)
     keys = ("mode.dvd_reference_available", "mode.no_dvd_proceed_approved", "deliverable.tracks",
             "audio.dvd_free_approved", "audio.rate_method", "audio.origin_verified_by_duration",
             "audio.duration_candidate_rate_hz", "audio.endpoint_tolerance_frames", "video.frames", "video.delta_s",
@@ -113,8 +107,8 @@ def test_builds_exact_sample_budget_and_passes_the_qc_check(env):
                               synced_stream=synced_stream, delivered_stream=synced_stream))
 
 
-def test_endpoint_residual_over_one_frame_blocks_without_writing(env):
-    ws = setup(env, audio_equiv_frames=STACK_FRAMES - len(PADS) - 2.5)
+def test_endpoint_residual_over_two_frames_blocks_without_writing(env):
+    ws = setup(env, audio_equiv_frames=STACK_FRAMES - 2.5)
     st = run(env, "a2")["steps"]["audio"]
     assert st["status"] == "blocked" and "endpoint residual" in st["issues"][0]
     assert not ws.store.load().is_set("audio.rate_method")
@@ -125,3 +119,29 @@ def test_requires_the_operators_no_dvd_choice(env):
     setup(env, no_dvd=False)
     st = run(env, "a3")["steps"]["audio"]
     assert st["status"] == "blocked" and "no_dvd_proceed_approved" in st["issues"][0]
+
+
+def test_v38_recipe_deliveries_still_verify_under_their_own_rule(env):
+    """A delivery made with v38's duration/PAD recipe (audio stretched to cover the PADs) keeps passing QC;
+    the same report claiming the new native-rate method does not (ADR 0004)."""
+    from fstk.qc.dvdfree import LEGACY_RATE_METHOD
+
+    ws = setup(env)
+    assert run(env, "a4")["steps"]["audio"]["status"] == "passed"
+    m = ws.store.load()
+    ff = FFmpeg("ffmpeg", "ffprobe")
+    paths = {k: env.root(m.artifact(k)["root"], EP) / m.artifact(k)["name"]
+             for k in ("ld_native", "ld_corrected", "ld_synced", "audio_timing_report")}
+    stream = ff.probe(paths["ld_synced"]).only("audio").raw
+    report = json.loads(paths["audio_timing_report"].read_text())
+    legacy = {**report, "effective_rate_hz": report["duration_candidate_effective_rate_hz"]}
+    keys = ("mode.dvd_reference_available", "mode.no_dvd_proceed_approved", "deliverable.tracks",
+            "audio.dvd_free_approved", "audio.origin_verified_by_duration", "audio.duration_candidate_rate_hz",
+            "audio.endpoint_tolerance_frames", "video.frames", "video.delta_s", "audio.pad_frames", "audio.skip_s")
+    values = {k: m.get(k) for k in keys}
+    shas = {"native_sha256": sha256_file(paths["ld_native"]), "corrected_sha256": sha256_file(paths["ld_corrected"]),
+            "synced_sha256": sha256_file(paths["ld_synced"])}
+    common = {**shas, "synced_stream": stream, "delivered_stream": stream}
+    assert check_dvd_free({**values, "audio.rate_method": LEGACY_RATE_METHOD}, legacy, **common) == []
+    assert any("applied rate" in i for i in
+               check_dvd_free({**values, "audio.rate_method": "dvd-free-native-rate"}, legacy, **common))

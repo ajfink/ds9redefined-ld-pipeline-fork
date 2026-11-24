@@ -1,7 +1,7 @@
 """Where the external tools usually live on each platform (pure: the OS, environment and home are parameters).
 
 Finding is separate from choosing: ``discover`` returns every match in order of preference and the setup wizard
-decides (and asks when the choice affects the output, e.g. which RIFE model).
+decides (and asks when the choice affects the output).
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from pathlib import Path
 
 from fstk.config.profile import KNOWN_TOOLS
 
-TOOL_ORDER = ("vspipe", "ffmpeg", "ffprobe", "orc", "rife_engine", "rife_model_dir", "sevenzip", "curl")
+TOOL_ORDER = ("vspipe", "ffmpeg", "ffprobe", "orc", "sevenzip", "curl")
 
 #: Folders a program started from Finder, the Dock or a desktop shortcut has no PATH for: a GUI process inherits
 #: the system PATH (``/usr/bin:/bin:...``), not the one the owner's shell sets up, so Homebrew and MacPorts are
@@ -86,15 +86,6 @@ def _locations(name: str, system: str, tools: Path) -> list[str]:
                     "~/Applications/orc-gui.app/Contents/MacOS/orc-cli"]
         return [*own, "/usr/bin/orc-cli", "/usr/local/bin/orc-cli", "/opt/decode-orc/bin/orc-cli",
                 "~/.local/bin/orc-cli"]
-    if name == "rife_engine":
-        mine = str(tools / "rife-ncnn-vulkan" / f"rife-ncnn-vulkan{exe}")        # where setup unpacks it
-        if system == "windows":
-            return [*own, mine, "%LOCALAPPDATA%/Flowframes/FlowframesData/pkgs/rife-ncnn/rife-ncnn-vulkan.exe",
-                    "~/tools/rife-ncnn-vulkan/rife-ncnn-vulkan.exe"]
-        # the macOS and Linux releases are unpacked wherever the owner put them; look where downloads land too
-        return [*own, mine, "~/tools/rife-ncnn-vulkan/rife-ncnn-vulkan", "~/tools/rife-ncnn-vulkan*/rife-ncnn-vulkan",
-                "/opt/homebrew/bin/rife-ncnn-vulkan", "/usr/local/bin/rife-ncnn-vulkan",
-                "~/Applications/rife-ncnn-vulkan*/rife-ncnn-vulkan", "~/Downloads/rife-ncnn-vulkan*/rife-ncnn-vulkan"]
     if name == "sevenzip":
         if system == "windows":
             return ["%ProgramFiles%/7-Zip/7z.exe", "%ProgramFiles(x86)%/7-Zip/7z.exe"]
@@ -106,31 +97,8 @@ def _locations(name: str, system: str, tools: Path) -> list[str]:
     return own
 
 
-def _model_dirs(engine: str | None, system: str, env: Mapping[str, str], home: Path,
-                extra: Iterable[Path] = ()) -> list[str]:
-    """RIFE model folders next to the engine, in the places Flowframes keeps them, or in a shared tools folder.
-
-    The model decides what a repaired frame looks like, so every machine must use the same one: a folder the
-    owner shares between machines is searched as well, and the choice is never made automatically.
-    """
-    spots: list[str] = []
-    if engine:
-        spots.append(str(Path(engine).parent / "rife-v*"))
-    if system == "windows":
-        spots.append("%LOCALAPPDATA%/Flowframes/FlowframesData/pkgs/rife-ncnn-vs/rife-v*")
-    spots += ["~/tools/rife-ncnn-vulkan/rife-v*", "~/tools/rife-v*"]
-    spots += [f"{d}/rife-v*" for d in (str(p) for p in extra)]
-    spots += [f"{d}/rife-ncnn-vulkan/rife-v*" for d in (str(p) for p in extra)]
-    out: list[str] = []
-    for spot in spots:
-        for p in _expand(spot, env, home):
-            if os.path.isdir(p) and p not in out:
-                out.append(p)
-    return out
-
-
 def discover(name: str, *, system: str, env: Mapping[str, str] | None = None, home: Path | None = None,
-             venv_bin: Path | None = None, engine: str | None = None,
+             venv_bin: Path | None = None,
              extra_dirs: Iterable[Path] = ()) -> list[Found]:
     """Every copy of ``name`` that can be found, best first. Never runs anything.
 
@@ -151,9 +119,6 @@ def discover(name: str, *, system: str, env: Mapping[str, str] | None = None, ho
             found.append(Found(name, path, how))
 
     if spec["kind"] == "dir":
-        if name == "rife_model_dir":
-            for p in _model_dirs(engine, system, env, home, extra_dirs):
-                add(p, "known location")
         return found
     if venv_bin is not None and name == "vspipe":
         for exe in ("vspipe.exe", "vspipe"):

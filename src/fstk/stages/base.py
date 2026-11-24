@@ -91,10 +91,6 @@ class StageContext:
             from fstk.tools.vapoursynth import VapourSynth
 
             return VapourSynth.from_profile(self.profile, log_dir=self.log_dir)
-        if name == "rife":
-            from fstk.tools.rife import Rife
-
-            return Rife.from_profile(self.profile, log_dir=self.log_dir)
         raise WorkflowError(f"unknown tool adapter {name!r}")
 
     def report(self, fraction: float | None = None, message: str = "") -> None:

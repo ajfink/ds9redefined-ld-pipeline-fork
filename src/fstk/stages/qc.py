@@ -1,6 +1,6 @@
 """``qc-report``: delivery QC of the final file, then a human delivery review.
 
-Ported behaviour of v38 ``qc_report.py`` (+ ``scan_padfixed_black.py``). The stage always writes
+Ported behaviour of v38 ``qc_report.py``. The stage always writes
 the full evidence (``reports/qc-<run>.json`` and ``.md``), then *fails* unless every hard gate
 passed and nothing required was left unverified — so a delivery approval can never be recorded
 against a failing report. The structured JSON feeds the delivery review window
@@ -8,10 +8,10 @@ against a failing report. The structured JSON feeds the delivery review window
 
 Gates (v38 numbering in brackets):
 
-* [1] full sequential decode with blackdetect: decoder errors, and no single-frame black at a
-  confirmed PAD position (± 1.25 frames); [7] the same decode's frame count == ``video.frames``;
-* [2] replacement identity — **every** repaired PAD (v38 sampled three) by exact frame index from
-  one sequential thumbnail decode: own NCC ≥ 0.99 and separation ≥ 0.10 (``fstk.qc.identity``);
+* [1] full sequential decode with blackdetect: decoder errors fail; a single-frame black (a picture
+  missing from every capture) is a warning listed for the A/V review; [7] the same decode's frame
+  count == ``video.frames``;
+* [2] (v38's PAD replacement identity is gone: the stack master has no PAD frames, ADR 0004);
 * [3] absolute A/V against the DVD through the picture map (|constant| ≤ 100 ms, |slope| ≤ 30 ppm,
   rms ≤ 40 ms), when ``mode.dvd_reference_available`` is true (``fstk.qc.sync``);
 * [4] between-track sync LD vs DVD 5.1 (rms ≤ 40 ms, |slope| ≤ 30 ppm) when 5.1 is delivered;
@@ -25,7 +25,7 @@ Gates (v38 numbering in brackets):
 * [11] manifest cross-check (warnings only).
 
 * [3b] DVD-free timeline (no-DVD episodes): the delivered LD audio is exactly what ``dvd-free-audio``
-  built and recorded — operator choice, duration/PAD rate and endpoint residual, capture-pad
+  built and recorded — operator choice, duration rate and endpoint residual, capture-pad
   AudioSkip, native/corrected/synced hashes, exact sample budget (``fstk.qc.dvdfree``).
 """
 from __future__ import annotations
@@ -43,18 +43,16 @@ from fstk.qc.gates import (
     allowed_skips,
     av_check_chunks,
     av_prescreen,
-    pad_black_hits,
-    pad_review_intervals,
-    read_frame_list,
+    black_review_intervals,
     render_markdown,
     retime_gap_status,
     retime_review_intervals,
     seekability,
+    single_black_frames,
     stream_inventory,
     subtitle_timeline,
     summarize,
 )
-from fstk.qc.identity import identity_check, read_replacements
 from fstk.qc.sync import (
     AV_SR,
     SYNC_SR,
@@ -87,22 +85,15 @@ def _deliverable_present(ctx, manifest):
     return p.is_file(), str(p) if p.is_file() else f"deliverable {key} missing: {p}"
 
 
-def pad_repair_list(ctx, manifest) -> Path:
-    """Artifact ``pad_repair_frames`` if declared, else v38's ``<probe>/<code>-pad-repair-frames.txt``."""
-    if manifest.artifact("pad_repair_frames"):
-        return ctx.artifact_path("pad_repair_frames", manifest)
-    return ctx.root("probe") / f"{ctx.episode.code}-pad-repair-frames.txt"
-
-
 @register
 class QcReport(Stage):
     id = "qc-report"
     title = "Delivery QC report"
-    description = ("Full decode + PAD black, frame count, stream inventory, seekability, packet hashes, "
+    description = ("Full decode + single black frames, frame count, stream inventory, seekability, packet hashes, "
                    "subtitles and retime gaps; evidence for the human delivery review.")
     requires = (Custom("deliverable", _deliverable_present), ValueSet("video.frames"), ValueSet("video.duration_s"))
-    writes = ("qc.video_md5", "qc.ld_audio_md5", "qc.fiveone_md5", "qc.srt_md5", "qc.pad_aligned_black_hits",
-              "qc.full_decode_errors", "qc.delivered_bytes", "qc.identity_own_ncc_min", "qc.identity_other_ncc_max",
+    writes = ("qc.video_md5", "qc.ld_audio_md5", "qc.fiveone_md5", "qc.srt_md5",
+              "qc.full_decode_errors", "qc.delivered_bytes",
               "qc.av_constant_ms", "qc.av_slope_ppm", "qc.av_rms_ms", "qc.track_offset_ms")
     resource = "compute"
     review = "delivery"
@@ -136,29 +127,23 @@ class QcReport(Stage):
         ctx.check_cancel()
         measured: dict = {"full_decode_errors": len(scan.errors), "frames": scan.frames,
                           "black_events": list(scan.events)}
-        pads_path = pad_repair_list(ctx, m)
-        evidence["pad_repair_frames"] = str(pads_path)
         gates = []
+        name = "full decode + single black frames"
         if scan.frames is None:
-            gates.append(Gate("full-decode + PAD black", "ERROR", f"decode produced no frame count (exit "
-                                                                  f"{scan.returncode})"))
-        elif not pads_path.is_file():
-            gates.append(Gate("full-decode + PAD black", "ERROR", f"confirmed PAD repair list missing: {pads_path}"))
+            gates.append(Gate(name, "ERROR", f"decode produced no frame count (exit {scan.returncode})"))
         else:
-            pads = read_frame_list(pads_path)
-            hits = pad_black_hits(pads, scan.events)
-            measured["pad_hits"] = len(hits)
-            review += pad_review_intervals(hits)
-            detail = f"blackdetect hits={len(scan.events)}; PAD positions={len(pads)}; aligned hits={len(hits)}"
+            blips = single_black_frames(scan.events)
+            measured["single_black_frames"] = len(blips)
+            review += black_review_intervals(blips)
+            detail = f"blackdetect events={len(scan.events)}; single black frames={len(blips)}"
             if scan.errors:
-                gates.append(Gate("full-decode + PAD black", "FAIL",
-                                  f"{len(scan.errors)} decoder error line(s): {scan.errors[:3]}; {detail}"))
-            elif hits:
-                gates.append(Gate("full-decode + PAD black", "FAIL", f"PAD-aligned single-black hits remain: "
-                                  f"{[h['frame'] for h in hits[:20]]}; {detail}", {"hits": hits}))
+                gates.append(Gate(name, "FAIL", f"{len(scan.errors)} decoder error line(s): {scan.errors[:3]}; {detail}"))
+            elif blips:
+                gates.append(Gate(name, "WARN", f"single black frame(s) at {[h['frame'] for h in blips[:20]]}: a "
+                                                f"picture missing from every capture; look at them in the A/V check "
+                                                f"and fix with Frame fixes; {detail}", {"frames": blips}))
             else:
-                gates.append(Gate("full-decode + PAD black", "PASS", f"0/{len(pads)} PAD-aligned single-black "
-                                                                     f"hits; {len(scan.events)} black events"))
+                gates.append(Gate(name, "PASS", f"no decoder errors and no single black frames; {detail}"))
         want = m.require("video.frames")
         if scan.frames is None:
             gates.append(Gate("frame count", "ERROR", "could not determine the frame count"))
@@ -167,39 +152,6 @@ class QcReport(Stage):
         else:
             gates.append(Gate("frame count", "FAIL", f"{scan.frames} != manifest {want}"))
         return gates, measured
-
-    def _identity_gate(self, ctx, m, deliverable: Path, measured: dict, review: list) -> Gate:
-        name = "replacement identity"
-        try:
-            pads_path = pad_repair_list(ctx, m)
-            if not pads_path.is_file():
-                return Gate(name, "ERROR", f"confirmed PAD repair list missing: {pads_path}")
-            pads = read_frame_list(pads_path)
-            if not pads:
-                return Gate(name, "PASS", "no PAD frames were repaired; identity check not applicable")
-            probe = ctx.root("probe")
-            tsv = (ctx.artifact_path("pad_replacements", m) if m.artifact("pad_replacements")
-                   else probe / "rife-pad-replacements-local.tsv")
-            label = m.get("mode.pad_report_label") or ctx.episode.code
-            replacements = read_replacements(tsv, label, probe)
-            thumbs = ctx.tool("ffmpeg").gray_thumbnails(deliverable, cancel=ctx.cancel)
-            result = identity_check(pads, replacements, thumbs)
-        except FstkError as exc:
-            return Gate(name, "ERROR", str(exc))
-        measured["identity_own_min"], measured["identity_other_max"] = result["own_min"], result["other_max"]
-        detail = (f"{len(result['rows'])} PAD(s) checked (all, by exact frame index): own NCC ≥ {result['own_min']:.4f}, "
-                  f"best unrelated ≤ {result['other_max']:.4f}")
-        if not result["pass"]:
-            for r in result["rows"]:
-                if not r["pass"]:
-                    review.append({"id": f"pad-identity-f{r['frame']}", "gate": name,
-                                   "start_s": max(0.0, r["time_s"] - 2.0), "end_s": r["time_s"] + 2.0,
-                                   "reason": "PAD frame does not match its own replacement image",
-                                   "metrics": r})
-            return Gate(name, "FAIL", f"{len(result['failures'])} PAD(s) do not match their own replacement "
-                                      f"(own ≥ 0.99, separation ≥ 0.10): {result['failures'][:20]}; " + detail,
-                        {"rows": result["rows"]})
-        return Gate(name, "PASS", detail, {"rows": result["rows"]})
 
     def _absolute_av_gate(self, ctx, m, deliverable: Path, measured: dict, review: list) -> Gate:
         import numpy as np
@@ -387,8 +339,6 @@ class QcReport(Stage):
         evidence: dict = {}
         review: list[dict] = []
         gates, measured = self._decode_gates(ctx, m, deliverable, evidence, review)
-        ctx.report(0.3, "replacement identity (every PAD)")
-        gates.append(self._identity_gate(ctx, m, deliverable, measured, review))
         if dvd is True:
             ctx.report(0.4, "absolute A/V against the DVD")
             gates.append(self._absolute_av_gate(ctx, m, deliverable, measured, review))
@@ -445,9 +395,6 @@ class QcReport(Stage):
         rec_bytes = m.get("qc.delivered_bytes")
         if rec_bytes and size != rec_bytes:
             notes.append(f"size {size} != recorded {rec_bytes}")
-        rec_hits = m.get("qc.pad_aligned_black_hits")
-        if rec_hits is not None and measured.get("pad_hits") is not None and rec_hits != measured["pad_hits"]:
-            notes.append(f"pad_aligned_black_hits: measured {measured['pad_hits']} vs recorded {rec_hits}")
         gates.append(Gate("manifest cross-check", "WARN" if notes else "PASS",
                           "; ".join(notes) if notes else "recorded size/hash/counters agree"))
 
@@ -478,10 +425,6 @@ class QcReport(Stage):
                                ("qc.fiveone_md5", hashes.get("fiveone")), ("qc.srt_md5", hashes.get("srt"))):
                 if value:
                     out.measure(key, value)
-            out.measure("qc.pad_aligned_black_hits", measured.get("pad_hits", 0))
-            if "identity_own_min" in measured:
-                out.measure("qc.identity_own_ncc_min", measured["identity_own_min"])
-                out.measure("qc.identity_other_ncc_max", measured["identity_other_max"])
             if "av" in measured:
                 out.measure("qc.av_constant_ms", measured["av"]["constant_ms"])
                 out.measure("qc.av_slope_ppm", measured["av"]["slope_ppm"])

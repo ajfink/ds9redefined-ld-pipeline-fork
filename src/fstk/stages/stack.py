@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import logging
+from fractions import Fraction
 from pathlib import Path
 
 from fstk.core.errors import ArtifactError, GateError
@@ -31,6 +32,7 @@ from fstk.tools.orc_project import (
     bundled_template,
     find_capture_file,
     lossless_render_project,
+    strip_timecode_pads,
 )
 
 from .base import (
@@ -178,20 +180,27 @@ class StackReference(Stage):
             raise ArtifactError(f"Orc coverage counts are missing or invalid: {coverage}")
         if not decision.get("alignment_map"):
             raise ArtifactError("Orc did not report a measured alignment map")
+        # Orc pads every number a CLV disc's time code skips; those are not missing pictures (ADR 0004)
+        stripped = strip_timecode_pads(final_project_text)
+        frames = sum(coverage) - stripped.count
         recorded_frames = plan.data.get("recorded_frames")
-        if recorded_frames is not None and recorded_frames != sum(coverage) and not plan.params.get("reselect"):
-            raise ArtifactError(f"recorded stack.frames={recorded_frames} conflicts with Orc's {sum(coverage)}; "
+        if (recorded_frames is not None and recorded_frames not in (frames, sum(coverage))
+                and not plan.params.get("reselect")):
+            raise ArtifactError(f"recorded stack.frames={recorded_frames} conflicts with Orc's {frames}; "
                                 "rerun with reselect=true to re-measure")
-        atomic_write_bytes(plan.data["project"], final_project_text.encode("utf-8"))
+        atomic_write_bytes(plan.data["project"], stripped.text.encode("utf-8"))
         report = {"schema": "fstk-stack-reference-v1", "created_utc": utc_now_iso(),
                   "episode": str(ctx.episode), "passes": passes, "selected": decision["suggested_label"],
                   "coverage_1_2_3plus": coverage, "project": plan.data["project"],
+                  "timecode_pads_removed": {"count": stripped.count, "per_capture": stripped.per_capture,
+                                            "other_pads_kept": stripped.kept, "frames_orc": sum(coverage),
+                                            "frames": frames},
                   "selector": "Orc suggestedReference (no custom score)"}
         atomic_write_json(plan.data["report"], report)
         out = StepOutput(report=Path(plan.data["report"]))
         out.measure("stack.reference", decision["suggested_label"])
         out.measure("stack.alignment_map", decision["alignment_map"])
-        out.measure("stack.frames", sum(coverage))
+        out.measure("stack.frames", frames)
         for key, src in (("stack.fit_trusted", "fit_trusted"), ("stack.fell_back_to_mean", "fell_back_to_mean")):
             if isinstance(decision.get(src), bool):
                 out.measure(key, decision[src])
@@ -228,7 +237,7 @@ class StackRender(Stage):
     description = "Orc --process with artifact evidence validation; no human review (owner decision 2026-11-21)."
     requires = (ValueSet("stack.reference"), ValueSet("stack.alignment_map"), ValueSet("stack.frames"),
                 ArtifactExists("stack_project"))
-    writes = ()
+    writes = ("stack.frames",)
     writes_artifacts = ("stack_master",)
     resource = "compute"
 
@@ -249,12 +258,23 @@ class StackRender(Stage):
             raise GateError(f"{master} exists; move it aside before re-rendering (fstk never overwrites a master)")
         render_project = ctx.root("stack") / f"{project.stem}-lossless.orcprj"
         report = ctx.root("reports") / "stack-render.json"
-        return StepPlan(self.id, params, inputs=[project], outputs=[master, report],
-                        space=None if reuse else SpaceNeed("prores", planned, basis),
-                        summary=(f"reuse the lossless master {master.name}" if reuse
-                                 else f"render {project.name} → {master.name} (FFV1)"),
+        # A project made before ADR 0004 still carries Orc's CLV time-code PADs: they are taken out here, the
+        # frame count drops by as many, and a master already rendered with them loses them by a lossless copy.
+        pads = strip_timecode_pads(project.read_text(encoding="utf-8"))
+        frames = int(m.require("stack.frames")) - pads.count
+        space = None
+        if not reuse:
+            space = SpaceNeed("prores", planned, basis)
+        elif pads.count:
+            space = SpaceNeed("prores", master.stat().st_size / 2**30,
+                              "the existing master is copied once without its time-code PAD frames")
+        return StepPlan(self.id, params, inputs=[project], outputs=[master, report], space=space,
+                        summary=(f"reuse the lossless master {master.name}"
+                                 + (f" without its {pads.count} time-code PAD frames" if pads.count else "")
+                                 if reuse else f"render {project.name} → {master.name} (FFV1)"),
                         data={"project": str(project), "render_project": str(render_project), "master": str(master),
-                              "report": str(report), "frames": m.require("stack.frames"),
+                              "report": str(report), "frames": frames, "orc_frames": frames + pads.count,
+                              "pad_positions": list(pads.master_positions),
                               "groups": m.get("stack.pressing_groups"), "reuse": reuse})
 
     def run(self, ctx, plan):
@@ -262,21 +282,31 @@ class StackRender(Stage):
         d = plan.data
         project, master = Path(d["project"]), Path(d["master"])
         labels = project_source_labels(project)
+        stripped = strip_timecode_pads(project.read_text(encoding="utf-8"))
+        if stripped.count:                       # the project itself goes without them from now on
+            atomic_write_bytes(project, stripped.text.encode("utf-8"))
         if d["reuse"]:
-            ctx.report(0.1, f"checking the existing master {master.name}")
+            ctx.report(0.05, f"checking the existing master {master.name}")
             codec = ff.probe(master).only("video").raw.get("codec_name")
-            actual = ff.count_frames(master)
             issues = []
+            migration = None
             if codec not in LOSSLESS_MASTER_CODECS:
                 issues.append(f"existing {master.name} is {codec!r}, not lossless; move it aside to re-render")
+            index = ff.packet_index(master, cancel=ctx.cancel)
+            actual = len(index["pts"])
+            if not issues and actual == int(d["orc_frames"]) and d["pad_positions"] and actual != int(d["frames"]):
+                migration = self._drop_timecode_pads(ctx, ff, master, index, d["pad_positions"])
+                actual = migration["frames"]
             if actual != int(d["frames"]):
-                issues.append(f"existing {master.name} has {actual} frames; stack.frames is {d['frames']}")
+                issues.append(f"existing {master.name} has {actual} frames; it should have {d['frames']}")
             evidence = {"ok": not issues, "issues": issues, "reused": True, "master_codec": codec,
-                        "decoded_frames": actual}
+                        "decoded_frames": actual, "frames_counted_from": "packets (intra-only FFV1)"}
+            if migration:
+                evidence["timecode_pads_removed"] = migration
             res_desc, exit_code = "reused existing master", None
         else:
             render = Path(d["render_project"])
-            atomic_write_bytes(render, lossless_render_project(project.read_text(encoding="utf-8"), master).encode())
+            atomic_write_bytes(render, lossless_render_project(stripped.text, master).encode())
             master.parent.mkdir(parents=True, exist_ok=True)
             ctx.report(None, f"Orc render of {len(labels)} captures (lossless FFV1)")
             from fstk.tools.progress_lines import LineProgress
@@ -310,7 +340,64 @@ class StackRender(Stage):
         if evidence["ok"]:
             out.artifacts["stack_master"] = {"root": "prores",
                                              "name": master.relative_to(ctx.root("prores")).as_posix()}
+            out.measure("stack.frames", int(d["frames"]))
         return out
+
+    def _drop_timecode_pads(self, ctx, ff, master: Path, index: dict, positions: list[int]) -> dict:
+        """Take Orc's CLV time-code PAD frames out of a master rendered with them, without re-encoding.
+
+        Proven first, or nothing is touched: every packet is a keyframe (each FFV1 frame stands alone) with rising
+        timestamps, and every predicted position is a tiny packet that decodes to an all-zero picture. The copy
+        replaces the master; the original stays beside it as ``…-with-timecode-pads.mkv``.
+        """
+        import numpy as np
+
+        sizes = np.asarray(index["size"], dtype=np.int64)
+        pts = np.asarray(index["pts"], dtype=np.int64)
+        if not all(index["key"]):
+            raise ArtifactError(f"{master.name} has non-key frames; its PAD frames cannot be dropped by copying "
+                                "(move it aside and re-render)")
+        if np.any(np.diff(pts) <= 0):
+            raise ArtifactError(f"{master.name} has timestamps that do not rise; not touched")
+        typical = float(np.median(sizes))
+        tiny = [p for p in positions if p >= len(sizes) or sizes[p] > typical / 5]   # screen only; the decode below is the proof
+        if tiny:
+            raise ArtifactError(f"{master.name}: frame(s) {tiny[:5]} where Orc put a time-code PAD are not blank "
+                                "packets; not touched")
+        ctx.report(0.15, f"proving the {len(positions)} time-code PAD frames are blank")
+        tb = Fraction(index["time_base"])
+        for p in positions:
+            ctx.check_cancel()
+            frame = ff.frame_at(master, float(pts[p] * tb), 16, 12)
+            if frame is None or int(frame.max()) > 0:
+                raise ArtifactError(f"{master.name}: frame {p} where Orc put a time-code PAD is not all-zero; "
+                                    "not touched")
+        tmp = master.with_name(master.stem + ".without-timecode-pads.partial.mkv")
+        kept = master.with_name(master.stem + "-with-timecode-pads.mkv")
+        if kept.exists():
+            raise ArtifactError(f"{kept.name} already exists; move it away and run again")
+        from fstk.tools.progress_lines import LineProgress
+
+        ctx.report(0.2, f"copying {master.name} without its {len(positions)} time-code PAD frames (no re-encode)")
+        ff.drop_frames(master, tmp, positions, cancel=ctx.cancel,
+                       on_line=LineProgress(ctx.report, total_frames=len(sizes), span=0.75, base=0.2,
+                                            label="lossless copy"))
+        ctx.report(0.95, "checking the copy")
+        copy = ff.packet_index(tmp, cancel=ctx.cancel)
+        want = len(sizes) - len(positions)
+        if len(copy["pts"]) != want or not all(copy["key"]) or np.any(np.diff(copy["pts"]) <= 0):
+            tmp.rename(tmp.with_name(tmp.stem + ".rejected.mkv"))
+            raise ArtifactError(f"the copy has {len(copy['pts'])} frames (expected {want}) or irregular "
+                                "timestamps; the original master is unchanged")
+        keep = np.ones(len(sizes), dtype=bool)
+        keep[list(positions)] = False
+        if not np.array_equal(np.asarray(copy["size"]), sizes[keep]):
+            tmp.rename(tmp.with_name(tmp.stem + ".rejected.mkv"))
+            raise ArtifactError("the copy's frames differ from the original's; the original master is unchanged")
+        master.rename(kept)
+        tmp.rename(master)
+        return {"count": len(positions), "positions": list(positions), "frames": want,
+                "original_kept_as": kept.name, "method": "stream copy (noise=drop, setts); packets byte-identical"}
 
     def verify(self, ctx, plan, output):
         return list(output.data["evidence"]["issues"])

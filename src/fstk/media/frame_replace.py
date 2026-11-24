@@ -1,12 +1,11 @@
-"""PAD repair: choosing and building the replacement frame (owner rules 2026-11-21).
+"""Building replacement frames for operator frame fixes: a DVD frame borrowed for a delivered frame, registered
+to the LaserDisc raster and colour-matched to its LaserDisc neighbour, plus the small image and script helpers.
 
-* PAD not on a shot cut → RIFE midpoint of the neighbours (v38 method).
-* PAD on a shot cut, DVD available → the missing frame is **borrowed from the DVD** (never
-  interpolated across a cut): found by matching the LD flank frames to the aligned DVD window,
-  registered to the LD raster (affine, ECC) and colour-matched to the neighbouring LD frame.
-* PAD on a shot cut, no DVD (or the borrow is not unambiguous) → hold the previous frame for one
-  more frame (v38 ``hold-prev-scene-cut``).
+(Formerly ``media/pad_repair.py``. The PAD-specific parts went with ADR 0004: the stack master no longer has
+Orc's CLV time-code PAD frames, so nothing is repaired automatically any more.)
 
+The DVD frame is found by matching the LD flank frames to the aligned DVD window, registered to the LD raster
+(affine, ECC) and colour-matched; when the flanks do not match uniquely the borrow declines rather than guess.
 Every function here is pure numpy/OpenCV so it is unit-testable without VapourSynth.
 """
 from __future__ import annotations
@@ -18,10 +17,6 @@ import numpy as np
 
 from fstk.core.errors import ArtifactError
 
-RIFE = "rife"
-DVD_CUT = "dvd-cut-frame"
-HOLD = "hold-prev-scene-cut"
-
 #: Flank matching: both flanks must match a DVD frame this well, uniquely, and be two frames apart.
 MIN_FLANK_NCC = 0.90
 MIN_FLANK_MARGIN = 0.03
@@ -29,14 +24,8 @@ MIN_POST_NCC = 0.90          # registered + colour-matched DVD flank vs the LD f
 GAIN_BOUNDS = (0.70, 1.40)
 
 
-def choose_method(*, cut: bool, dvd: bool) -> str:
-    if not cut:
-        return RIFE
-    return DVD_CUT if dvd else HOLD
-
-
 def f32(img: np.ndarray) -> np.ndarray:
-    """Any 8- or 16-bit frame as float32 on the 0–255 scale (all PAD maths is done in float)."""
+    """Any 8- or 16-bit frame as float32 on the 0–255 scale (all replacement maths is done in float)."""
     if img.dtype == np.uint16:
         return img.astype(np.float32) * np.float32(255.0 / 65535.0)
     return img.astype(np.float32)
@@ -166,9 +155,9 @@ class Borrowed:
 
 def borrow_dvd_frame(ld_prev: np.ndarray, ld_next: np.ndarray, dvd_window: np.ndarray,
                      gap: int = 1) -> Borrowed | None:
-    """Build the ``gap`` replacement frames for PAD(s) on a cut from a DVD window ((n,h,w,3) progressive RGB).
+    """Build ``gap`` replacement frames from a DVD window ((n,h,w,3) progressive RGB).
 
-    Returns None (→ hold the previous frame) when the flanks do not match uniquely two frames
+    Returns None when the flanks do not match uniquely two frames
     apart, or the registered/colour-matched DVD flank does not reproduce the LD flank.
     """
     m = match_flanks(desc48(ld_prev), desc48(ld_next), np.stack([desc48(f) for f in dvd_window]), gap)
@@ -196,97 +185,10 @@ def borrow_dvd_frame(ld_prev: np.ndarray, ld_next: np.ndarray, dvd_window: np.nd
                     ref_name, post, m)
 
 
-# --------------------------------------------------------------------------------------------
-# Replacement report + the final VapourSynth script
-# --------------------------------------------------------------------------------------------
-TSV_HEADER = ["episode", "frame", "method", "png", "note"]
-
-
-def replacements_tsv(label: str, rows: list[dict]) -> str:
-    """Rows compatible with ``fstk.qc.identity.read_replacements`` (hold rows name the held frame's png)."""
-    lines = ["\t".join(TSV_HEADER)]
-    for r in sorted(rows, key=lambda r: r["frame"]):
-        lines.append("\t".join([label, str(r["frame"]), r["method"], str(r.get("png") or ""), r.get("note", "")]))
-    return "\n".join(lines) + "\n"
-
-
-def _runs(frames: list[int]) -> list[list[int]]:
-    from fstk.media.pads import runs_of
-
-    return runs_of(frames)
-
-
-def _hold_from(frame: int, frames: list[int]) -> int:
-    """The last non-PAD frame before ``frame`` (the frame before the start of its run)."""
-    f = frame
-    while f - 1 in set(frames):
-        f -= 1
-    return f - 1
-
-
 def base_sha(base_text: str) -> str:
     import hashlib
 
     return hashlib.sha256(base_text.encode("utf-8")).hexdigest()
-
-
-def padfix_matches_base(padfix_text: str, base_text: str) -> bool:
-    """True when a padfix script was built from exactly this base script (stale-script guard)."""
-    return f"# fstk-padfix-base-sha256: {base_sha(base_text)}" in padfix_text
-
-
-def padfix_script(base_text: str, *, repairs: list[dict], payload: str | None, expected_frames: int) -> str:
-    """The base IVTC script (final ``out.set_output()`` removed) plus the PAD splice.
-
-    ``repairs``: [{"frame": i, "method": rife|dvd-cut-frame|hold-prev-scene-cut, "slot": k}] where ``slot`` is the
-    index inside the lossless payload clip for image-backed repairs. Holds use ``out[i-1]`` itself, so they stay
-    in the chain's own 10-bit pixel format.
-    """
-    tail = "out.set_output()"
-    stripped = base_text.rstrip()
-    if not stripped.endswith(tail) or stripped.count(tail) != 1:
-        raise ArtifactError("base encode script does not end with exactly one out.set_output(); refusing to patch")
-    body = stripped[: -len(tail)].rstrip() + "\n"
-    reps = sorted(repairs, key=lambda r: r["frame"])
-    frames = [r["frame"] for r in reps]
-    if len(set(frames)) != len(frames):
-        raise ArtifactError("PAD repair frames must be unique")
-    for run in _runs(frames):
-        if run[0] < 1 or run[-1] >= expected_frames - 1:
-            raise ArtifactError(f"PAD run {run[0]}..{run[-1]} touches the clip boundary; its neighbours are undefined")
-    needs_payload = any(r["method"] != HOLD for r in reps)
-    if needs_payload and not payload:
-        raise ArtifactError("image-backed repairs need a payload clip")
-    out = [f"# fstk-padfix-base-sha256: {base_sha(base_text)}", body, "# --- PAD repair (fstk.media.pad_repair; owner rules 2026-11-21) ---",
-           f"PAD_REPAIRS = {[(r['frame'], r['method'], r.get('slot')) for r in reps]!r}",
-           # a hold copies the last real frame before its run (never a neighbouring PAD)
-           f"PAD_HOLD_FROM = {({r['frame']: _hold_from(r['frame'], frames) for r in reps if r['method'] == HOLD})!r}"]
-    if needs_payload:
-        out += [f"_payload = core.bs.VideoSource({payload!r})",
-                "_payload = core.resize.Spline36(_payload, format=out.format.id, matrix_s='170m', range_s='limited',",
-                "                                chromaloc_s='left', dither_type='error_diffusion')",
-                # The payload container carries its own timebase fps; splicing a clip with another fps
-                # makes the whole output variable-rate, so pin it to the episode's exact rate.
-                "_payload = core.std.AssumeFPS(_payload, fpsnum=out.fps_num, fpsden=out.fps_den)",
-                "assert (_payload.width, _payload.height) == (out.width, out.height), "
-                "('PAD payload size differs from the episode', _payload.width, _payload.height)"]
-    out += ["_pieces, _at = [], 0",
-            "for _n, _m, _k in PAD_REPAIRS:",
-            "    if _n > _at:",
-            "        _pieces.append(out[_at:_n])",
-            "    _pieces.append(out[PAD_HOLD_FROM[_n]:PAD_HOLD_FROM[_n] + 1] if _m == 'hold-prev-scene-cut'",
-            "                   else _payload[_k:_k + 1])",
-            "    _at = _n + 1",
-            "if _at < out.num_frames:",
-            "    _pieces.append(out[_at:])",
-            "if _pieces:",
-            "    _fixed = _pieces[0]",
-            "    for _p in _pieces[1:]:",
-            "        _fixed = _fixed + _p",
-            "    out = _fixed",
-            f"assert out.num_frames == {int(expected_frames)}, ('PAD repair changed the frame count', out.num_frames)",
-            "out.set_output()"]
-    return "\n".join(out) + "\n"
 
 
 def write_png(path: Path, rgb: np.ndarray) -> None:

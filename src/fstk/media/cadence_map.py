@@ -76,7 +76,7 @@ def ivtc_vpy_script(source: str, pad: int, trim_start: int, trim_end: int,
                     expected_frames: int | None = None, *, probe_json: str | None = None,
                     probe_head: int = 0, probe_tail: int = 0, chroma: str = "422",
                     video_cycles: dict[int, str] | None = None) -> str:
-    """The IVTC/PAD-repair encode script (v38 ``build_map_vpy.py``).
+    """The IVTC encode script (v38 ``build_map_vpy.py``).
 
     With ``probe_json`` the script also tags every source frame with its index (frame property
     ``FstkN``) before field matching, and when evaluated (``vspipe --info``) writes the exact

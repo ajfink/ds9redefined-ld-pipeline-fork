@@ -321,7 +321,7 @@ def test_every_stage_module_is_registered_by_the_package_import():
     import fstk.stages as pkg
     from fstk.stages.base import REGISTRY
 
-    modules = {m.name for m in pkgutil.iter_modules(pkg.__path__)} - {"base", "ldaudio_build"}
+    modules = {m.name for m in pkgutil.iter_modules(pkg.__path__)} - {"base", "ldaudio_build", "dvdborrow"}   # helpers, not stages
     owners = {cls.__module__.rsplit(".", 1)[-1] for cls in REGISTRY.values()}
     assert modules <= owners, modules - owners
 

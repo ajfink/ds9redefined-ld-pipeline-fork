@@ -1,9 +1,9 @@
 """Final encode stage (video only; encoder and quality from the output settings).
 
 ``encode-final`` (v38 ``encode_episode_mac.py --pass final`` + ``validate_encoded_video.py``):
-* when ``pad-repair`` has run, its ``padfix_script`` (the base chain plus the PAD splice) is encoded instead of
-  ``encode_script``, provided it was built from the current base script;
-* the IVTC/PAD-repair script must report exactly the measured ``video.frames``;
+* the chain encoded is ``encode_script`` plus any operator frame fixes and the measured finishing, each verified
+  against the script it was built on (there is no PAD splice any more: ADR 0004);
+* the chain must report exactly the measured ``video.frames``;
 * the encode goes to ``<name>.tmp.mkv`` and is moved into place only after the encoded stream
   passes every check (profile, pixel format, rate, raster, decode-counted frames, a clean full
   decode, duration within 2 ms); an existing deliverable is never overwritten;
@@ -60,7 +60,7 @@ class EncodeFinal(Stage):
             raise GateError(f"temporary output exists; inspect it before retrying: {tmp}")
         from .framefix import resolve_chain
 
-        script = resolve_chain(ctx, m)   # encode script → PAD splice → operator fixes, each verified
+        script = resolve_chain(ctx, m)   # encode script → operator fixes, verified
         if m.artifact("finish_script"):   # measured finishing (crop, concealment, optional chroma denoise)
             fin = ctx.artifact_path("finish_script", m)
             if not finish_matches_base(fin.read_text(encoding="utf-8"), script.read_text(encoding="utf-8")):

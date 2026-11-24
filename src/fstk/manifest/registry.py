@@ -215,7 +215,8 @@ FIELDS: tuple[FieldDef, ...] = (
     _F("quality.ld_true_peak", "measurement", "number", "LD stereo true peak", "dBFS"),
     _F("quality.fiveone_lufs", "measurement", "number", "DVD 5.1 integrated loudness", "LUFS"),
     _F("quality.subtitle_offset_s", "measurement", "number", "Best global subtitle shift vs speech", "s"),
-    # ---------------------------------------------------------------- PADs
+    # ---------------------------------------------------------------- PADs (legacy: v38-era manifests only)
+    # ADR 0004 removed Orc's CLV time-code PAD frames from the stack master; nothing writes these any more.
     _F("pads.map_pads", "measurement", "int", "PADs in the full map", "count", "pads.map_pads", 0),
     _F("pads.rendered_isolated", "measurement", "int", "Isolated rendered PADs", "count",
        "pads.rendered_isolated", 0),
@@ -251,6 +252,7 @@ FIELDS: tuple[FieldDef, ...] = (
     _F("qc.av_slope_ppm", "measurement", "number", "A/V drift", "ppm", "qc.av_slope_ppm"),
     _F("qc.av_rms_ms", "measurement", "number", "A/V RMS residual", "ms", "qc.av_rms_ms", 0),
     _F("qc.track_offset_ms", "measurement", "number", "Track offset", "ms", "qc.track_offset_ms"),
+    # legacy (ADR 0004): the next three were written by v38's PAD QC; kept so older manifests still read
     _F("qc.pad_aligned_black_hits", "measurement", "int", "PAD-aligned black detections", "count",
        "qc.pad_aligned_black_hits", 0),
     _F("qc.identity_own_ncc_min", "measurement", "number", "Min own-identity NCC", v38="qc.identity_own_ncc_min"),

@@ -17,28 +17,12 @@ pytestmark = [pytest.mark.media, pytest.mark.skipif(shutil.which("ffmpeg") is No
 EP = EpisodeId.parse("DS9:S01E20")
 FRAMES = 492
 DURATION = FRAMES * 1001 / 24000
-PAD_BLACK = 240
+BLACK = 240
 
 
 SOURCE_INPUTS = ["-f", "lavfi", "-i", "testsrc2=size=768x484:rate=24000/1001",
                  "-f", "lavfi", "-i", "cellauto=s=768x484:rate=24000/1001:rule=30:full=0"]
 BLEND = "[1:v]format=yuv420p[c];[0:v][c]blend=all_mode=average"
-PADS = (100, PAD_BLACK, 400)
-
-
-def replacements(probe, *, swap=False):
-    """Replacement PNGs = the pre-encode source frames (what a PAD repair would insert) + v38 TSV."""
-    folder = probe / "rife-padframes-local" / "S01E20" / "interpolated"
-    folder.mkdir(parents=True)
-    select = "+".join(f"eq(n\\,{n})" for n in PADS)
-    subprocess.run(["ffmpeg", "-v", "error", "-y", *SOURCE_INPUTS, "-filter_complex", f"{BLEND},select='{select}'",
-                    "-fps_mode", "passthrough", "-frames:v", str(len(PADS)), str(folder / "pad-%d.png")],
-                   check=True, timeout=120)
-    names = [f"pad-{i + 1}.png" for i in range(len(PADS))]
-    if swap:
-        names[0], names[2] = names[2], names[0]
-    rows = ["episode\tframe\tpng\tmethod"] + [f"S01E20\t{n}\t{name}\trife" for n, name in zip(PADS, names, strict=True)]
-    (probe / "rife-pad-replacements-local.tsv").write_text("\n".join(rows) + "\n")
 
 
 def build(path, *, black_frame=None, audio=None):
@@ -54,7 +38,7 @@ def build(path, *, black_frame=None, audio=None):
     subprocess.run(["ffmpeg", "-v", "error", "-y", *SOURCE_INPUTS, *audio_in,
                     "-filter_complex", f"{BLEND},{vf}[v]", "-map", "[v]", "-map", "2:a", "-frames:v", str(FRAMES),
                     "-c:v", "libx265", "-preset", "ultrafast", "-x265-params", "log-level=error", *audio_codec,
-                    "-metadata:s:v:0", "title=LaserDisc P1, 3:2 pulldown removed, 23.976p, PAD blips repaired",
+                    "-metadata:s:v:0", "title=LaserDisc P1, 3:2 pulldown removed, 23.976p",
                     "-disposition:v:0", "default", "-metadata:s:a:0", "title=LD 2.0 (original Dolby Surround)",
                     "-metadata:s:a:0", "language=eng", "-disposition:a:0", "default",
                     "-max_interleave_delta", "0", str(path)], check=True, timeout=300)
@@ -67,7 +51,6 @@ def env(tmp_path):
     out, probe = prof.root("out", EP), prof.root("probe", EP)
     out.mkdir(parents=True)
     probe.mkdir(parents=True)
-    (probe / "S01E20-pad-repair-frames.txt").write_text("\n".join(map(str, PADS)) + "\n")
     return prof, out
 
 
@@ -99,7 +82,6 @@ def test_picture_gates_pass_but_audio_without_a_dvd_free_recipe_fails(env):
     prof, out = env
     d = out / "S01E20-23.976-padfixed.mkv"
     build(d)
-    replacements(prof.root("probe", EP))
     setup(prof, out, d)
     st = run(prof, "q1")["steps"]["qc"]
     # every picture/container gate passes; the LD audio was never built by dvd-free-audio, so the
@@ -108,10 +90,8 @@ def test_picture_gates_pass_but_audio_without_a_dvd_free_recipe_fails(env):
     assert st["issues"] == ["QC gate failed: DVD-free sync"]
     rep = _report(prof)
     status = {r["gate"]: r["status"] for r in rep["results"]}
-    identity = next(r for r in rep["results"] if r["gate"] == "replacement identity")
-    assert identity["status"] == "PASS" and len(identity["metrics"]["rows"]) == 3, identity
-    assert min(r["own_ncc"] for r in identity["metrics"]["rows"]) >= 0.99
-    for gate in ("full-decode + PAD black", "frame count", "stream inventory", "audio seekability",
+    assert "replacement identity" not in status          # retired with the PAD frames (ADR 0004)
+    for gate in ("full decode + single black frames", "frame count", "stream inventory", "audio seekability",
                  "video packet hash", "LD audio hash", "manifest cross-check"):
         assert status[gate] == "PASS", (gate, rep["results"])
     assert status["absolute A/V"] == "SKIP" and rep["candidate_is_approval"] is False
@@ -120,30 +100,17 @@ def test_picture_gates_pass_but_audio_without_a_dvd_free_recipe_fails(env):
     assert (prof.root("reports", EP) / (rep_name := f"qc-{rep['run']}.md")).is_file(), rep_name
 
 
-def test_black_frame_at_a_pad_fails_with_a_review_interval(env):
+def test_single_black_frame_warns_with_a_review_interval(env):
     prof, out = env
     d = out / "S01E20-23.976-padfixed.mkv"
-    build(d, black_frame=PAD_BLACK)
-    replacements(prof.root("probe", EP))
+    build(d, black_frame=BLACK)
     setup(prof, out, d)
-    st = run(prof, "q2")["steps"]["qc"]
+    run(prof, "q2")
     rep = _report(prof)
-    assert "QC gate failed: full-decode + PAD black" in st["issues"], json.dumps(rep["results"], indent=1)[:3000]
-    ids = [iv["id"] for iv in rep["review_intervals"]]
-    assert ids == [f"pad-black-f{PAD_BLACK}", f"pad-identity-f{PAD_BLACK}"]     # the black PAD also fails identity
-    assert rep["review_intervals"][0]["start_s"] < PAD_BLACK / (24000 / 1001)
-
-
-def test_swapped_replacement_images_fail_identity(env):
-    prof, out = env
-    d = out / "S01E20-23.976-padfixed.mkv"
-    build(d)
-    replacements(prof.root("probe", EP), swap=True)
-    setup(prof, out, d)
-    st = run(prof, "q3")["steps"]["qc"]
-    assert "QC gate failed: replacement identity" in st["issues"]
-    identity = next(r for r in _report(prof)["results"] if r["gate"] == "replacement identity")
-    assert sorted(r["frame"] for r in identity["metrics"]["rows"] if not r["pass"]) == [100, 400]
+    gate = next(r for r in rep["results"] if r["gate"] == "full decode + single black frames")
+    assert gate["status"] == "WARN", json.dumps(rep["results"], indent=1)[:3000]
+    assert [iv["id"] for iv in rep["review_intervals"]] == [f"black-f{BLACK}"]
+    assert rep["review_intervals"][0]["start_s"] < BLACK / (24000 / 1001)
 
 
 def _no_dvd_episode(prof, out):
@@ -153,7 +120,7 @@ def _no_dvd_episode(prof, out):
     audio_root, stack = prof.root("audio", EP), prof.root("stack", EP)
     audio_root.mkdir(parents=True)
     stack.mkdir(parents=True)
-    write_native(audio_root / "P1-efm.wav", 614)        # 615 stack frames − 1 PAD inside the output
+    write_native(audio_root / "P1-efm.wav", 614)        # one frame short of the 615-frame stack: inside ±2
     (stack / "stack.orcprj").write_text(
         "dag:\n  nodes:\n    - id: 1\n      stage: tbc_source\n      user_label: TBC Source P1\n"
         "    - id: 2\n      stage: frame_map\n      parameters:\n        ranges:\n          type: string\n"
@@ -176,7 +143,6 @@ def _no_dvd_episode(prof, out):
             "steps": [{"id": "audio", "stage": "dvd-free-audio", "params": {}, "after": []}]}
     assert Engine(prof, plan, actor="op", tool_overrides={"ffmpeg": ff}).run()["steps"]["audio"]["status"] == "passed"
     _deliver(prof, out, ws, "S01E20-23.976-padfixed.mkv")
-    replacements(prof.root("probe", EP))
     return ws, ff
 
 
@@ -206,11 +172,11 @@ def test_no_dvd_episode_passes_full_qc_and_takes_a_delivery_approval(env):
     report_json = prof.root("reports", EP) / f"qc-{rep['run']}.json"
     report_md = report_json.with_suffix(".md")
     ApprovalBook(ws.state_dir / "approvals").record(review="delivery", decision="APPROVED", actor="op",
-                                                    note="watched the PAD intervals and listened to the LD track",
+                                                    note="watched the review intervals and listened to the LD track",
                                                     evidence=[report_json, report_md])
     assert run(prof, "q4")["steps"]["qc"]["status"] == "passed"
     m = ws.store.load()
-    assert m.get("qc.video_md5") == rep["packet_hashes"]["video"] and m.get("qc.identity_own_ncc_min") >= 0.99
+    assert m.get("qc.video_md5") == rep["packet_hashes"]["video"]
 
 
 def test_av_check_rerun_corrects_the_ld_audio_and_qc_still_proves_it(env):

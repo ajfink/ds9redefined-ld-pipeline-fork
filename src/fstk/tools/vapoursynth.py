@@ -190,7 +190,7 @@ class VapourSynth:
         ``rgb48le`` → (n, height, width, 3) ``uint16`` and ``rgb24`` → the same shape in ``uint8``,
         both through an explicit BT.601 limited → full conversion (the matrix the stack master uses
         and the payload clip converts back with); ``gray`` → (n, height, width) ``uint8``. The 16-bit
-        form is the default because the chain is 10-bit and PAD replacements are written back into it
+        form is the default because the chain is 10-bit and replacement frames are written back into it
         (audit 1, item A2). ``vspipe`` is asked for the exact range, so indices are the script's own.
         """
         import numpy as np

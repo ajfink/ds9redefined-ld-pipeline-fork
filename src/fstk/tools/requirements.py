@@ -76,8 +76,7 @@ EXECUTABLES = (
     Requirement("ffmpeg", "4.4"),          # smoke-tested on 4.4.2; production Windows build: no ceiling known
     Requirement("ffprobe", "4.4"),
 )
-PINNED = (Requirement("orc", pinned=True), Requirement("rife_model", pinned=True),
-          Requirement("x265", pinned=True))
+PINNED = (Requirement("orc", pinned=True), Requirement("x265", pinned=True))
 
 # resize2: default bobber of QTempGaussMC; mvu (mvutensils): vsjetpack 2.2's QTempGaussMC motion search
 VS_NAMESPACES = ("bs", "tivtc", "mv", "mvu", "znedi3", "eedi3m", "resize2")
@@ -187,10 +186,6 @@ def resolve_versions(profile) -> dict[str, Any]:
         tools["orc"] = str(profile.tool("orc"))               # no --version; the path identifies the install
     except Exception:
         tools["orc"] = None
-    try:
-        tools["rife_model"] = Path(str(profile.tool("rife_model_dir"))).name
-    except Exception:
-        tools["rife_model"] = None
     v["tools"] = tools
     return v
 

@@ -50,14 +50,6 @@ def test_discover_windows_locations_need_their_environment_variables(tmp_path):
     assert disc.discover("orc", system="windows", env={"PATH": ""}, home=tmp_path) == []
 
 
-def test_discover_rife_models_next_to_the_engine(tmp_path):
-    engine = _exe(tmp_path / "rife" / "rife-ncnn-vulkan")
-    (engine.parent / "rife-v4.6").mkdir()
-    (engine.parent / "rife-v4.26").mkdir()
-    found = disc.discover("rife_model_dir", system="linux", env={"PATH": ""}, home=tmp_path, engine=str(engine))
-    assert sorted(Path(f.path).name for f in found) == ["rife-v4.26", "rife-v4.6"]
-
-
 def test_search_path_adds_the_folders_a_double_click_cannot_see(tmp_path):
     path = disc.search_path("macos", {"PATH": "/usr/bin"}, tmp_path)
     parts = path.split(":")
@@ -82,23 +74,18 @@ def test_a_tool_on_a_homebrew_style_path_is_found_with_no_PATH_at_all(tmp_path):
     assert [Path(f.path) for f in found] == [brew / "7zz"]
 
 
-def test_sevenzip_and_rife_are_looked_for_where_they_really_live_on_a_mac():
+def test_sevenzip_is_looked_for_where_it_really_lives_on_a_mac():
     spots = disc._locations("sevenzip", "macos", Path("/t"))
     assert "/opt/homebrew/bin/7zz" in spots and "/usr/local/bin/7z" in spots
     assert disc._locations("sevenzip", "linux", Path("/t")) != []
-    rife = disc._locations("rife_engine", "macos", Path("/t"))
-    assert any("~/tools/rife-ncnn-vulkan" in r for r in rife) and any("Downloads" in r for r in rife)
 
 
 def test_a_shared_tools_folder_serves_every_machine(tmp_path):
     shared = tmp_path / "shared" / "tools"
     shared.mkdir(parents=True)
     (shared / "7zz").write_text("", encoding="utf-8")        # no exec bit: a Windows share often drops it
-    (shared / "rife-v4.26").mkdir()
     found = disc.discover("sevenzip", system="macos", env={"PATH": ""}, home=tmp_path, extra_dirs=[shared])
     assert [f.how for f in found] == ["shared folder"] and Path(found[0].path) == shared / "7zz"
-    models = disc.discover("rife_model_dir", system="macos", env={"PATH": ""}, home=tmp_path, extra_dirs=[shared])
-    assert [Path(f.path) for f in models] == [shared / "rife-v4.26"]
 
 
 def test_tools_dir_is_per_machine_never_the_app_folder(tmp_path):
@@ -114,7 +101,6 @@ def test_install_commands_per_manager_and_ffprobe_rides_with_ffmpeg():
     assert prov.install_command("ffprobe", "brew") == prov.install_command("ffmpeg", "brew")
     assert prov.install_command("ffmpeg", "dnf") is None            # needs RPM Fusion: guidance only
     assert prov.install_command("orc", "brew") is None              # Orc is fetched from its release, not a manager
-    assert prov.install_command("rife_engine", "apt") is None
 
 
 def test_detect_manager_uses_the_given_path():
@@ -143,14 +129,11 @@ def test_guidance_names_the_version_pin_and_the_mac_quarantine_step():
     text = prov.guidance("orc", "macos")
     assert "2.11.1" in text and "xattr" in text
     assert "libx265" in prov.guidance("ffmpeg", "linux")
-    assert "rife-v4.26" in prov.guidance("rife_engine", "windows")
 
 
-def test_mac_guidance_says_how_to_install_7zip_and_to_keep_the_same_rife_model():
+def test_mac_guidance_says_how_to_install_7zip():
     assert "brew install sevenzip" in prov.guidance("sevenzip", "macos")
     assert "winget" in prov.guidance("sevenzip", "windows")
-    rife = prov.guidance("rife_engine", "macos")
-    assert "MoltenVK" in rife and "rife-v4.26" in rife and "shared folder" in rife
 
 
 def test_flatpak_wrapper_runs_orc_cli_inside_the_flatpak(tmp_path):
@@ -756,156 +739,13 @@ def test_linux_flatpak_wrapper_uses_the_installed_application_id(tmp_path):
     assert prov.ORC_FLATPAK == "io.github.decode_orc.decode-orc"
 
 
-# ---------------------------------------------------------------- RIFE download and install
-
-import zipfile  # noqa: E402
-
-from fstk.install import rife as rife_inst  # noqa: E402
-
-
-def _rife_zip(path, system="linux"):
-    exe = "rife-ncnn-vulkan.exe" if system == "windows" else "rife-ncnn-vulkan"
-    top = f"rife-ncnn-vulkan-20221029-{system}"
-    with zipfile.ZipFile(path, "w") as z:
-        z.writestr(f"{top}/{exe}", "bin")
-        z.writestr(f"{top}/rife-v4.6/flownet.param", "p")
-        z.writestr(f"{top}/rife-v4.6/flownet.bin", "b")
-        z.writestr("__MACOSX/._x", "junk")
-
-
-def test_rife_pick_asset_names_per_system():
-    rels = [{"tag_name": "20221029", "assets": [
-        {"name": f"rife-ncnn-vulkan-20221029-{w}.zip", "browser_download_url": f"https://x/{w}", "size": 9}
-        for w in ("macos", "ubuntu", "windows")]}]
-    assert rife_inst.pick_asset(rels, "linux").url == "https://x/ubuntu"
-    assert rife_inst.pick_asset(rels, "macos").name.endswith("macos.zip")
-    assert rife_inst.pick_asset(rels, "windows").version == "20221029"
-    assert rife_inst.pick_asset([], "linux") is None and rife_inst.pick_asset(rels, "plan9") is None
-
-
-def test_rife_extract_flattens_the_top_folder_and_makes_the_engine_executable(tmp_path):
-    z = tmp_path / "r.zip"
-    _rife_zip(z)
-    dest = tmp_path / "tools" / "rife-ncnn-vulkan"
-    engine = rife_inst.extract(z, dest, "linux")
-    assert engine == dest / "rife-ncnn-vulkan" and engine.stat().st_mode & stat.S_IXUSR
-    assert (dest / "rife-v4.6" / "flownet.bin").is_file() and not (dest / "__MACOSX").exists()
-    bad = tmp_path / "bad.zip"
-    with zipfile.ZipFile(bad, "w") as zf:
-        zf.writestr("top/../../evil", "x")
-        zf.writestr("top/rife-ncnn-vulkan", "x")
-    with pytest.raises(orc_inst.OrcInstallError, match="unsafe"):
-        rife_inst.extract(bad, tmp_path / "d2", "linux")
-
-
-def test_setup_installs_rife_and_uses_only_the_standard_model(tmp_path):
-    env = {"PATH": "", "XDG_DATA_HOME": str(tmp_path / "data")}
-    dests = []
-
-    def rife_installer(console, **kw):
-        dests.append(kw["dest"])
-        _rife_zip(tmp_path / "z.zip")
-        rife_inst.extract(tmp_path / "z.zip", kw["dest"], "linux")
-        return True
-
-    path = tmp_path / "p" / "machine.json"
-    kw = {"profile_path": path, "system": "linux", "env": env, "home": tmp_path, "run": lambda c: 1,
-          "run_text": lambda c: " libx265", "doctor": _doctor_ok, "venv_bin": tmp_path / "x",
-          "orc_installer": lambda *a, **k: False, "rife_installer": rife_installer,
-          "rife_model_installer": lambda *a, **k: False}                # (no real download in a test)
-    wiz.run_setup(wiz.Console(ask_fn=lambda q: "n", out=lambda t: None), **kw)
-    assert dests == []                                              # declined: nothing downloaded
-    lines: list[str] = []
-    wiz.run_setup(wiz.Console(ask_fn=lambda q: "", assume_yes=True, out=lines.append), **kw)
-    prof = Profile.load(path)
-    assert dests and Path(prof.tool("rife_engine")).name == "rife-ncnn-vulkan"
-    assert prof.tools.get("rife_model_dir") is None                 # only rife-v4.6 came with the download
-    assert any("rife-v4.26" in ln and "not found" in ln for ln in lines)
-    (Path(prof.tool("rife_engine")).parent / "rife-v4.26").mkdir()
-    wiz.run_setup(wiz.Console(ask_fn=lambda q: "", assume_yes=True, out=lambda t: None), **kw)
-    assert Path(Profile.load(path).tool("rife_model_dir")).name == "rife-v4.26"
-
-
-def test_another_rife_model_is_used_only_when_the_owner_says_yes(tmp_path):
-    con = wiz.Console(ask_fn=lambda q: "y", out=lambda t: None)
-    found = [disc.Found("rife_model_dir", str(tmp_path / "rife-v4.6"), "known location")]
-    assert wiz._choose(con, "rife_model_dir", found, lambda c: "") == str(tmp_path / "rife-v4.6")
-    no = wiz.Console(ask_fn=lambda q: "", out=lambda t: None)
-    assert wiz._choose(no, "rife_model_dir", found, lambda c: "") is None
 
 
 def test_launcher_check_also_reports_optional_tools_that_were_never_set_up(tmp_path):
     venv_bin = tmp_path / "venv" / "bin"
     path = _profile_with_vspipe(tmp_path, venv_bin)
     problems = wiz.profile_problems(path)
-    assert any("RIFE engine" in p for p in problems) and any("7-Zip" in p for p in problems)
-
-
-# ---------------------------------------------------------------- the standard RIFE model is downloaded and enforced
-
-def _model_files(content=b"model"):
-    return {"flownet.param": (hashlib.sha256(content).hexdigest(), len(content)),
-            "flownet.bin": (hashlib.sha256(content).hexdigest(), len(content))}
-
-
-def test_install_model_verifies_both_files_and_never_leaves_half_a_model(tmp_path):
-    got = []
-
-    def good(url, dest):
-        got.append(url)
-        dest.write_bytes(b"model")
-
-    con = _Con()
-    assert rife_inst.install_model(con, engine_dir=tmp_path, env={}, fetch_file=good, files=_model_files())
-    assert (tmp_path / "rife-v4.26" / "flownet.bin").is_file() and not (tmp_path / ".rife-v4.26.new").exists()
-    assert all(rife_inst.MODEL_COMMIT in u and "rife-v4.26" in u for u in got)
-
-    def corrupt(url, dest):
-        dest.write_bytes(b"wrong")
-
-    other = tmp_path / "e2"
-    other.mkdir()
-    con = _Con()
-    assert not rife_inst.install_model(con, engine_dir=other, env={}, fetch_file=corrupt, files=_model_files())
-    assert not (other / "rife-v4.26").exists() and "did not match" in "\n".join(con.lines)
-
-
-def test_pinned_model_hashes_are_the_ones_recorded_for_the_fork_commit():
-    assert len(rife_inst.MODEL_COMMIT) == 40
-    assert all(len(sha) == 64 for sha, _ in rife_inst.MODEL_FILES.values())
-
-
-def test_setup_downloads_the_standard_model_and_replaces_a_nonstandard_one(tmp_path):
-    env = {"PATH": "", "XDG_DATA_HOME": str(tmp_path / "data")}
-    engine = _exe(tmp_path / "data" / "fstk" / "tools" / "rife-ncnn-vulkan" / "rife-ncnn-vulkan")
-    (engine.parent / "rife-v4.6").mkdir()
-    asked = []
-
-    def model_installer(console, *, engine_dir, env):
-        asked.append(engine_dir)
-        (engine_dir / "rife-v4.26").mkdir()
-        return True
-
-    path = tmp_path / "p" / "machine.json"
-    kw = {"profile_path": path, "system": "linux", "env": env, "home": tmp_path, "run": lambda c: 1,
-          "run_text": lambda c: " libx265", "doctor": _doctor_ok, "venv_bin": tmp_path / "x",
-          "orc_installer": lambda *a, **k: False, "rife_model_installer": model_installer}
-    wiz.run_setup(wiz.Console(ask_fn=lambda q: "n", out=lambda t: None), **kw)
-    assert asked == [] and prof_model(path) is None                 # declined: the older 4.6 is not taken instead
-    wiz.run_setup(wiz.Console(ask_fn=lambda q: "", assume_yes=True, out=lambda t: None), **kw)
-    assert asked == [engine.parent] and prof_model(path) == "rife-v4.26"
-    # a profile that still names 4.6 is moved to the standard one on the next run, and reported by the launcher check
-    prof = Profile.load(path)
-    prof.tools["rife_model_dir"] = str(engine.parent / "rife-v4.6")
-    prof.save(path)
-    assert any("standard is rife-v4.26" in p for p in wiz.profile_problems(path))
-    wiz.run_setup(wiz.Console(ask_fn=lambda q: "", assume_yes=True, out=lambda t: None), **kw)
-    assert prof_model(path) == "rife-v4.26"
-
-
-def prof_model(path):
-    value = Profile.load(path).tools.get("rife_model_dir")
-    return Path(value).name if value else None
+    assert any("7-Zip" in p for p in problems) and not any("RIFE" in p for p in problems)
 
 
 @pytest.fixture(autouse=True)
@@ -914,6 +754,6 @@ def _no_real_downloads(monkeypatch):
     def refuse(*a, **k):
         raise orc_inst.OrcInstallError("network is off in tests")
 
-    for module in (orc_inst, rife_inst):
+    for module in (orc_inst,):
         monkeypatch.setattr(module, "fetch_json", refuse)
         monkeypatch.setattr(module, "download", refuse)

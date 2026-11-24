@@ -278,7 +278,7 @@ def test_delivery_review_stretch_choice_writes_a_fresh_encode_plan(tmp_path, qtb
     dlg.plan_ready.connect(plans.append)
     dlg.apply_stretches(note="the phaser sweep judders on nearest; interpolation is clean")
     plan = json.loads(Path(plans[0]).read_text())
-    assert [s["stage"] for s in plan["steps"]][:2] == ["video-trim", "pad-audit"]
+    assert [s["stage"] for s in plan["steps"]][:2] == ["video-trim", "frame-fixes"]
     assert "encode-final" in [s["stage"] for s in plan["steps"]]
     assert ws.store.load().get("video.hybrid_choices") == {"100": "interpolate"}
 

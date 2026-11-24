@@ -1,6 +1,6 @@
 """``video-quality``: measure the picture, decide what (if anything) to apply, build the finishing script.
 
-Runs on the PAD-repaired chain (the exact frames that would be encoded). Everything it applies is
+Runs on the resolved chain (the exact frames that would be encoded). Everything it applies is
 chosen from measurements and gated by grain retention — original grain is paramount:
 
 * dropout concealment — LD-only: a defect rectangle is copied from the previous/next *LaserDisc* frame
@@ -51,7 +51,7 @@ def pix_name(fmt: str | None) -> str:
 class VideoQuality(Stage):
     id = "video-quality"
     title = "Picture quality: measure, conceal dropouts, crop/aspect lock, optional chroma denoise"
-    description = ("One sequential pass over the PAD-repaired chain: levels, grain, chroma noise, dropouts, active "
+    description = ("One sequential pass over the chain: levels, grain, chroma noise, dropouts, active "
                    "area. Builds the finishing script (LD-only dropout concealment, locked crop, chroma-only denoise "
                    "when measured necessary). Never alters luma grain; the DVD is only a measuring reference.")
     requires = (ValueSet("video.frames"), ArtifactExists("encode_script"))
@@ -64,7 +64,7 @@ class VideoQuality(Stage):
         m = ctx.manifest
         from .framefix import resolve_chain
 
-        base = resolve_chain(ctx, m)     # encode script → PAD splice → operator fixes, each verified
+        base = resolve_chain(ctx, m)     # encode script → operator fixes, each verified
         run = utc_stamp()[:15].lower()
         slug = ctx.episode.slug
         outs = {"script": ctx.root("scripts") / f"ivtc-finish-{slug}-{run}.vpy",
@@ -230,7 +230,8 @@ class VideoQuality(Stage):
         """Aligned DVD luma at the sampled output frames (8-bit codes) + the DVD's sample aspect ratio."""
         import numpy as np
 
-        from fstk.stages.pads import _dvd_window_script, ld_to_master_frame
+        from fstk.stages.dvdborrow import dvd_window_script as _dvd_window_script
+        from fstk.stages.dvdborrow import ld_to_master_frame
 
         m = ctx.manifest
         rec = m.require("video.dvd_alignment")

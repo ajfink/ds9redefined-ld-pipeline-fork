@@ -22,8 +22,8 @@ added on top) is left as film: field matching recovers the plate's real film fra
 is repaired. That is detected from same-parity field repeats: telecine repeats two of every ten fields, so in such
 a stretch two field differences per cycle are far below the rest; true 60i motion has no repeats.
 
-Both treatments produce exactly 4 frames per 5-frame source cycle, the same as decimation, so frame numbers, PAD
-maps, trims, audio sync and subtitles are untouched. This module is pure: classification, segments, treatment map.
+Both treatments produce exactly 4 frames per 5-frame source cycle, the same as decimation, so frame numbers,
+trims, audio sync and subtitles are untouched. This module is pure: classification, segments, treatment map.
 """
 from __future__ import annotations
 

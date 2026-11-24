@@ -2,7 +2,7 @@
 
 Not an absolute lip-sync measurement — without a DVD or another shared reference that cannot be
 measured. It proves that the delivered LD audio is exactly the audio the ``dvd-free-audio`` stage
-built and recorded: the operator's no-DVD choice, the duration/PAD rate and endpoint residual, the
+built and recorded: the operator's no-DVD choice, the native rate and duration residual, the
 capture-pad geometry behind AudioSkip, the hashes of native/corrected/synced audio, and an exact
 sample budget equal to the video's frame count.
 """
@@ -15,7 +15,8 @@ from typing import Any
 FPS_NUM, FPS_DEN = 24000, 1001
 MASTER_FPS = 30000.0 / 1001.0
 SAMPLE_RATE = 44100
-RATE_METHOD = "dvd-free-duration-pad"
+RATE_METHOD = "dvd-free-native-rate"
+LEGACY_RATE_METHOD = "dvd-free-duration-pad"   # v38-era recipe: duration rate covering CLV PAD frames
 REPORT_SCHEMA = "fstk-dvd-free-audio-timing-v1"
 
 
@@ -64,8 +65,9 @@ def check_dvd_free(values: dict[str, Any], report: dict, *, native_sha256: str, 
         issues.append("the episode is not an operator-approved no-DVD episode")
     if list(v.get("deliverable.tracks") or ["ld"]) != ["ld"]:
         issues.append("a no-DVD delivery must contain LD stereo only")
-    if v.get("audio.dvd_free_approved") is not True or v.get("audio.rate_method") != RATE_METHOD:
-        issues.append("no promoted DVD-free duration/PAD audio recipe in the manifest")
+    method = v.get("audio.rate_method")
+    if v.get("audio.dvd_free_approved") is not True or method not in (RATE_METHOD, LEGACY_RATE_METHOD):
+        issues.append("no promoted DVD-free audio recipe in the manifest")
     if v.get("audio.origin_verified_by_duration") is not True:
         issues.append("DVD-free capture-origin/duration evidence is not marked verified")
     if report.get("schema") != REPORT_SCHEMA or report.get("dvd_opened") is not False:
@@ -76,7 +78,7 @@ def check_dvd_free(values: dict[str, Any], report: dict, *, native_sha256: str, 
     residual = report.get("audio_minus_projected_content_frames")
     tolerance = float(v.get("audio.endpoint_tolerance_frames") or 1.0)
     if residual is None or abs(float(residual)) > tolerance:
-        issues.append(f"PAD/duration endpoint residual {residual!r} exceeds ±{tolerance:.3f} frames")
+        issues.append(f"duration endpoint residual {residual!r} exceeds ±{tolerance:.3f} frames")
     if native_sha256 != report.get("source_audio_sha256"):
         issues.append("native EFM WAV hash differs from the timing report")
     if corrected_sha256 != (report.get("corrected") or {}).get("output_sha256"):
@@ -95,8 +97,9 @@ def check_dvd_free(values: dict[str, Any], report: dict, *, native_sha256: str, 
         issues.append(f"audio.skip_s {float(skip):.9f} disagrees with capture-pad geometry {want_skip:.9f}s "
                       f"(A/V correction {offset_ms:+.1f} ms, {drift_ppm:+.1f} ppm) by more than half a sample")
     eff = report.get("effective_rate_hz")
-    if eff is None or abs(float(eff) - rate / (1.0 + drift_ppm * 1e-6)) > 1e-6:
-        issues.append(f"applied rate {eff!r} Hz is not the duration rate {rate:.6f} Hz with the recorded drift "
+    base = rate if method == LEGACY_RATE_METHOD else float(SAMPLE_RATE)
+    if eff is None or abs(float(eff) - base / (1.0 + drift_ppm * 1e-6)) > 1e-6:
+        issues.append(f"applied rate {eff!r} Hz is not {base:.6f} Hz with the recorded drift "
                       f"correction ({drift_ppm:+.1f} ppm)")
     applied = report.get("av_correction") or {"offset_ms": 0.0, "drift_ppm": 0.0}
     if (abs(float(applied.get("offset_ms", 0)) - offset_ms) > 1e-6

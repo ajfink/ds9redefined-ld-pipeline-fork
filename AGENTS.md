@@ -5,7 +5,7 @@ Read this file first, then `docs/DEVLOG.md` (newest entry at the top), then `doc
 ## What this is
 
 `fstk` (FromStunToKill) is a clean-sheet rebuild of the v38 LaserDisc-to-video pipeline
-(Star Trek LD captures → stacked, IVTC'd, PAD-repaired, audio-synced deliverable, optionally
+(Star Trek LD captures → stacked, IVTC'd, audio-synced deliverable, optionally
 referenced against a DVD). The **goal is output quality**: local CPU time does not matter, and
 replacing or improving components (including Orc) is allowed.
 
@@ -46,7 +46,7 @@ src/fstk/
   core/       errors, identity, hashing/fingerprints, atomic IO + locks, time, redaction
   config/     machine profile (typed, v38 converter)
   manifest/   field registry, Manifest model, journaled store, v38 import/export
-  tools/      process runner + external tool adapters (ffmpeg/ffprobe/orc/vspipe/rife/7z)
+  tools/      process runner + external tool adapters (ffmpeg/ffprobe/orc/vspipe/7z)
   media/      pure algorithms (no I/O side effects)
   stages/     declared stages: inputs, outputs, gates, plan/run/verify
   evidence/   review assets + approval records

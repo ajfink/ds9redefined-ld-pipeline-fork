@@ -18,8 +18,8 @@ def test_range_policy():
 
 
 def test_drift_and_history(tmp_path):
-    prev = {"tools": {"orc": "a", "rife_model": "rife-v4.26"}, "packages": {"numpy": "2.0"}}
-    cur = {"tools": {"orc": "b", "rife_model": "rife-v4.26"}, "packages": {"numpy": "2.0"}}
+    prev = {"tools": {"orc": "a", "x265": "3.6"}, "packages": {"numpy": "2.0"}}
+    cur = {"tools": {"orc": "b", "x265": "3.6"}, "packages": {"numpy": "2.0"}}
     assert compare_versions(prev, cur) == ["tool orc: 'a' -> 'b'"]
     assert compare_versions(None, cur) == []
 

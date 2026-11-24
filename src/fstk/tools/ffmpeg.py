@@ -332,6 +332,63 @@ class FFmpeg:
             raise ArtifactError(f"thumbnail decode of {path} failed or was truncated: {res.describe()}")
         return np.frombuffer(data, np.uint8).reshape(-1, size)
 
+    def packet_index(self, path: str | Path, *, cancel=None) -> dict:
+        """Every v:0 packet's pts (stream time base), size and keyframe flag, read without decoding.
+
+        Returns ``{"pts": [...], "size": [...], "key": [...], "time_base": "1/1000"}``. For an intra-only codec
+        (FFV1 as Orc writes it) one packet is one frame.
+        """
+        tb = self._probe_json(["-select_streams", "v:0", "-show_entries", "stream=time_base"], Path(path),
+                              what="time base")
+        res = process.run([self.ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries",
+                           "packet=pts,size,flags", "-of", "csv=p=0", str(path)], capture_stdout=True,
+                          log_path=self._log("packet-index"), cancel=cancel)
+        if res.returncode != 0:
+            raise ArtifactError(f"packet scan of {path} failed: {res.describe()}")
+        pts, size, key = [], [], []
+        for line in (res.stdout or b"").decode("ascii", "replace").splitlines():
+            parts = line.strip().split(",")
+            if len(parts) < 3 or not parts[0].lstrip("-").isdigit():
+                continue
+            pts.append(int(parts[0]))
+            size.append(int(parts[1]))
+            key.append("K" in parts[2])
+        return {"pts": pts, "size": size, "key": key, "time_base": tb["streams"][0]["time_base"]}
+
+    def frame_at(self, path: str | Path, at_s: float, width: int, height: int):
+        """One grey frame at ``at_s`` by seeking. Only for a file whose packets were proven to be all keyframes
+        with rising timestamps (``packet_index``); everything else is read sequentially. None if nothing decoded."""
+        import numpy as np
+
+        res = process.run([self.ffmpeg, "-hide_banner", "-nostdin", "-v", "error", "-ss", f"{at_s:.6f}", "-i",
+                           str(path), "-map", "0:v:0", "-frames:v", "1", "-vf",
+                           f"scale={width}:{height}:flags=area,format=gray", "-f", "rawvideo", "-pix_fmt", "gray",
+                           "-"], capture_stdout=True, log_path=self._log("frame-at"))
+        data = res.stdout or b""
+        if res.returncode != 0 or len(data) != width * height:
+            return None
+        return np.frombuffer(data, np.uint8).reshape(height, width)
+
+    def drop_frames(self, src: str | Path, dst: str | Path, indices: list[int], *, rate: str = "30000/1001",
+                    cancel=None, on_line=None):
+        """Copy ``src`` to ``dst`` without the v:0 frames at ``indices`` and nothing re-encoded.
+
+        Only valid when every packet is a keyframe (each frame stands alone): the dropped packets go
+        (``noise=drop``) and the remaining ones get evenly spaced timestamps at ``rate`` again (``setts``), so the
+        copy is constant-rate with one packet per frame.
+        """
+        if not indices:
+            raise ToolError("no frames to drop")
+        num, den = (int(x) for x in rate.split("/"))
+        drop = "+".join(f"eq(n\\,{int(i)})" for i in sorted(set(indices)))
+        bsf = f"noise=drop='{drop}',setts=ts='round(N*{den}/({num}*TB))'"
+        res = process.run([self.ffmpeg, "-hide_banner", "-nostdin", "-v", "error", "-stats", "-i", str(src),
+                           "-map", "0:v:0", "-c", "copy", "-bsf:v", bsf, "-f", "matroska", str(dst)],
+                          log_path=self._log("drop-frames"), cancel=cancel, on_line=on_line)
+        if res.returncode != 0 or not Path(dst).is_file():
+            raise ArtifactError(f"copying {src} without {len(indices)} frame(s) failed: {res.describe()}")
+        return res
+
     def frames_by_index(self, path: str | Path, indices: list[int], width: int, height: int, *, cancel=None,
                         frame_count: int | None = None, grid: str = "descriptor"):
         """Full-colour frames of v:0 by exact index, decoded sequentially (never seeked), scaled to

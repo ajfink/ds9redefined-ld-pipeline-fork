@@ -1,72 +1,20 @@
 """Read-only parsing of Orc ``.orcprj`` projects (YAML-like text).
 
-``source_id_for_capture`` and ``reference_map_ranges`` are ported verbatim from v38
-``scripts/pad_audit.py``; the node-editing helpers and ``build_stack_project`` from v38
-``scripts/build_stack_project.py`` (its ``main`` made pure: no manifest/profile access).
+The node-editing helpers and ``build_stack_project`` come from v38 ``scripts/build_stack_project.py`` (its
+``main`` made pure: no manifest/profile access). ``strip_timecode_pads`` removes the CLV time-code PAD frames
+Orc inserts (ADR 0004); it replaces v38 ``scripts/pad_audit.py``'s ``source_id_for_capture`` /
+``reference_map_ranges``, which only located those PADs for repair.
 """
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
 
 from fstk.core.errors import ArtifactError as PipelineError
 
 MIN_STACK_CAPTURES = 2
-
-
-def source_id_for_capture(project: Path, capture: str) -> int:
-    """Find the Orc source node by its human label, not manifest array order.
-
-    Orc project node order can differ from the manifest's captures order (E05's
-    M1 reference is source node 1 while M1 is second in captures[]).
-    """
-    text = project.read_text(encoding="utf-8", errors="replace")
-    for block in re.split(r"(?m)^    - id: ", text)[1:]:
-        m = re.match(r"(\d+)", block)
-        stage = re.search(r"(?m)^      stage: (\S+)", block)
-        label = re.search(r"(?m)^      user_label: TBC Source (.+?)\s*$", block)
-        if m and stage and stage.group(1) == "tbc_source" and label and label.group(1) == capture:
-            return int(m.group(1))
-    raise PipelineError(f"{project}: no TBC source node labeled {capture!r}")
-
-
-def reference_map_ranges(project: Path, source_id: int = 1) -> list[int]:
-    """PAD_1 output indices of the frame_map fed by source_id.
-
-    Every project we generate lists sources and their maps in the same order and
-    edges each source into exactly one map, so following the edge from source 1
-    selects the reference capture's map regardless of how maps are labelled.
-    """
-    text = project.read_text(encoding="utf-8", errors="replace")
-    stages: dict[int, str] = {}
-    blocks: dict[int, str] = {}
-    for block in re.split(r"(?m)^    - id: ", text)[1:]:
-        m = re.match(r"(\d+)", block)
-        if not m:
-            continue
-        node_id = int(m.group(1))
-        stage = re.search(r"(?m)^      stage: (\S+)", block)
-        stages[node_id] = stage.group(1) if stage else ""
-        blocks[node_id] = block
-    edges = [(int(a), int(b))
-             for a, b in re.findall(r"(?m)^    - from: (\d+)\s*$\n      to: (\d+)", text)]
-    map_id = next((b for a, b in edges if a == source_id and stages.get(b) == "frame_map"), None)
-    if map_id is None:
-        raise PipelineError(f"{project}: no frame_map fed by source {source_id}")
-    m = re.search(r"value:\s*([0-9PAD_,\-]+)", blocks[map_id])
-    if not m:
-        raise PipelineError(f"{project}: frame_map node {map_id} has no ranges value")
-    out, pads = 0, []
-    for tok in m.group(1).split(","):
-        if tok == "PAD_1":
-            pads.append(out)
-            out += 1
-        elif "-" in tok:
-            a, b = map(int, tok.split("-"))
-            out += b - a + 1
-        else:
-            out += 1
-    return pads
 
 
 def split_nodes(text: str) -> tuple[list[str], dict[int, list[str]], list[str]]:
@@ -274,3 +222,139 @@ def bundled_template() -> str:
     from importlib.resources import files
 
     return files("fstk.templates").joinpath("stack_template.orcprj").read_text(encoding="utf-8")
+
+
+# ------------------------------------------------------------------------------ CLV time-code pads
+#: Orc maps a CLV disc's time code to picture numbers at 30 per second and inserts a PAD frame for every number the
+#: time code skips. The disc's time code skips numbers on the drop-frame rule (two a minute, none every tenth
+#: minute: one per 900 frames, every tenth one absent) to stay in step with real time; no picture is missing there.
+#: Measured 2026-11-24 (S02E03, S01E20): the frames either side of each such PAD match consecutive DVD frames, the
+#: EFM audio is as long as the video without them, and the PAD renders as an all-zero frame that shifts everything
+#: after it by one frame. See docs/adr/0004-clv-timecode-pads.md.
+TIMECODE_PAD_PERIOD = 900
+
+
+@dataclass(frozen=True)
+class TimecodePads:
+    text: str                                   # the project with the time-code PADs removed from every frame map
+    master_positions: tuple[int, ...]           # where they were in the rendered (aligned) output, ascending
+    per_capture: dict[str, int]                 # capture label -> time-code PADs removed from its map
+    kept: dict[str, int]                        # capture label -> other PADs left in place (capture faults)
+
+    @property
+    def count(self) -> int:
+        return len(self.master_positions)
+
+
+def _range_tokens(value: str) -> list[str]:
+    return [t.strip() for t in value.split(",") if t.strip()]
+
+
+def _pad_positions(tokens: list[str]) -> list[tuple[int, int]]:
+    """(token index, output position) of every PAD_1."""
+    out, found = 0, []
+    for i, tok in enumerate(tokens):
+        if tok == "PAD_1":
+            found.append((i, out))
+            out += 1
+        elif "-" in tok:
+            a, b = map(int, tok.split("-"))
+            out += b - a + 1
+        else:
+            out += 1
+    return found
+
+
+def _alignment_offsets(blocks: dict[int, list[str]]) -> dict[int, int]:
+    """Source order (1-based, as Orc numbers them) -> lead-in offset from the source_align node's alignmentMap."""
+    for b in blocks.values():
+        text = "\n".join(b)
+        if re.search(r"(?m)^      stage: source_align\s*$", text):
+            m = re.search(r"alignmentMap:\s*\n\s*type: string\s*\n\s*value:\s*(.+)$", text, re.M)
+            if not m or not m.group(1).strip():
+                return {}
+            pairs = re.findall(r"(\d+)\s*\+\s*(-?\d+)", m.group(1))
+            return {int(i): int(o) for i, o in pairs}
+    return {}
+
+
+def strip_timecode_pads(text: str) -> TimecodePads:
+    """Remove the CLV time-code PADs from every frame map of a refreshed stack project (see TIMECODE_PAD_PERIOD).
+
+    A capture's time-code PADs are the single PADs on its own 900-frame grid (gaps of 900, or 1800 where the
+    tenth one is absent). Once each capture's lead-in from the alignment map is added they must fall on exactly
+    the same positions in every capture: the time code belongs to the disc, not to a player. Anything else fails
+    closed. Other PADs (a player skip in one capture) are kept; the stacker fills them from the other captures.
+    A project without such PADs (a CAV disc, or one already stripped) comes back unchanged.
+    """
+    head, blocks, tail = split_nodes(text)
+    stage_of = {i: (re.search(r"(?m)^      stage: (\S+)", "\n".join(b)) or [None, ""])[1] for i, b in blocks.items()}
+    edges = [(int(a), int(b)) for a, b in re.findall(r"(?m)^    - from: (\d+)\s*$\n      to: (\d+)", "\n".join(tail))]
+    sources = [i for i in blocks if stage_of[i] == "tbc_source"]
+    offsets = _alignment_offsets(blocks)
+    per: dict[int, dict] = {}
+    for order, sid in enumerate(sources, start=1):
+        block = "\n".join(blocks[sid])
+        label_m = re.search(r"(?m)^      user_label: TBC Source (.+?)\s*$", block)
+        label = label_m.group(1) if label_m else str(sid)
+        map_id = next((b for a, b in edges if a == sid and stage_of.get(b) == "frame_map"), None)
+        if map_id is None:
+            continue
+        lines = blocks[map_id]
+        vi = next((k for k, ln in enumerate(lines) if re.match(r"^\s*value:\s*[0-9PAD_,\-]+\s*$", ln)), None)
+        if vi is None:
+            continue
+        tokens = _range_tokens(lines[vi].split("value:", 1)[1])
+        pads = _pad_positions(tokens)
+        grid: list[tuple[int, int]] = []
+        if len(pads) >= 3:
+            phase = max(range(TIMECODE_PAD_PERIOD),
+                        key=lambda ph: sum(1 for _, p in pads if p % TIMECODE_PAD_PERIOD == ph))
+            grid = [(i, p) for i, p in pads if p % TIMECODE_PAD_PERIOD == phase
+                    and (i == 0 or tokens[i - 1] != "PAD_1") and (i + 1 >= len(tokens) or tokens[i + 1] != "PAD_1")]
+            if len(grid) < 2:
+                grid = []
+            gaps = {b - a for (_, a), (_, b) in pairwise(grid)}
+            if grid and not gaps <= {TIMECODE_PAD_PERIOD, 2 * TIMECODE_PAD_PERIOD}:
+                raise PipelineError(f"frame map of {label}: PADs on a {TIMECODE_PAD_PERIOD}-frame grid with gaps "
+                                    f"{sorted(gaps)}; not the CLV time-code pattern, nothing was changed")
+        per[sid] = {"label": label, "order": order, "map": map_id, "line": vi, "tokens": tokens,
+                    "grid": grid, "other": len(pads) - len(grid), "offset": offsets.get(order)}
+    with_grid = [v for v in per.values() if v["grid"]]
+    if not with_grid:
+        return TimecodePads(text, (), {v["label"]: 0 for v in per.values()},
+                            {v["label"]: v["other"] for v in per.values()})
+    if len(with_grid) != len(per):
+        raise PipelineError("only some captures have CLV time-code PADs "
+                            f"({sorted(v['label'] for v in with_grid)} of {sorted(v['label'] for v in per.values())})"
+                            "; nothing was changed")
+    if any(v["offset"] is None for v in per.values()):
+        raise PipelineError("the project has no measured alignment map for every capture; refresh it first")
+    aligned = {sid: [p + v["offset"] for _, p in v["grid"]] for sid, v in per.items()}
+    union = sorted(set().union(*aligned.values()))
+    for sid, pos in aligned.items():
+        inside = [u for u in union if pos[0] <= u <= pos[-1]]
+        if pos != inside:
+            raise PipelineError(f"CLV time-code PADs of {per[sid]['label']} do not line up with the other captures "
+                                f"({len(pos)} vs {len(inside)} in the same span); nothing was changed")
+    for v in per.values():
+        drop = {i for i, _ in v["grid"]}
+        merged: list[str] = []
+        for i, tok in enumerate(v["tokens"]):
+            if i in drop:
+                continue
+            if (merged and "-" in tok and "-" in merged[-1] and merged[-1] != "PAD_1" and (i - 1) in drop
+                    and int(merged[-1].split("-")[1]) + 1 == int(tok.split("-")[0])):
+                merged[-1] = f"{merged[-1].split('-')[0]}-{tok.split('-')[1]}"
+            else:
+                merged.append(tok)
+        line = blocks[v["map"]][v["line"]]
+        blocks[v["map"]][v["line"]] = line.split("value:", 1)[0] + "value: " + ",".join(merged)
+    out = [*head, "  nodes:"]
+    for i in blocks:
+        out.extend(blocks[i])
+    out.append("  edges:")
+    out.extend(tail)
+    return TimecodePads("\n".join(out) + "\n", tuple(union),
+                        {v["label"]: len(v["grid"]) for v in per.values()},
+                        {v["label"]: v["other"] for v in per.values()})

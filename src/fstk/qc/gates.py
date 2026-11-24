@@ -11,14 +11,12 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from fstk.core.errors import FstkError
 
 F24 = 24000.0 / 1001.0
 BLIP_MAX_S = 0.10          # one frame is 0.042 s; a little encoder slack
-ALIGN_TOL_S = 1.25 / F24   # ±1.25 output frames
 SEEK_WINDOW_S = 5.0
 SEEK_TOLERANCE_S = 0.15
 DURATION_TOLERANCE_S = 0.002
@@ -34,7 +32,7 @@ STANDING_WARNINGS = [
     "never make A/B copies as hardlinks then overwrite them in place (writes through the inode)",
     "respect the machine profile's resource limits; never run two downloaders for one item",
     "measure every episode: never copy another episode's AudioSkip, DELTA, rate or trim",
-    "DVD-free deliveries can verify the capture-origin/duration/PAD model and exact audio/video endpoint, "
+    "DVD-free deliveries can verify the capture-origin/duration model and exact audio/video endpoint, "
     "but cannot claim an external absolute A/V cross-correlation",
     "retime output gaps below the verifier's position-resolution limit remain WARN/LIMIT, not a confident PASS",
     "if input-seek audio is truncated while output-seek control succeeds, remux Matroska with "
@@ -100,21 +98,13 @@ def av_check_chunks(duration_s: float, black: list[tuple[float, float, float]], 
     return out
 
 
-# --------------------------------------------------------------------------- PAD black
-def pad_black_hits(pad_frames: list[int], events: list[tuple[float, float, float]]) -> list[dict]:
-    """Confirmed PAD positions that still carry a single-frame black (v38 rule)."""
-    out = []
-    for frame in sorted(set(pad_frames)):
-        t = frame / F24
-        hits = [(a, b, d) for a, b, d in events if d <= BLIP_MAX_S and abs(a - t) <= ALIGN_TOL_S]
-        if hits:
-            out.append({"frame": frame, "time_s": round(t, 3),
-                        "hits": [{"start_s": round(a, 3), "end_s": round(b, 3), "duration_s": d} for a, b, d in hits]})
-    return out
-
-
-def read_frame_list(path: Path) -> list[int]:
-    return sorted({int(x) for x in path.read_text(encoding="utf-8").split() if x.strip()})
+# --------------------------------------------------------------------------- single black frames
+def single_black_frames(events: list[tuple[float, float, float]]) -> list[dict]:
+    """Black that lasts about one frame. Real fades and breaks last longer; a single black frame is a picture
+    missing from every capture (the stacker had nothing to show), for the reviewer to see and fix with
+    Frame fixes (ADR 0004: the stack master no longer has PAD frames, so none are expected)."""
+    return [{"frame": round(a * F24), "start_s": round(a, 3), "end_s": round(b, 3), "duration_s": d}
+            for a, b, d in events if d <= BLIP_MAX_S]
 
 
 # --------------------------------------------------------------------------- stream inventory
@@ -332,15 +322,11 @@ def summarize(gates: list[Gate], allowed: set[str]) -> dict[str, Any]:
             "failed_gates": failed, "unverified_gates": unverified}
 
 
-def pad_review_intervals(hits: list[dict]) -> list[dict]:
-    out = []
-    for h in hits:
-        for e in h["hits"]:
-            out.append({"id": f"pad-black-f{h['frame']}", "gate": "full-decode + PAD black",
-                        "start_s": max(0.0, e["start_s"] - 2.0), "end_s": e["end_s"] + 2.0,
-                        "reason": "detected PAD-aligned single-frame black",
-                        "metrics": {"frame": h["frame"], **e}})
-    return out
+def black_review_intervals(blips: list[dict]) -> list[dict]:
+    return [{"id": f"black-f{h['frame']}", "gate": "full decode + single black frames",
+             "start_s": max(0.0, h["start_s"] - 2.0), "end_s": h["end_s"] + 2.0,
+             "reason": "a single black frame (a picture missing from every capture): fix it with Frame fixes",
+             "metrics": h} for h in blips]
 
 
 def retime_review_intervals(report: dict | None) -> list[dict]:

@@ -129,12 +129,12 @@ def test_delivery_plan_orders_every_stage_for_each_route():
     plan = delivery_plan(m)
     assert [s["stage"] for s in plan["steps"]] == [
         "stack-render", "cadence-evidence", "dvd-probe", "dvd-alignment", "video-trim", "dvd-ld-audio",
-        "dvd-retime", "stretch-preview", "pad-audit", "pad-repair", "frame-fixes", "video-quality", "encode-final", "audio-quality", "remux", "qc-report", "episode-report"]
+        "dvd-retime", "stretch-preview", "frame-fixes", "video-quality", "encode-final", "audio-quality", "remux", "qc-report", "episode-report"]
     render = plan["steps"][0]["params"]
     assert 35 < render["planned_gib"] < 42 and "415 KB" in render["estimate_basis"]
     m.set("mode.dvd_reference_available", False, by="op")
     assert [s["stage"] for s in delivery_plan(m)["steps"]] == [
-        "stack-render", "cadence-evidence", "video-trim", "dvd-free-audio", "stretch-preview", "pad-audit", "pad-repair", "frame-fixes", "video-quality", "encode-final", "audio-quality", "remux", "qc-report", "episode-report"]
+        "stack-render", "cadence-evidence", "video-trim", "dvd-free-audio", "stretch-preview", "frame-fixes", "video-quality", "encode-final", "audio-quality", "remux", "qc-report", "episode-report"]
 
 
 def test_no_dvd_programme_start_uses_the_v38_prior():

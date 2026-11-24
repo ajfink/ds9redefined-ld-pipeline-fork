@@ -4,7 +4,7 @@ Both routes. With a DVD, the head is the alignment's programme origin. Without o
 after the LD front matter that ``media.trim.no_dvd_programme_start`` finds from the first two
 minutes of the master (prior from 12 v38 episodes). Steps:
 
-1. Write the IVTC/PAD-repair script untrimmed, in probe mode (``cadence_map.ivtc_vpy_script``):
+1. Write the IVTC script untrimmed, in probe mode (``cadence_map.ivtc_vpy_script``):
    every source frame is tagged with its index before TFM/TDecimate. Evaluating it
    (``vspipe --info``) records the exact master frame of the head and tail output frames.
 2. Decide the trims (``fstk.media.trim.decide``) from the accepted DVD alignment (programme
