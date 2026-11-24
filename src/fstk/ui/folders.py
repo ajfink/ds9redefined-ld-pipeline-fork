@@ -17,7 +17,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from fstk.config.profile import change_folders, change_sources, default_data_root, default_media_root
+from fstk.config.profile import (
+    change_folders,
+    change_shared_root,
+    change_sources,
+    default_data_root,
+    default_media_root,
+)
 from fstk.core.errors import FstkError
 
 
@@ -29,7 +35,7 @@ class FoldersDialog(QDialog):
         super().__init__(parent)
         self.profile = profile
         self.setWindowTitle("Folders")
-        self.resize(760, 320)
+        self.resize(760, 360)
         lay = QVBoxLayout(self)
         lay.addWidget(QLabel("The capture and DVD folders are only read. Everything fstk writes goes to the data, working "
                              "and finished-files folders; keep the working folder on a fast local disk "
@@ -44,6 +50,8 @@ class FoldersDialog(QDialog):
                                    placeholder="folder that holds DS9-S01E20-LaserDisc-Copies and the like")
         self.dvd = self._row(form, "DVD rips (read only)", sources.get("dvd_root", ""), None,
                              placeholder="folder with the DVD video files (optional)")
+        self.shared = self._row(form, "Shared workspace (optional)", str(profile.shared_root or ""), None,
+                                placeholder="a folder both computers can reach, for Hand off…")
         lay.addLayout(form)
         self.changed: list = []
         self._sources: list = []          # saved first, so a declined 'work exists' prompt does not lose them
@@ -62,6 +70,9 @@ class FoldersDialog(QDialog):
             "downloads": "The folder that holds the LaserDisc capture folders (for example DS9-S01E20-LaserDisc-Copies). "
                          "It is only read. Intake looks here first and downloads what is missing into it. Required "
                          "before an episode's intake can run.",
+            "shared": "A folder that every computer in your setup can reach (for example W:\\fstk-shared), used only by "
+                      "Hand off…: episode snapshots and who-is-working-on-what are published there. Give fstk its own "
+                      "empty folder. Blank turns the shared workspace off on this computer.",
             "dvd": "The folder that holds the DVD video files. Only read; the DVD… button on the main window searches "
                    "it for an episode's file. Optional.",
         })
@@ -94,6 +105,7 @@ class FoldersDialog(QDialog):
         try:
             self._sources += change_sources(self.profile, {"downloads_root": self.downloads.text(),
                                                            "dvd_root": self.dvd.text()})
+            self._sources += change_shared_root(self.profile, self.shared.text())
             folders = change_folders(self.profile, data_root=self.data.text().strip() or None,
                                      media_root=self.media.text().strip() or None,
                                      roots={"out": self.out.text().strip() or None}, force=force)

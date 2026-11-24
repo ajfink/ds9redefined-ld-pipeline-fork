@@ -218,6 +218,28 @@ def change_sources(profile: Profile, sources: Mapping[str, str | None]) -> list[
     return changes
 
 
+def change_shared_root(profile: Profile, value: str | os.PathLike | None) -> list[tuple[str, str | None, str | None]]:
+    """Set or clear the shared workspace folder (hand-offs between machines) and save the profile.
+
+    Nothing is created here: fstk makes its own ``devices`` folder inside it the first time the shared workspace is
+    used. A share that is offline right now is accepted. ConfigError when it is not an absolute path or is the data
+    folder (device state is never shared). Returns ``[(key, old, new)]`` or ``[]`` when nothing changed.
+    """
+    text = str(value or "").strip().strip('"').strip("'")
+    old = profile.shared_root
+    new = Path(text) if text else None
+    if old == new:
+        return []
+    profile.shared_root = new
+    try:
+        profile.validate()
+    except ConfigError:
+        profile.shared_root = old
+        raise
+    profile.save()
+    return [("shared_root", str(old) if old else None, str(new) if new else None)]
+
+
 def default_profile_path() -> Path:
     env = os.environ.get("FSTK_PROFILE")
     if env:

@@ -125,3 +125,33 @@ def test_folders_dialog_sets_the_source_folders(tmp_path, qtbot):
     dlg.save()
     assert ("sources.downloads_root", None, "/Volumes/Swap Folder/Captures") in dlg.changed
     assert Profile.load(tmp_path / "machine.json").sources["downloads_root"] == "/Volumes/Swap Folder/Captures"
+
+
+def test_change_shared_root_sets_clears_refuses_and_saves(tmp_path):
+    from fstk.config.profile import change_shared_root
+
+    p = make(tmp_path)
+    share = str(tmp_path / "share")
+    assert change_shared_root(p, f'"{share}"') == [("shared_root", None, share)]
+    assert str(Profile.load(tmp_path / "machine.json").shared_root) == share
+    assert change_shared_root(p, share) == []                       # unchanged: no write
+    with pytest.raises(ConfigError):
+        change_shared_root(p, str(p.data_root))                     # device state is never shared
+    assert str(p.shared_root) == share                              # a refused change leaves the profile alone
+    with pytest.raises(ConfigError):
+        change_shared_root(p, "relative/folder")
+    assert change_shared_root(p, "") == [("shared_root", share, None)]
+    assert Profile.load(tmp_path / "machine.json").shared_root is None
+
+
+@pytest.mark.gui
+def test_folders_dialog_sets_the_shared_workspace_folder(tmp_path, qtbot):
+    from fstk.ui.folders import FoldersDialog
+
+    p = make(tmp_path)
+    dlg = FoldersDialog(p)
+    qtbot.addWidget(dlg)
+    dlg.shared.setText(str(tmp_path / "fstk-shared"))
+    dlg.save()
+    assert ("shared_root", None, str(tmp_path / "fstk-shared")) in dlg.changed
+    assert str(Profile.load(tmp_path / "machine.json").shared_root) == str(tmp_path / "fstk-shared")

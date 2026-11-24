@@ -1098,3 +1098,11 @@ names that no longer exist; required tools never found) and, if any, lists them 
   one (fp16/param edits); I could not find it on W: to compare hashes. If it differs, the Mac and Windows would repair
   differently: copy one machine's folder to the others.
 - Tests: autouse fixture forbids real network in `test_install.py` (an older test had started a real download).
+
+## CP46 — Settings → Folders gets the Shared workspace row (owner: "no shared folder setting in the popup")
+
+- The docs (and my answer) named a Settings → Folders shared-folder setting that did not exist: `shared_root` could
+  only be set by `fstk setup` (asked only on a brand-new profile) or by editing machine.json, so **Hand off…** was
+  unreachable from the app. New `config.profile.change_shared_root` (validated like the profile: absolute, not the data
+  folder; reverts on error; offline shares accepted) and a "Shared workspace (optional)" row in `ui/folders.py` with
+  Browse… and a tooltip. Blank turns it off. Tests: `test_folders.py` (+2).
