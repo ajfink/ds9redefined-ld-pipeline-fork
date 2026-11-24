@@ -24,11 +24,16 @@ from fstk.core.errors import ConfigError
 from fstk.core.timeutil import utc_now_iso
 from fstk.install import orc as orc_install
 from fstk.install import providers
+from fstk.install import rife as rife_install
 from fstk.install.discover import TOOL_ORDER, Found, discover, tools_dir
 
 LABELS = {"vspipe": "VapourSynth (vspipe)", "ffmpeg": "FFmpeg", "ffprobe": "FFprobe",
           "orc": "Decode-Orc (orc-cli)", "rife_engine": "RIFE engine (rife-ncnn-vulkan)",
           "rife_model_dir": "RIFE model folder", "sevenzip": "7-Zip", "curl": "curl"}
+
+
+#: optional tools the launcher also reports when they were never set up (7-Zip for .7z captures, RIFE for PAD repair)
+OPTIONAL_CHECKED = ("rife_engine", "rife_model_dir", "sevenzip")
 
 
 @dataclass
@@ -97,7 +102,8 @@ def run_setup(console: Console, *, profile_path: str | os.PathLike | None = None
               env: Mapping[str, str] | None = None, home: Path | None = None,
               run: Callable[[list[str]], int] = _run, run_text: Callable[[list[str]], str] = _run_text,
               install: bool = True, check_only: bool = False, venv_bin: Path | None = None,
-              volumes=None, doctor: Callable | None = None, orc_installer: Callable | None = None) -> SetupResult:
+              volumes=None, doctor: Callable | None = None, orc_installer: Callable | None = None,
+              rife_installer: Callable | None = None) -> SetupResult:
     system = system or current_os()
     env = os.environ if env is None else env
     home = Path.home() if home is None else home
@@ -113,7 +119,7 @@ def run_setup(console: Console, *, profile_path: str | os.PathLike | None = None
         return result
     _tools(console, profile, system=system, env=env, home=home, run=run, run_text=run_text,
            install=install and not check_only, venv_bin=venv_bin, result=result,
-           orc_installer=orc_installer or orc_install.install_orc)
+           orc_installer=orc_installer or orc_install.install_orc, rife_installer=rife_installer)
     _ensure_vspipe(console, profile, venv_bin, run, system, result, check_only=check_only)
     if result.created and not check_only:
         _sources(console, profile, result, system=system)
@@ -208,7 +214,7 @@ def _shared_tool_dirs(profile: Profile) -> list[Path]:
 
 
 def _tools(console: Console, profile: Profile, *, system, env, home, run, run_text, install, venv_bin,
-           result: SetupResult, orc_installer: Callable | None = None) -> None:
+           result: SetupResult, orc_installer: Callable | None = None, rife_installer: Callable | None = None) -> None:
     say = console.say
     found_manager = providers.find_manager(system, env) if install else None
     manager, manager_program = found_manager if found_manager else (None, None)
@@ -229,7 +235,7 @@ def _tools(console: Console, profile: Profile, *, system, env, home, run, run_te
         if not found and install:
             found = _try_install(console, name, system, env, home, venv_bin, manager, run, engine=engine,
                                  profile=profile, program=manager_program, extra_dirs=extra_dirs,
-                                 orc_installer=orc_installer)
+                                 orc_installer=orc_installer, rife_installer=rife_installer)
         choice = _choose(console, name, found, run_text, sibling_of=profile.tools.get("ffmpeg"))
         if choice is None:
             choice = _ask_path(console, name, label, spec["required"], system)
@@ -246,13 +252,20 @@ def _tools(console: Console, profile: Profile, *, system, env, home, run, run_te
 
 def _try_install(console: Console, name: str, system: str, env, home: Path, venv_bin, manager, run, *, engine,
                  profile: Profile, program: str | None = None, extra_dirs=(),
-                 orc_installer: Callable | None = None) -> list[Found]:
+                 orc_installer: Callable | None = None, rife_installer: Callable | None = None) -> list[Found]:
     def look() -> list[Found]:
         return discover(name, system=system, env=env, home=home, venv_bin=venv_bin, engine=engine,
                         extra_dirs=extra_dirs)
 
     if name == "orc":
         return _try_install_orc(console, system, env, home, run, look, orc_installer)
+    if name == "rife_engine":
+        if not console.confirm(f"  {LABELS[name]} is missing. Download it from GitHub and install it now?"):
+            console.say("  " + providers.guidance(name, system))
+            return []
+        installer = rife_installer or rife_install.install_rife
+        installer(console, system=system, env=env, home=home, dest=tools_dir(system, env, home) / rife_install.FOLDER)
+        return look()
     cmd = providers.install_command(name, manager, program)
     if cmd:
         pretty = " ".join(cmd)
@@ -301,7 +314,19 @@ def _choose(console: Console, name: str, found: list[Found], run_text, sibling_o
         # the probe that belongs to the chosen FFmpeg (same folder) beats one from another build
         same = [f for f in found if sibling_of and Path(f.path).parent == Path(sibling_of).parent]
         return (same or found)[0].path
-    if name == "rife_model_dir" and len(found) > 1:
+    if name == "rife_model_dir":
+        pinned = [f for f in found if Path(f.path).name == providers.RIFE_MODEL]
+        if pinned:
+            return pinned[0].path
+        if len(found) == 1:
+            console.say(f"  The model every machine must use ({providers.RIFE_MODEL}) was not found; only "
+                        f"{Path(found[0].path).name} is here (it repairs frames differently).")
+            # asked in words even under --yes: a different model changes the output, so it is never assumed
+            if console.ask(f"  Use {Path(found[0].path).name} anyway? [y/N]").lower().startswith("y"):
+                return found[0].path
+            console.say(f"  Copy {providers.RIFE_MODEL} next to the RIFE engine or into the shared folder's "
+                        "`tools` directory and run setup again.")
+            return None
         console.say("  Several RIFE models were found; the model changes the repaired frames, so choose:")
         for i, f in enumerate(found, 1):
             console.say(f"    {i}. {f.path}")
@@ -436,6 +461,8 @@ def profile_problems(profile_path: str | os.PathLike | None = None) -> list[str]
                 profile.tool(name)
             except Exception:
                 problems.append(f"{LABELS[name]} is required and was not found")
+        elif name in OPTIONAL_CHECKED:
+            problems.append(f"{LABELS[name]} is not set up")
     return problems
 
 

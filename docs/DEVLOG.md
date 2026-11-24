@@ -1058,3 +1058,17 @@ names that no longer exist; required tools never found) and, if any, lists them 
 - 12 new tests with fake runner/fetcher (no network). **Unverified on real machines:** the MSI run (UAC, SmartScreen),
   VC++ redist, DMG mount, Flatpak. The shell here cannot reach GitHub releases, so asset names come from upstream's
   workflows/docs and the digest check is skipped when GitHub lists none.
+
+## CP42 — RIFE engine is downloaded by setup; every start checks every tool (owner request)
+
+- Owner: "RIFE should be included in initial setup downloads, too. All possibly necessary tools should be." and "each
+  time the starter script is run, these checks should be made". New `install/rife.py`: newest release of
+  `nihui/rife-ncnn-vulkan` → `rife-ncnn-vulkan-<date>-(macos|ubuntu|windows).zip`, size/SHA-256 verified, unpacked
+  (zip-slip safe, top folder dropped, exec bit set) into `<tools_dir>/rife-ncnn-vulkan`, which discovery now searches.
+- **Model stays pinned, not guessed:** the public zip only has up to `rife-v4.6`; `rife-v4.26` (the owner's) has no
+  source I can verify. `_choose` takes `rife-v4.26` automatically when found (next to the engine / shared `tools`),
+  otherwise asks in words, default no, even under `--yes`, and says where to put the model.
+- `profile_problems` (launcher start check) also reports optional tools never set up (RIFE engine/model, 7-Zip).
+  Optional tools the owner declines are therefore reported on every terminal start.
+- Not done: a static-FFmpeg download fallback (Homebrew broke on the Mac: old brew vs macOS 27.2.1); I have no
+  verifiable source URL/version for FFmpeg 9.x builds. Unverified on real machines: the RIFE download and Metal run.

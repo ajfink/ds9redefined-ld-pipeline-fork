@@ -46,7 +46,8 @@ Where things live on each computer (never inside the app folder):
 | 7-Zip (unpacks the .7z EFM archives) | `winget install 7zip.7zip` | `brew install sevenzip` (the program is `7zz`) | p7zip |
 | VapourSynth + plugins | in fstk's own environment (pinned wheels) | same | same |
 | Decode-Orc 2.11.1 | downloaded from its GitHub release: MSI (+ Visual C++ runtime if missing) | DMG → `~/Applications/orc-gui.app` | Flatpak for this user + `orc-cli` wrapper |
-| RIFE | never automatic — see below | never automatic | never automatic |
+| RIFE engine (rife-ncnn-vulkan) | downloaded from nihui's GitHub release (zip) into fstk's tools folder | same | same (Vulkan driver needed) |
+| RIFE model (`rife-v4.26`) | never chosen for you — see below | same | same |
 
 Setup offers each install and shows the exact command first; nothing is installed without a yes. It looks for
 programs on PATH **and** in the places a double-clicked launcher cannot see — on macOS `/opt/homebrew/bin`,
@@ -61,7 +62,9 @@ even without the executable bit, which a Windows share often drops.
 
 ## What is never installed for you
 
-* **RIFE** changes the output with its model, so setup only tells you where to get it (see below).
+* **The RIFE model** changes the repaired frames, so every machine must use the same one (`rife-v4.26`). The public
+  engine download only carries older models, so setup uses `rife-v4.26` when it is next to the engine or in the shared
+  folder's `tools` directory, and otherwise asks (default no) before settling for another model.
 * **Decode-Orc** is installed for you, but only the *pinned* release (2.11.1 on the owner's machines), because its
   version changes the pixels and the audio. Setup asks first, reads GitHub's release list, downloads the file
   for your system, checks its size and SHA-256, and installs it: Windows runs the (unsigned) MSI, so Windows asks
@@ -95,3 +98,9 @@ Notes:
 * Windows may show a SmartScreen prompt for a launcher run from a network location: choose "Run anyway".
 * Retire `tools\windows\setup-fstk.ps1` / `tools\windows\FromStunToKill.cmd` (the old Windows-only scripts): this
   launcher does the same and more.
+
+## Every start checks the tools
+
+`FromStunToKill.command` / `.cmd` / `.sh` look at this computer's profile on every start. A tool whose file has
+disappeared, a required tool that was never found, or an optional one (RIFE, 7-Zip) that was never set up is listed,
+and — in a terminal only — setup is offered right there. Answer `n` to start the app anyway.

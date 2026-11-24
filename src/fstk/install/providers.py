@@ -21,6 +21,8 @@ ORC_VERSION = "2.11.1"
 #: Flatpak application ids, current first (upstream renamed it from the simoninns one)
 ORC_FLATPAKS = ("io.github.decode_orc.decode-orc", "io.github.simoninns.decode-orc")
 ORC_FLATPAK = ORC_FLATPAKS[0]
+#: the model every machine must use: it decides what a repaired PAD frame looks like
+RIFE_MODEL = "rife-v4.26"
 RIFE_RELEASES = "https://github.com/nihui/rife-ncnn-vulkan/releases"
 FFMPEG_WINDOWS = "https://www.gyan.dev/ffmpeg/builds/"
 

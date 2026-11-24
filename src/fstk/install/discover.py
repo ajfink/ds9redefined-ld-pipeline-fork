@@ -87,11 +87,12 @@ def _locations(name: str, system: str, tools: Path) -> list[str]:
         return [*own, "/usr/bin/orc-cli", "/usr/local/bin/orc-cli", "/opt/decode-orc/bin/orc-cli",
                 "~/.local/bin/orc-cli"]
     if name == "rife_engine":
+        mine = str(tools / "rife-ncnn-vulkan" / f"rife-ncnn-vulkan{exe}")        # where setup unpacks it
         if system == "windows":
-            return [*own, "%LOCALAPPDATA%/Flowframes/FlowframesData/pkgs/rife-ncnn/rife-ncnn-vulkan.exe",
+            return [*own, mine, "%LOCALAPPDATA%/Flowframes/FlowframesData/pkgs/rife-ncnn/rife-ncnn-vulkan.exe",
                     "~/tools/rife-ncnn-vulkan/rife-ncnn-vulkan.exe"]
         # the macOS and Linux releases are unpacked wherever the owner put them; look where downloads land too
-        return [*own, "~/tools/rife-ncnn-vulkan/rife-ncnn-vulkan", "~/tools/rife-ncnn-vulkan*/rife-ncnn-vulkan",
+        return [*own, mine, "~/tools/rife-ncnn-vulkan/rife-ncnn-vulkan", "~/tools/rife-ncnn-vulkan*/rife-ncnn-vulkan",
                 "/opt/homebrew/bin/rife-ncnn-vulkan", "/usr/local/bin/rife-ncnn-vulkan",
                 "~/Applications/rife-ncnn-vulkan*/rife-ncnn-vulkan", "~/Downloads/rife-ncnn-vulkan*/rife-ncnn-vulkan"]
     if name == "sevenzip":

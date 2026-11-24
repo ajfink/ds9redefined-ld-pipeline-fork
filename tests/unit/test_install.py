@@ -754,3 +754,79 @@ def test_linux_flatpak_wrapper_uses_the_installed_application_id(tmp_path):
     wrapper = prov.write_orc_flatpak_wrapper(tmp_path, prov.ORC_FLATPAKS[1])
     assert prov.ORC_FLATPAKS[1] in wrapper.read_text(encoding="utf-8")
     assert prov.ORC_FLATPAK == "io.github.decode_orc.decode-orc"
+
+
+# ---------------------------------------------------------------- RIFE download and install
+
+import zipfile  # noqa: E402
+
+from fstk.install import rife as rife_inst  # noqa: E402
+
+
+def _rife_zip(path, system="linux"):
+    exe = "rife-ncnn-vulkan.exe" if system == "windows" else "rife-ncnn-vulkan"
+    top = f"rife-ncnn-vulkan-20221029-{system}"
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr(f"{top}/{exe}", "bin")
+        z.writestr(f"{top}/rife-v4.6/flownet.param", "p")
+        z.writestr(f"{top}/rife-v4.6/flownet.bin", "b")
+        z.writestr("__MACOSX/._x", "junk")
+
+
+def test_rife_pick_asset_names_per_system():
+    rels = [{"tag_name": "20221029", "assets": [
+        {"name": f"rife-ncnn-vulkan-20221029-{w}.zip", "browser_download_url": f"https://x/{w}", "size": 9}
+        for w in ("macos", "ubuntu", "windows")]}]
+    assert rife_inst.pick_asset(rels, "linux").url == "https://x/ubuntu"
+    assert rife_inst.pick_asset(rels, "macos").name.endswith("macos.zip")
+    assert rife_inst.pick_asset(rels, "windows").version == "20221029"
+    assert rife_inst.pick_asset([], "linux") is None and rife_inst.pick_asset(rels, "plan9") is None
+
+
+def test_rife_extract_flattens_the_top_folder_and_makes_the_engine_executable(tmp_path):
+    z = tmp_path / "r.zip"
+    _rife_zip(z)
+    dest = tmp_path / "tools" / "rife-ncnn-vulkan"
+    engine = rife_inst.extract(z, dest, "linux")
+    assert engine == dest / "rife-ncnn-vulkan" and engine.stat().st_mode & stat.S_IXUSR
+    assert (dest / "rife-v4.6" / "flownet.bin").is_file() and not (dest / "__MACOSX").exists()
+    bad = tmp_path / "bad.zip"
+    with zipfile.ZipFile(bad, "w") as zf:
+        zf.writestr("top/../../evil", "x")
+        zf.writestr("top/rife-ncnn-vulkan", "x")
+    with pytest.raises(orc_inst.OrcInstallError, match="unsafe"):
+        rife_inst.extract(bad, tmp_path / "d2", "linux")
+
+
+def test_setup_installs_rife_then_prefers_the_pinned_model_and_never_assumes_another(tmp_path):
+    env = {"PATH": "", "XDG_DATA_HOME": str(tmp_path / "data")}
+    dests = []
+
+    def rife_installer(console, **kw):
+        dests.append(kw["dest"])
+        _rife_zip(tmp_path / "z.zip")
+        rife_inst.extract(tmp_path / "z.zip", kw["dest"], "linux")
+        return True
+
+    path = tmp_path / "p" / "machine.json"
+    kw = {"profile_path": path, "system": "linux", "env": env, "home": tmp_path, "run": lambda c: 1,
+          "run_text": lambda c: " libx265", "doctor": _doctor_ok, "venv_bin": tmp_path / "x",
+          "orc_installer": lambda *a, **k: False, "rife_installer": rife_installer}
+    wiz.run_setup(wiz.Console(ask_fn=lambda q: "n", out=lambda t: None), **kw)
+    assert dests == []                                              # declined: nothing downloaded
+    lines: list[str] = []
+    wiz.run_setup(wiz.Console(ask_fn=lambda q: "", assume_yes=True, out=lines.append), **kw)
+    prof = Profile.load(path)
+    assert dests and Path(prof.tool("rife_engine")).name == "rife-ncnn-vulkan"
+    assert prof.tools.get("rife_model_dir") is None                 # only rife-v4.6 here: not assumed under --yes
+    assert any("rife-v4.26" in ln for ln in lines)
+    (Path(prof.tool("rife_engine")).parent / "rife-v4.26").mkdir()
+    wiz.run_setup(wiz.Console(ask_fn=lambda q: "", assume_yes=True, out=lambda t: None), **kw)
+    assert Path(Profile.load(path).tool("rife_model_dir")).name == "rife-v4.26"
+
+
+def test_launcher_check_also_reports_optional_tools_that_were_never_set_up(tmp_path):
+    venv_bin = tmp_path / "venv" / "bin"
+    path = _profile_with_vspipe(tmp_path, venv_bin)
+    problems = wiz.profile_problems(path)
+    assert any("RIFE engine" in p for p in problems) and any("7-Zip" in p for p in problems)
