@@ -22,7 +22,7 @@ import logging
 from fractions import Fraction
 from pathlib import Path
 
-from fstk.core.errors import ArtifactError, GateError
+from fstk.core.errors import ArtifactError, GateError, ToolError
 from fstk.core.fsio import atomic_write_bytes, atomic_write_json, move_aside, read_json
 from fstk.core.hashing import SCOPE_HEAD_TAIL
 from fstk.core.timeutil import utc_now_iso
@@ -368,8 +368,13 @@ class StackRender(Stage):
         tb = Fraction(index["time_base"])
         for p in positions:
             ctx.check_cancel()
-            frame = ff.frame_at(master, float(pts[p] * tb), 16, 12)
-            if frame is None or int(frame.max()) > 0:
+            try:
+                frame = ff.frame_at(master, float(pts[p] * tb), 16, 12, cancel=ctx.cancel)
+            except ToolError as e:
+                raise ToolError(f"{master.name}: could not read frame {p} to check it is a time-code PAD; the "
+                                f"drive gave a read error. Nothing was changed; run again (if it repeats, check "
+                                f"the drive). {e}") from e
+            if int(frame.max()) > 0:
                 raise ArtifactError(f"{master.name}: frame {p} where Orc put a time-code PAD is not all-zero; "
                                     "not touched")
         tmp = master.with_name(master.stem + ".without-timecode-pads.partial.mkv")

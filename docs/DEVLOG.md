@@ -1281,3 +1281,14 @@ names that no longer exist; required tools never found) and, if any, lists them 
   `…-with-timecode-pads.mkv` originals once satisfied. v38-delivered episodes keep their invented PAD frames until
   re-run.
 - Next: re-run S02E03 from stack-render on the Legion and confirm the alignment is flat across the old seams.
+
+## CP54 — a drive read error is not "not all-zero" (Legion bundle 2026-11-24 13:22)
+
+- First real run of the CP53 migration on S01E20: the packet scan of `Z:\FSTK Working Folder\…\S01E20-stack-master.mkv`
+  read the whole file (24.8 s) and 77 PAD frames checked all-zero, then the seek to frame 70,200 hit
+  "Read error at pos. 14831058996" (while dvd-probe was hashing the DVD on the same Z: drive); ffmpeg ended
+  0xC000013A, `frame_at` returned None and the step said the frame was "not all-zero". The master was not touched.
+- `FFmpeg.frame_at` now retries a failed read (3 tries, 2 s/4 s apart, cancellable) and then raises `ToolError`
+  with ffmpeg's message; `stack-render` reports "could not read frame N … the drive gave a read error. Nothing was
+  changed; run again". Only a frame that really decoded can fail the all-zero check. Test simulates the Legion's
+  failure (retry succeeds; persistent failure reported as a read error, master untouched).

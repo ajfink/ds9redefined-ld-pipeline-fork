@@ -266,3 +266,39 @@ def test_a_master_is_not_touched_unless_every_predicted_frame_is_blank(tmp_path)
     with pytest.raises(ArtifactError, match=r"not blank|not all-zero"):
         StackRender()._drop_timecode_pads(_Ctx(), ff, master, ff.packet_index(master), [900, 1800])
     assert master.stat().st_size == size and not list(tmp_path.glob("*timecode*"))
+
+
+def test_a_read_error_is_reported_as_one_and_retried_never_as_picture_content(tmp_path, monkeypatch):
+    """Legion 2026-11-24: a drive read error at frame 70,200 made ffmpeg stop; the app said the PAD frame was
+    "not all-zero". A failed read is now retried, then reported as a read problem; the master is untouched."""
+    from fstk.core.errors import ToolError
+    from fstk.stages.stack import StackRender
+    from fstk.tools import process
+    from fstk.tools.ffmpeg import FFmpeg
+
+    master = tmp_path / "m.mkv"
+    _master_with_zero_frames(master, zero=(900, 1800))
+    ff = FFmpeg("ffmpeg", "ffprobe", log_dir=tmp_path)
+    index = ff.packet_index(master)
+    real_run, calls = process.run, []
+
+    def flaky(args, **kw):                         # the first read of frame 1800 fails like the Legion's did
+        if "-ss" in args and float(args[args.index("-ss") + 1]) > 50 and not calls:
+            calls.append(1)
+            return process.ProcessResult(list(args), 3221225786, 1.2, b"", ["Read error at pos. 14831058996"], None)
+        return real_run(args, **kw)
+
+    monkeypatch.setattr(process, "run", flaky)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    got = StackRender()._drop_timecode_pads(_Ctx(), ff, master, index, [900, 1800])
+    assert calls == [1] and got["frames"] == 1998   # retried and went through
+
+    monkeypatch.setattr(process, "run", lambda args, **kw: process.ProcessResult(
+        list(args), 3221225786, 1.2, b"", ["Read error at pos. 14831058996"], None))
+    other = tmp_path / "other.mkv"
+    _master_with_zero_frames(other, zero=(900,))
+    size = other.stat().st_size
+    with pytest.raises(ToolError, match=r"could not read frame 900.*read error") as e:
+        StackRender()._drop_timecode_pads(_Ctx(), ff, other, index, [900])
+    assert "not all-zero" not in str(e.value) and "Read error at pos" in str(e.value)
+    assert other.stat().st_size == size and not list(tmp_path.glob("other*timecode*"))

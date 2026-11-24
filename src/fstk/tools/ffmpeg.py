@@ -355,19 +355,35 @@ class FFmpeg:
             key.append("K" in parts[2])
         return {"pts": pts, "size": size, "key": key, "time_base": tb["streams"][0]["time_base"]}
 
-    def frame_at(self, path: str | Path, at_s: float, width: int, height: int):
+    def frame_at(self, path: str | Path, at_s: float, width: int, height: int, *, attempts: int = 3,
+                 cancel=None):
         """One grey frame at ``at_s`` by seeking. Only for a file whose packets were proven to be all keyframes
-        with rising timestamps (``packet_index``); everything else is read sequentially. None if nothing decoded."""
+        with rising timestamps (``packet_index``); everything else is read sequentially.
+
+        A failed read (the drive returned an error, ffmpeg stopped, a short frame) is tried again up to
+        ``attempts`` times and then raises ``ToolError`` with ffmpeg's own message: a read problem is never
+        reported as picture content.
+        """
+        import time
+
         import numpy as np
 
-        res = process.run([self.ffmpeg, "-hide_banner", "-nostdin", "-v", "error", "-ss", f"{at_s:.6f}", "-i",
-                           str(path), "-map", "0:v:0", "-frames:v", "1", "-vf",
-                           f"scale={width}:{height}:flags=area,format=gray", "-f", "rawvideo", "-pix_fmt", "gray",
-                           "-"], capture_stdout=True, log_path=self._log("frame-at"))
-        data = res.stdout or b""
-        if res.returncode != 0 or len(data) != width * height:
-            return None
-        return np.frombuffer(data, np.uint8).reshape(height, width)
+        last = None
+        for attempt in range(attempts):
+            if attempt:
+                time.sleep(2.0 * attempt)
+            res = process.run([self.ffmpeg, "-hide_banner", "-nostdin", "-v", "error", "-ss", f"{at_s:.6f}",
+                               "-i", str(path), "-map", "0:v:0", "-frames:v", "1", "-vf",
+                               f"scale={width}:{height}:flags=area,format=gray", "-f", "rawvideo", "-pix_fmt",
+                               "gray", "-"], capture_stdout=True, log_path=self._log("frame-at"), cancel=cancel)
+            if res.cancelled:
+                raise ToolError(f"reading {Path(path).name} at {at_s:.3f}s was cancelled")
+            data = res.stdout or b""
+            if res.returncode == 0 and len(data) == width * height:
+                return np.frombuffer(data, np.uint8).reshape(height, width)
+            last = res
+        raise ToolError(f"could not read {Path(path).name} at {at_s:.3f}s after {attempts} tries "
+                        f"({last.describe()})")
 
     def drop_frames(self, src: str | Path, dst: str | Path, indices: list[int], *, rate: str = "30000/1001",
                     cancel=None, on_line=None):
