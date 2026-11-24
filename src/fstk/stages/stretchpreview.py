@@ -23,6 +23,35 @@ HANDLE_FRAMES = 24          # one second of picture either side
 MAX_PREVIEW_FRAMES = 24 * 20  # 20 s per stretch is enough to judge
 
 
+def memory_note() -> str:
+    """Free memory right now, for failure messages."""
+    try:
+        import psutil
+
+        vm = psutil.virtual_memory()
+        return f"free memory {vm.available / 2**30:.1f} of {vm.total / 2**30:.1f} GiB"
+    except Exception as exc:  # psutil missing or failing: say so rather than guess
+        return f"free memory unknown ({exc.__class__.__name__})"
+
+
+def encode_preview(ctx, vs, wrapper: Path, clip: Path, cycle: int) -> None:
+    """x264 review clip of ``wrapper``. Legion 2026-11-24 14:53: vspipe stopped during script evaluation with no
+    message (exit -1) for one preview while two others of the same scripts worked; so one more try, and the free
+    memory at each failure goes into the message, so the cause can be measured rather than guessed."""
+    failures = []
+    for attempt in (1, 2):
+        res = vs.encode(wrapper, ["-c:v", "libx264", "-preset", "medium", "-crf", "14", "-r", "24000/1001",
+                                  str(clip)], name=f"stretch-preview-{cycle}", cancel=ctx.cancel)
+        if res.returncode == 0 and clip.is_file():
+            if failures:
+                ctx.report(None, f"stretch at cycle {cycle}: the first try failed, the second worked "
+                                 f"({failures[0][:300]})")
+            return
+        ctx.check_cancel()
+        failures.append(f"try {attempt}: {res.describe()} [{memory_note()}]")
+    raise ArtifactError(f"preview of the stretch at cycle {cycle} failed twice:\n" + "\n".join(failures))
+
+
 def preview_wrapper(nearest: Path, interp: Path, first: int, last: int) -> str:
     """VapourSynth script stacking the two treatments of output frames first..last, labelled."""
     return "\n".join([
@@ -30,7 +59,8 @@ def preview_wrapper(nearest: Path, interp: Path, first: int, last: int) -> str:
         "core = vs.core",
         "def _load(p):",
         "    ns = {}",
-        "    exec(compile(open(p, encoding='utf-8').read(), p, 'exec'), ns)",
+        "    with open(p, encoding='utf-8') as f:",
+        "        exec(compile(f.read(), p, 'exec'), ns)",
         "    vs.clear_outputs()",
         "    return ns['out']",
         f"a = core.std.Trim(_load({str(nearest)!r}), {first}, {last})",
@@ -109,10 +139,7 @@ class StretchPreview(Stage):
                 atomic_write_bytes(wrapper, preview_wrapper(scripts[hybrid.NEAREST], scripts[hybrid.INTERPOLATE],
                                                             *win).encode())
                 clip = folder / f"stretch-{s.first_cycle}.mkv"
-                res = vs.encode(wrapper, ["-c:v", "libx264", "-preset", "medium", "-crf", "14", "-r", "24000/1001",
-                                          str(clip)], name=f"stretch-preview-{s.first_cycle}", cancel=ctx.cancel)
-                if res.returncode != 0 or not clip.is_file():
-                    raise ArtifactError(f"preview of the stretch at cycle {s.first_cycle} failed ({res.describe()})")
+                encode_preview(ctx, vs, wrapper, clip, s.first_cycle)
                 previews.append({"first_cycle": s.first_cycle, "kind": s.kind, "seconds": round(s.seconds, 2),
                                  "start_s": round(win[0] * 1001 / 24000, 3), "end_s": round((win[1] + 1) * 1001 / 24000, 3),
                                  "clip": str(clip)})

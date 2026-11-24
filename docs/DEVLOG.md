@@ -1339,3 +1339,21 @@ names that no longer exist; required tools never found) and, if any, lists them 
   actual count except in those two proven cases.
 - Tests: the Flex state (already migrated → passes, no second copy), a partly blank master refused, and a step
   stripping its own project stays current on the next run (fails without the engine change). Full suite 612 passed.
+
+## CP57 — the frame reader gave vspipe an empty environment; stretch previews retry once (Legion bundle 2026-11-24 15:06)
+
+- S01E20 on the Legion now runs through stack, alignment, cadence, video-trim, frame fixes, LD audio, retime and audio
+  quality. Two picture steps failed:
+  - **video-quality**: "unsupported or missing y4m header … ''" 0.7 s after start. `VapourSynth.iter_planes` (the
+    only direct `Popen` of vspipe) passed `env=self.env()`, which is only *our additions* — on Windows/Linux an empty
+    dict — so vspipe started with no environment (no SYSTEMROOT/PATH) and its Python could not start. The pipelines
+    were fine (`run_pipeline` merges the additions into `os.environ`). Fixed: full environment, the runner's
+    priority/process-group flags, stdin closed, and a missing header now reports vspipe's exit code and stderr. Test
+    with a stand-in vspipe that writes nothing without the parent environment (fails without the fix).
+  - **stretch-preview at cycle 1220**: vspipe stopped during script evaluation with no message (exit -1; no "Script
+    evaluation done", which the 676/809 previews of the same two scripts printed), and ffmpeg reported "Header too
+    large" (its message for an input that ends before the header). Not reproduced on Linux with the same VapourSynth
+    R82 + plugin set and the same wrapper structure. Not guessed at: the preview is tried once more, and each failure
+    message now carries the free memory at that moment (psutil) so the next bundle can confirm or rule out memory.
+    The wrapper now closes the scripts it reads (the ResourceWarnings in the log).
+  Full suite 617 passed, 1 skipped.

@@ -118,12 +118,26 @@ class VapourSynth:
 
         formats = {"420p10": "yuv420p10le", "422p10": "yuv422p10le", "420": "yuv420p", "422": "yuv422p"}
         with tempfile.TemporaryFile() as err:
-            proc = subprocess.Popen(self.serve(script, first, last), stdout=subprocess.PIPE, stderr=err, env=self.env())
+            # The child gets this process's environment plus our additions: ``self.env()`` alone is only the
+            # additions, and an empty environment stops vspipe's Python before it writes a byte (Legion
+            # 2026-11-24 14:51: no SYSTEMROOT/PATH on Windows → "missing y4m header ''").
+            proc = subprocess.Popen(self.serve(script, first, last), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=err, env={**os.environ, **self.env()}, **process._popen_kwargs())
+
+            def why() -> str:
+                try:
+                    code = proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    code = None
+                err.seek(0)
+                tail = err.read()[-1500:].decode("utf-8", "replace").strip()
+                return f"vspipe exit {code}" + (f": {tail}" if tail else " with no message")
+
             try:
                 head = (proc.stdout.readline() or b"").decode("ascii", "replace")
                 tags = {t[0]: t[1:] for t in head.split()[1:] if t}
                 if not head.startswith("YUV4MPEG2") or "W" not in tags or "H" not in tags or tags.get("C") not in formats:
-                    raise ToolError(f"unsupported or missing y4m header from {script}: {head.strip()!r}")
+                    raise ToolError(f"unsupported or missing y4m header from {script}: {head.strip()!r} ({why()})")
                 width, height, pix = int(tags["W"]), int(tags["H"]), formats[tags["C"]]
                 per = frame_bytes(width, height, pix)
                 while True:
@@ -142,8 +156,7 @@ class VapourSynth:
                     if cancel is not None and cancel.is_set():
                         return
                 if proc.wait() != 0:
-                    err.seek(0)
-                    raise ToolError(f"vspipe failed reading {script}: {err.read()[-400:].decode('utf-8', 'replace')}")
+                    raise ToolError(f"vspipe failed reading {script}: {why()}")
             finally:
                 if proc.poll() is None:
                     proc.kill()
