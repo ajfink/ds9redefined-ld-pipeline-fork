@@ -253,6 +253,9 @@ class StepOutput:
     #: For stages with a ``review``: False means every automatic check passed and the result is
     #: committed without waiting for a human (e.g. an auto-accepted DVD alignment).
     needs_review: bool = True
+    #: Inputs the stage itself rewrote on purpose (e.g. a project upgraded to a newer form). The engine
+    #: re-fingerprints them after a successful run, so the step is not stale because of its own write.
+    rewrote_inputs: list[Path] = field(default_factory=list)
 
     def measure(self, key: str, value: Any, *, evidence: Iterable[Fingerprint | dict] = (),
                 note: str | None = None) -> None:

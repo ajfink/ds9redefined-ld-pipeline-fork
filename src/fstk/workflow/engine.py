@@ -576,6 +576,11 @@ class Engine:
                           issues=[f"declared output missing: {m}" for m in missing])
                 self._emit("step-failed", step=sid, issues=st["issues"])
                 return
+            if output.rewrote_inputs:
+                rewritten = {str(Path(p)) for p in output.rewrote_inputs}
+                inputs = [Fingerprint.of(fp["path"], scope=input_scope_for(Path(fp["path"]), plan.input_scope)).to_dict()
+                          if str(Path(fp["path"])) in rewritten else fp for fp in inputs]
+                st["inputs"] = inputs
             st.update(outputs=outputs, finished_utc=utc_now_iso(), issues=[],
                       report=str(output.report) if output.report else None)
             if stage.review and output.needs_review:

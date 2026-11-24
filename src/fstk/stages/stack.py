@@ -314,19 +314,28 @@ class StackRender(Stage):
             index = ff.packet_index(master, cancel=ctx.cancel)
             actual = len(index["pts"])
             positions = d["pad_positions"]
-            # the master holds the PADs: it has the pad-free count plus them, or (recorded before CP53) the
-            # recorded count itself
-            with_pads = {int(d["recorded_frames"]), int(d["recorded_frames"]) + len(positions)}
-            expected = d["frames"] if d["frames"] is not None else actual - len(positions)
-            if not issues and positions and actual in with_pads and actual - len(positions) == expected:
-                migration = self._drop_timecode_pads(ctx, ff, master, index, positions)
-                actual = migration["frames"]
-                render = Path(d["render_project"])        # it now records what the master holds
-                if render.is_file():
-                    keep_render = render.with_name(render.stem + "-with-timecode-pads.orcprj")
-                    if not keep_render.exists():
-                        atomic_write_bytes(keep_render, render.read_bytes())
-                atomic_write_bytes(render, lossless_render_project(stripped.text, master).encode())
+            expected = d["frames"]
+            if not issues and positions:
+                sizes = index["size"]
+                typical = sorted(sizes)[len(sizes) // 2] if sizes else 0
+                blank = [p < actual and sizes[p] <= typical / 5 for p in positions]
+                kept = master.with_name(master.stem + "-with-timecode-pads.mkv")
+                if all(blank) and actual in {int(d["recorded_frames"]), int(d["recorded_frames"]) + len(positions)}:
+                    migration = self._drop_timecode_pads(ctx, ff, master, index, positions)
+                    actual = migration["frames"]
+                elif not any(blank) and kept.is_file():
+                    # an earlier run already took them out (its render project was not updated before CP56)
+                    migration = {"count": len(positions), "frames": actual, "original_kept_as": kept.name,
+                                 "method": "already removed by an earlier run; render project brought up to date"}
+                else:
+                    issues.append(f"{master.name}: {sum(blank)} of the {len(positions)} time-code PAD positions its "
+                                  f"render project lists are blank frames; expected all (not yet removed) or none "
+                                  f"(removed earlier, {kept.name} kept). Not touched")
+                if migration:
+                    expected = migration["frames"]
+                    self._record_render_project(Path(d["render_project"]), stripped.text, master)
+            if expected is None:
+                expected = actual
             if actual != int(expected):
                 issues.append(f"existing {master.name} has {actual} frames; it should have {expected}")
             d["frames"] = int(expected)
@@ -368,11 +377,23 @@ class StackRender(Stage):
             "note": "artifact checks only; picture quality is judged in the delivery A/V check"})
         out = StepOutput(report=Path(d["report"]))
         out.data["evidence"] = evidence
+        if stripped.count:
+            out.rewrote_inputs.append(project)   # its own upgrade, not an outside change
         if evidence["ok"]:
             out.artifacts["stack_master"] = {"root": "prores",
                                              "name": master.relative_to(ctx.root("prores")).as_posix()}
             out.measure("stack.frames", int(d["frames"]))
         return out
+
+    @staticmethod
+    def _record_render_project(render: Path, stack_text: str, master: Path) -> None:
+        """The render project records what the master holds: after its PADs are gone it is rewritten without
+        them (the old one kept as ``…-with-timecode-pads.orcprj``)."""
+        if render.is_file():
+            keep = render.with_name(render.stem + "-with-timecode-pads.orcprj")
+            if not keep.exists():
+                atomic_write_bytes(keep, render.read_bytes())
+        atomic_write_bytes(render, lossless_render_project(stack_text, master).encode())
 
     def _drop_timecode_pads(self, ctx, ff, master: Path, index: dict, positions: list[int]) -> dict:
         """Take Orc's CLV time-code PAD frames out of a master rendered with them, without re-encoding.

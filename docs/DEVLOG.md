@@ -1322,3 +1322,20 @@ names that no longer exist; required tools never found) and, if any, lists them 
   and renders frames (`requirements.probe_qtgmc`, ~0.5 s); any failure is a FAIL that stops the plan at the start
   with the filter's own error. Verified: without zsmooth it reports exactly the Legion's error.
 - Full suite 609 passed, 1 skipped (the real-QTGMC probe test needs VapourSynth; run by hand in the venv: PASS); the requirements hash changes, so each machine's launcher updates its environment.
+
+## CP56 — a finished PAD migration is recognised; a step's own input rewrite is not "a change" (Flex bundle 2026-11-24 14:30)
+
+- S02E02 on the Flex: at 13:46 (CP53/54 code) stack-render removed the 83 PADs (83,229 → 83,146 frames, 6.5 min
+  stream copy, original kept). Two faults followed:
+  1. The step had rewritten its own input (the stack project, stripped) after the engine fingerprinted it, so the
+     next run (14:20) called it stale ("input changed") and ran it again — and marked cadence (32 min) stale too.
+  2. CP55 read the PAD positions from the render project, which CP53 had not updated, and tried to remove them a
+     second time. The blank-packet screen refused ("frame(s) [884, …] … are not blank packets; not touched"); the
+     master was untouched. CP55's frame check was also vacuous in this state (expected derived from actual).
+- Fixes: `StepOutput.rewrote_inputs` — inputs a stage deliberately upgraded are re-fingerprinted by the engine after
+  success (stack-render declares the stripped project). Stack-render decides from the master itself: every listed
+  position a blank packet → migrate; none blank and `…-with-timecode-pads.mkv` kept → already migrated, render
+  project brought up to date; anything else → refused with counts. Expected frames are no longer derived from the
+  actual count except in those two proven cases.
+- Tests: the Flex state (already migrated → passes, no second copy), a partly blank master refused, and a step
+  stripping its own project stays current on the next run (fails without the engine change). Full suite 612 passed.
