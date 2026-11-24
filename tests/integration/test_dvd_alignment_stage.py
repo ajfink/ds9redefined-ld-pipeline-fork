@@ -72,6 +72,13 @@ def test_alignment_is_measured_and_auto_accepted(env):
     assert set(path[:, 1]) == {-FRONT}
     meta = json.loads((prof.root("probe", EP) / (m.artifact("master_descriptors")["name"] + ".meta.json")).read_text())
     assert meta["frames"] == FRONT + CONTENT and meta["output_grid_fps"] == "30000/1001"
+    # the picture spot checks agree and the sheet exists as evidence
+    rep = json.loads(next(prof.root("reports", EP).glob("dvd-alignment-*.json")).read_text())
+    assert rep["picture_check"]["verdict"] == "LOOKS GOOD", rep["picture_check"]
+    assert rep["picture_check"]["checked"] >= 3 and all(p["verdict"] == "agrees" for p in rep["picture_check"]["points"])
+    sheet = prof.root("reports", EP) / rep["picture_sheet"]
+    assert sheet.is_file() and sheet.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert m.artifact("alignment_sheet")["name"] == rep["picture_sheet"]
     # a second run reuses both descriptor sets (same sources) and agrees
     st = run(prof, "a2")["steps"]["align"]
     assert st["status"] == "passed" and "master reused, dvd reused" in st["plan_summary"]
@@ -103,3 +110,6 @@ def test_ld_only_material_mid_programme_is_held_for_review(env):
     assert not m.is_set("video.dvd_alignment")                             # held until approved
     rep = json.loads(next(prof.root("reports", EP).glob("dvd-alignment-*.json")).read_text())
     assert rep["decision"] == "NEEDS-REVIEW" and any("no DVD match" in r for r in rep["reasons"]), rep["reasons"]
+    assert rep["picture_check"]["checked"] >= 3 and rep["picture_sheet"].endswith("-sheet.png")
+    assert (prof.root("reports", EP) / rep["picture_sheet"]).is_file()
+    assert "Automatic picture check" in rep["review_summary"] and "numbers held it for review" in rep["review_summary"]

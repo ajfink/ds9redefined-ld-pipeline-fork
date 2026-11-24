@@ -852,6 +852,14 @@ class Services:
         store.drop_episode(str(ep))                    # its waiting queue items would only fail now
         return removed
 
+    def job_plan_path(self, episode: str | EpisodeId, job: str) -> Path | None:
+        """Where the plan a job ran is saved (what ``run_plan`` resumes from), or None."""
+        for path in (self.workspace(episode).job_dir(job) / "plan.json",
+                     self.workspace(episode).state_dir / "plans" / f"{job}.plan.json"):
+            if path.is_file():
+                return path
+        return None
+
     def job_plan(self, episode: str | EpisodeId, job: str) -> dict[str, Any] | None:
         """The plan a job ran (copy saved beside its state), or None."""
         for path in (self.workspace(episode).job_dir(job) / "plan.json",

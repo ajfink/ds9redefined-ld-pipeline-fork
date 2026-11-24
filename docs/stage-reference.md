@@ -60,7 +60,7 @@ Sequential 48×36 descriptors of the stack master and DVD; continuity-constraine
 - human review: dvd-alignment (only when an automatic check fails)
 - requires: value:mode.dvd_reference_available==True, artifact:dvd, artifact:stack_master
 - writes: video.dvd_alignment, video.dvd_origin_master_frame
-- artifacts: master_descriptors, dvd_descriptors, align_npy, alignment_report, alignment_summary
+- artifacts: master_descriptors, dvd_descriptors, align_npy, alignment_report, alignment_summary, alignment_sheet (the picture sheet)
 
 ## `dvd-free-audio` — LD audio without a DVD (duration/PAD rate + capture-pad origin)
 

@@ -24,11 +24,12 @@ from pathlib import Path
 
 import numpy as np
 
-from fstk.core.errors import ArtifactError, GateError
+from fstk.core.errors import ArtifactError, FstkError, GateError
 from fstk.core.fsio import atomic_write_json, read_json
 from fstk.core.hashing import SCOPE_HEAD_TAIL, Fingerprint
 from fstk.core.timeutil import utc_now_iso, utc_stamp
 from fstk.media import alignment as al
+from fstk.media import alignment_visual as vis
 
 from .base import ArtifactExists, Stage, StepOutput, StepPlan, ValueIs, register
 
@@ -72,7 +73,7 @@ class DvdAlignment(Stage):
     requires = (ValueIs("mode.dvd_reference_available", True), ArtifactExists("dvd"), ArtifactExists("stack_master"))
     writes = ("video.dvd_alignment", "video.dvd_origin_master_frame")
     writes_artifacts = ("master_descriptors", "dvd_descriptors", "align_npy", "alignment_report",
-                        "alignment_summary")
+                        "alignment_summary", "alignment_sheet")
     resource = "compute"
     review = "dvd-alignment"
     review_when = "only when an automatic check fails"
@@ -104,7 +105,8 @@ class DvdAlignment(Stage):
                 outputs += [path, path.with_name(path.name + ".meta.json")]
         names = {"npy": probe / f"{code}-dvd-alignment-{run}.npy",
                  "tsv": probe / f"{code}-dvd-alignment-{run}.tsv",
-                 "json": ctx.root("reports") / f"dvd-alignment-{run}.json"}
+                 "json": ctx.root("reports") / f"dvd-alignment-{run}.json",
+                 "png": ctx.root("reports") / f"dvd-alignment-{run}-sheet.png"}
         outputs += list(names.values())
         inputs = [master, dvd] + [Path(d["path"]) for d in desc.values() if d["reused"]]
         tuned = {k: params[k] for k in TUNABLE if k in params}
@@ -171,12 +173,15 @@ class DvdAlignment(Stage):
                             "" if act is None else f"{float(act.offset(float(i))):.3f}",
                             "" if np.isnan(n) else f"{n:.6f}", "" if np.isnan(g) else f"{g:.6f}", int(fl),
                             "matched" if m else "unmatched"))
+        fit = self._picture_check(ctx, d, res, len(master), len(dvd))
         summary = res.summary()
         names = {role: Path(spec["path"]).name for role, spec in d["desc"].items()}
         report = {"schema": REPORT_SCHEMA, "episode": str(ctx.episode), "created_utc": utc_now_iso(),
                   "master": Path(d["master"]).name, "dvd": Path(d["dvd"]).name, "descriptors": names,
                   "descriptor_frames": {"master": len(master), "dvd": len(dvd)},
-                  "alignment_path": Path(d["npy"]).name, "diagnostics": Path(d["tsv"]).name, **summary}
+                  "alignment_path": Path(d["npy"]).name, "diagnostics": Path(d["tsv"]).name, **summary,
+                  "picture_check": fit, "picture_sheet": Path(d["png"]).name,
+                  "review_summary": self._review_summary(res, fit)}
         atomic_write_json(d["json"], report)
         out = StepOutput(report=Path(d["json"]))
         record = {k: summary[k] for k in ("decision", "reasons", "acts", "breaks", "common_slope_ppm", "consistency",
@@ -194,9 +199,53 @@ class DvdAlignment(Stage):
         out.artifacts["align_npy"] = {"root": "probe", "name": Path(d["npy"]).name}
         out.artifacts["alignment_report"] = {"root": "probe", "name": Path(d["tsv"]).name}
         out.artifacts["alignment_summary"] = {"root": "reports", "name": Path(d["json"]).name}
+        out.artifacts["alignment_sheet"] = {"root": "reports", "name": Path(d["png"]).name}
         out.needs_review = res.decision != "AUTO-ACCEPTED"
         out.data["decision"] = res.decision
         return out
+
+    def _picture_check(self, ctx, d: dict, res, master_frames: int, dvd_frames: int) -> dict:
+        """Spot-check the alignment on real pictures and write the picture sheet (never fails the stage: the
+        sheet is evidence for a person, so a problem here is reported in the sheet and the report instead)."""
+        png = Path(d["png"])
+        try:
+            spots = vis.choose_spots(res, dvd_frames)
+            if not spots:
+                raise ArtifactError("no textured, matched picture to spot-check")
+            ctx.report(0.95, f"spot-checking {len(spots)} aligned pictures")
+            ff = ctx.tool("ffmpeg")
+            want_m, want_d = vis.wanted_indices(spots)
+            got_m = ff.frames_by_index(d["master"], want_m, *vis.SHOT, cancel=ctx.cancel, frame_count=master_frames)
+            ctx.check_cancel()
+            got_d = ff.frames_by_index(d["dvd"], want_d, *vis.SHOT, cancel=ctx.cancel, frame_count=dvd_frames)
+            for sp in spots:
+                if sp.master_frame in got_m:
+                    vis.judge(sp, got_m[sp.master_frame], got_d)
+                else:
+                    sp.verdict = vis.UNSURE
+            result = vis.assess(spots)
+            vis.render_sheet(spots, got_m, got_d, png, title=f"DVD alignment spot checks — {ctx.episode}",
+                             summary=result["text"])
+            return {**result, "points": [sp.to_dict() for sp in spots]}
+        except (FstkError, OSError, ValueError, KeyError) as exc:
+            if ctx.cancel.is_set():
+                raise
+            why = f"picture spot checks could not be made: {exc}"
+            vis.render_note(png, why)
+            return {"verdict": "NOT CHECKED", "text": why, "checked": 0, "agree": 0, "points": [],
+                    "recommendation": "use the numeric reasons below"}
+
+    @staticmethod
+    def _review_summary(res, fit: dict) -> str:
+        lines = [f"Automatic picture check: {fit['verdict']}. {fit['text']}"]
+        if res.reasons:
+            lines.append("Why the numbers held it for review: " + "; ".join(res.reasons) + ".")
+        else:
+            lines.append("All of the numeric checks passed too.")
+        lines.append("Open the picture sheet (evidence): each row is a LaserDisc frame, the DVD frame the alignment "
+                     "pairs with it, and where they differ. Approve if the pairs show the same moment; reject if "
+                     "they are clearly out of step.")
+        return "\n".join(lines)
 
     def verify(self, ctx, plan, output):
         d, issues = plan.data, []

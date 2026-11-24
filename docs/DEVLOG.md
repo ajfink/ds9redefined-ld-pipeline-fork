@@ -1106,3 +1106,22 @@ names that no longer exist; required tools never found) and, if any, lists them 
   unreachable from the app. New `config.profile.change_shared_root` (validated like the profile: absolute, not the data
   folder; reverts on error; offline shares accepted) and a "Shared workspace (optional)" row in `ui/folders.py` with
   Browse… and a tooltip. Blank turns it off. Tests: `test_folders.py` (+2).
+
+## CP47 — DVD-alignment review is a picture, not a spreadsheet; Approve carries on by itself (owner)
+
+- Owner: the review stage was a table of numbers, meaningless for a visual review; and **Approve** did not resume the
+  job (seen on the Mac). 
+- New `media/alignment_visual.py`: after the alignment the stage re-checks real pictures at up to 14 spots (the flagged
+  stretches first, then each act's quarters/middle, first and last matched picture). At each spot the LD frame is
+  compared (160×120 grey, normalised correlation) with the DVD frames ±3 around the predicted one: *agrees* (best is
+  the predicted frame ±1 and alike ≥0.80), *off by frames*, or *no similar picture* (<0.60). Frames come from
+  `FFmpeg.frames_by_index` (sequential `select=eq(n,…)` chunks, never seeking). The result is `picture_check`,
+  `picture_sheet` and a plain-language `review_summary` in the report, plus a PNG sheet (LD | DVD | difference, per
+  spot, verdict-coloured) declared as output + artifact `alignment_sheet`. Best-effort: a failure leaves a note PNG and
+  the numeric decision stands (cancel still propagates).
+- Reviews tab: the summary is shown first, the sheet inline in a scroll area (PNG listed first among the evidence).
+- Approve: `MainWindow.decide` calls `continue_job` after APPROVED, re-running the job's plan so the engine commits the
+  approval and carries on; the same for the delivery-decision dialog (`on_delivery_decided`). Qt code path only, so the
+  same on Windows, macOS and Linux. Tests: `test_ui.py` (approve resumes and finishes), `test_alignment_visual.py`,
+  integration alignment tests assert the sheet and summary.
+- **Unverified:** thresholds on real LD/DVD footage (synthetic only).

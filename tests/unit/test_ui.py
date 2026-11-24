@@ -318,3 +318,47 @@ def test_reencode_plan_runs_only_encode_onwards(services):
             m.set_artifact("padfixed_video", root="out", name="S01E20-23.976-padfixed-video.mkv")
     plan = json.loads(services.write_reencode_plan("S01E20").read_text())
     assert [s["stage"] for s in plan["steps"]] == ["encode-final", "remux", "qc-report", "episode-report"]
+
+
+@pytest.mark.gui
+def test_approving_a_review_carries_the_job_on(services, tmp_path, qtbot, monkeypatch):
+    from PySide6.QtWidgets import QInputDialog
+
+    from fstk.ui.app import MainWindow
+
+    services.run_plan(review_plan(tmp_path), actor="op")                     # stops at the review
+    w = MainWindow(services, actor="op")
+    qtbot.addWidget(w)
+    w.show_episode("S01E20")
+    assert w.reviews.count() == 1
+    w.reviews.setCurrentRow(0)
+    monkeypatch.setattr(QInputDialog, "getMultiLineText", staticmethod(lambda *a, **k: ("looked fine", True)))
+    started = []
+    monkeypatch.setattr(w, "start_plan", lambda path: started.append(path))
+    w.decide("REJECTED")
+    assert started == []                                                      # a rejection never restarts anything
+    w.reviews.setCurrentRow(0)                                                # the refresh cleared the selection
+    w.decide("APPROVED")
+    assert len(started) == 1 and started[0].endswith("plan.json")             # the saved plan of the job
+    started.clear()
+    w.thread = object()                                                       # a run is going: it picks the approval up
+    assert w.continue_job("rv") is False and started == []
+    w.thread = None
+
+
+@pytest.mark.gui
+def test_approval_really_resumes_and_finishes_the_job(services, tmp_path, qtbot, monkeypatch):
+    from PySide6.QtWidgets import QInputDialog
+
+    from fstk.ui.app import MainWindow
+
+    services.run_plan(review_plan(tmp_path), actor="op")
+    w = MainWindow(services, actor="op")
+    qtbot.addWidget(w)
+    w.show_episode("S01E20")
+    w.reviews.setCurrentRow(0)
+    monkeypatch.setattr(QInputDialog, "getMultiLineText", staticmethod(lambda *a, **k: ("looked fine", True)))
+    w.decide("APPROVED")
+    qtbot.waitUntil(lambda: w.thread is None, timeout=20000)
+    assert services.job_state("S01E20", "rv")["steps"]["r"]["status"] == "passed"
+    assert services.pending_reviews("S01E20") == []

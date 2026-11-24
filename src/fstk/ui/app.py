@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QSystemTrayIcon,
     QTableWidget,
@@ -143,6 +144,12 @@ class MainWindow(QMainWindow):
         self.reviews.currentRowChanged.connect(self.show_review)
         self.review_detail = QPlainTextEdit()
         self.review_detail.setReadOnly(True)
+        self.review_image = QLabel("")
+        self.review_image.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.review_scroll = QScrollArea()
+        self.review_scroll.setWidget(self.review_image)
+        self.review_scroll.setWidgetResizable(False)
+        self.review_scroll.setVisible(False)
         self.open_evidence = QPushButton("Open evidence")
         self.open_evidence.clicked.connect(self.open_selected_evidence)
         self.approve = QPushButton("Approve…")
@@ -155,7 +162,8 @@ class MainWindow(QMainWindow):
         review_page = QWidget()
         rl = QVBoxLayout(review_page)
         rl.addWidget(self.reviews, 1)
-        rl.addWidget(self.review_detail, 1)
+        rl.addWidget(self.review_scroll, 4)
+        rl.addWidget(self.review_detail, 2)
         rl.addLayout(review_buttons)
 
         self.progress_panel = ProgressPanel()
@@ -364,11 +372,44 @@ class MainWindow(QMainWindow):
             b.setEnabled(has)
         if not has:
             self.review_detail.setPlainText("No step is waiting for review.")
+            self._show_picture(None)
             return
         p = self._pending[row]
+        summary = self._review_summary(p.evidence)
+        self._show_picture(next((e for e in p.evidence if e.lower().endswith(".png")), None))
         self.review_detail.setPlainText(
-            f"Review: {p.review}\nStage: {p.stage}\nJob/step: {p.job}/{p.step}\n\nEvidence you are deciding on:\n"
-            + "\n".join(f"  {e}" for e in p.evidence) + f"\n\n{p.detail}")
+            (f"{summary}\n\n" if summary else "")
+            + f"Review: {p.review}\nStage: {p.stage}\nJob/step: {p.job}/{p.step}\n\nEvidence you are deciding on:\n"
+            + "\n".join(f"  {e}" for e in sorted(p.evidence, key=lambda e: not e.lower().endswith(".png")))
+            + f"\n\n{p.detail}")
+
+    @staticmethod
+    def _review_summary(evidence) -> str:
+        """The plain-language summary a stage wrote into its report (``review_summary``), if any."""
+        import json
+
+        for e in evidence:
+            if e.lower().endswith(".json"):
+                try:
+                    text = json.loads(Path(e).read_text(encoding="utf-8")).get("review_summary")
+                except (OSError, ValueError, AttributeError):
+                    continue
+                if isinstance(text, str) and text.strip():
+                    return text.strip()
+        return ""
+
+    def _show_picture(self, path: str | None) -> None:
+        """Show a review's picture sheet in the panel (scrollable, full size); hide the area when there is none."""
+        from PySide6.QtGui import QPixmap
+
+        pix = QPixmap(path) if path else QPixmap()
+        if pix.isNull():
+            self.review_image.clear()
+            self.review_scroll.setVisible(False)
+            return
+        self.review_image.setPixmap(pix)
+        self.review_image.resize(pix.size())
+        self.review_scroll.setVisible(True)
 
     def _selected_review(self):
         row = self.reviews.currentRow()
@@ -397,6 +438,46 @@ class MainWindow(QMainWindow):
             return
         self.append_log(f"{decision} recorded: {path}")
         self.show_episode(self.episode)
+        if decision == "APPROVED":
+            self.continue_job(p.job)
+
+    def continue_job(self, job: str) -> bool:
+        """Carry on a job that was waiting for a review that has just been approved.
+
+        The run that stopped at the review has ended, so the saved plan is run again: finished steps are kept,
+        the approved step is committed and the rest follows. Does nothing while a run is already going (it picks
+        the approval up by itself) or when the saved plan is gone. Returns True when a run was started."""
+        if not self.episode or self.thread is not None:
+            return False
+        path = self.services.job_plan_path(self.episode, job)
+        if path is None:
+            self.append_log(f"approved, but the plan for job {job} is not saved; use Run plan… to continue")
+            return False
+        self.append_log(f"continuing job {job} after the approval")
+        self.start_plan(str(path))
+        return True
+
+    def on_delivery_decided(self, path: str) -> None:
+        import json
+
+        self.append_log(f"delivery decision recorded: {path}")
+        if self.episode:
+            self.show_episode(self.episode)
+        try:
+            approved = json.loads(Path(path).read_text(encoding="utf-8")).get("decision") == "APPROVED"
+        except (OSError, ValueError):
+            approved = False
+        if approved:
+            self.continue_after_delivery_decision()
+
+    def continue_after_delivery_decision(self) -> None:
+        """The QC window recorded an approval: continue the job whose delivery review it answered."""
+        if not self.episode:
+            return
+        for pending in self.services.pending_reviews(self.episode):
+            if pending.review == "delivery":
+                self.continue_job(pending.job)
+                return
 
     # ---------------------------------------------------------------- review windows
     def open_dvd(self) -> None:
@@ -429,8 +510,7 @@ class MainWindow(QMainWindow):
             return None
         dlg = DeliveryReview(self.services, self.episode, actor=self.actor, parent=self)
         dlg.plan_ready.connect(self.start_plan)
-        dlg.decided.connect(lambda path: (self.append_log(f"delivery decision recorded: {path}"),
-                                          self.show_episode(self.episode)))
+        dlg.decided.connect(self.on_delivery_decided)
         dlg.open()
         return dlg
 
@@ -647,6 +727,7 @@ class MainWindow(QMainWindow):
             "jobs": "The plans that have run, or are running, for this episode, step by step, with their status "
                     "and any issues.",
             "reviews": "Checks waiting for a person to look at the evidence. Select one to read what was measured.",
+            "review_scroll": "The review's picture sheet (a stage's evidence image), shown at full size; scroll to see every row.",
             "review_detail": "What was measured, and what to look for before approving or rejecting.",
             "open_evidence": "Open the evidence files for the selected review (images, videos, reports).",
             "approve": "Record that you checked the evidence and it is right. Your name and a note are stored with "

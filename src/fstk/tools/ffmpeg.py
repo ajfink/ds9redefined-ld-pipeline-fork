@@ -332,6 +332,32 @@ class FFmpeg:
             raise ArtifactError(f"thumbnail decode of {path} failed or was truncated: {res.describe()}")
         return np.frombuffer(data, np.uint8).reshape(-1, size)
 
+    def frames_by_index(self, path: str | Path, indices: list[int], width: int, height: int, *, cancel=None,
+                        frame_count: int | None = None):
+        """Full-colour frames of v:0 by exact index, decoded sequentially (never seeked), scaled to
+        ``width``×``height`` (area scaling, like the descriptors). Returns ``{index: uint8[h, w, 3] RGB}``.
+
+        Indices at or past ``frame_count`` (when given) are skipped. One ``select=`` pass per 32 terms.
+        """
+        import numpy as np
+
+        wanted = sorted({int(i) for i in indices if i >= 0 and (frame_count is None or i < frame_count)})
+        out: dict[int, Any] = {}
+        size = width * height * 3
+        for group, expr in frame_selection_chunks(wanted):
+            res = process.run(
+                [self.ffmpeg, "-hide_banner", "-nostdin", "-v", "error", "-i", str(path), "-map", "0:v:0",
+                 "-vf", f"select='{expr}',scale={width}:{height}:flags=area,format=rgb24", "-fps_mode", "passthrough",
+                 "-frames:v", str(len(group)), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                capture_stdout=True, log_path=self._log("frames-by-index"), cancel=cancel)
+            data = res.stdout or b""
+            if res.returncode != 0 or len(data) != size * len(group):
+                raise ArtifactError(f"frame extraction from {path} failed or was incomplete "
+                                    f"({len(data) // size}/{len(group)} frames): {res.describe()}")
+            frames = np.frombuffer(data, np.uint8).reshape(len(group), height, width, 3)
+            out.update({idx: frames[k] for k, idx in enumerate(group)})
+        return out
+
     def pcm(self, path: str | Path, selector: str, sample_rate: int, *, start_s: float | None = None,
             duration_s: float | None = None, cancel=None):
         """Mono float32 PCM of one audio stream.
