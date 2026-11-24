@@ -146,3 +146,67 @@ def test_video_stretch_gets_a_hybrid_plan_and_plate_test(env, monkeypatch, plate
     seg = next(s for s in doc["segments"] if s["kind"] == "video-interlaced")
     assert seg["source_frames"][0] == 1500 and seg["plate"] is plate and seg["active"] is (not plate)
     assert m.get("video.hybrid_seconds") == (0.0 if plate else pytest.approx(10.01, abs=0.01))
+
+
+class FakeFF:
+    """Frames for the cadence pictures: textured, with combing in the lower right of odd frames."""
+
+    class _Probe:
+        def __init__(self):
+            self.raw = {"width": 320, "height": 240}
+
+        def only(self, _kind):
+            return self
+
+    def probe(self, _path):
+        return self._Probe()
+
+    def frames_by_index(self, path, indices, width, height, *, cancel=None, frame_count=None):
+        import numpy as np
+
+        out = {}
+        for i in indices:
+            rng = np.random.default_rng(i // 2)
+            f = np.kron(rng.integers(60, 200, (24, 32, 1), dtype=np.uint8), np.ones((10, 10, 3), np.uint8))
+            f[120:, 160:][::2] = 255                       # field "teeth"
+            out[i] = f
+        return out
+
+
+def test_held_cadence_shows_pictures_of_the_flagged_places(env, monkeypatch):
+    import numpy as np
+    from PIL import Image
+
+    from fstk.media import cadence_visual as cvis
+    from fstk.stages import cadence
+
+    monkeypatch.setitem(cadence.AUTO_ACCEPT, "min_period5_pct", 101.0)
+    prof, ws = env
+    plan = {"schema": PLAN_SCHEMA, "episode": str(EP), "job": "cv",
+            "steps": [{"id": "cad", "stage": "cadence-evidence", "params": {}, "after": []}]}
+    state = Engine(prof, plan, actor="op", tool_overrides={"vapoursynth": FakeVS(), "ffmpeg": FakeFF()}).run()
+    assert state["steps"]["cad"]["status"] == "awaiting-review"
+    report = json.loads((prof.root("reports", EP) / "cadence.json").read_text())
+    view = report["review_view"]
+    assert view["verdict"] == "CHECK THE FLAGGED PLACES" and "film pattern" in view["headline"]
+    assert view["spots"] and all(len(s["views"]) == 3 for s in view["spots"])
+    assert any(s["tone"] == "good" for s in view["spots"]) and view["timeline"]
+    sheet = Image.open(prof.root("reports", EP) / view["sheet"])
+    x, y, w, h = view["spots"][0]["views"][0]["rect"]
+    assert sheet.size[0] >= x + w and sheet.size[1] >= y + h
+    crop = np.asarray(sheet.crop((x, y, x + w, y + h)).convert("L"), np.float32)
+    assert np.abs(np.diff(crop, axis=0)).mean() > 20        # the close-up is of the combed corner
+    assert cvis.worst_crop(FakeFF().frames_by_index("", [1], 0, 0)[1]) == (128, 96)    # 16-px search grid, window kept inside the frame
+
+
+def test_accepted_cadence_writes_a_plain_note_and_no_spots(env, monkeypatch):
+    from fstk.stages import cadence
+
+    for k, v in {"min_period5_pct": 0.0, "max_unmatched": 10**6, "max_repair_pct": 100.0, "max_inserts": 10**6}.items():
+        monkeypatch.setitem(cadence.AUTO_ACCEPT, k, v)
+    prof, _ws = env
+    state = run(env, "c-ok", FakeVS())
+    assert state["steps"]["cad"]["status"] == "passed"
+    report = json.loads((prof.root("reports", EP) / "cadence.json").read_text())
+    assert report["review_view"]["verdict"] == "LOOKS GOOD"
+    assert report["review_view"]["spots"] == [] and (prof.root("reports", EP) / "cadence-sheet.png").is_file()

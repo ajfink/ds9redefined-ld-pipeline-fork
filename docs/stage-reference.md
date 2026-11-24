@@ -40,7 +40,7 @@ Full-side VapourSynth TFM log, cadence analysis, and repair ranges; accepted aut
 - human review: cadence-review (only when a cadence measurement is outside the v38-calibrated ranges)
 - requires: value:stack.frames, value:audio.pad_frames, artifact:stack_master
 - writes: video.tfm_period5_pct, video.tfm_unmatched, video.tfm_combed_count, video.tfm_combed_spans, video.inserts, video.repair_frames, video.repair_pct, video.hybrid_seconds
-- artifacts: tfm_log, di_map, cadence_summary, hybrid_plan
+- artifacts: tfm_log, di_map, cadence_summary, hybrid_plan, cadence_sheet
 
 ## `capture-inventory` — Inventory captures
 

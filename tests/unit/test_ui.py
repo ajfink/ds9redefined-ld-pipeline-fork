@@ -334,16 +334,38 @@ def test_approving_a_review_carries_the_job_on(services, tmp_path, qtbot, monkey
     w.reviews.setCurrentRow(0)
     monkeypatch.setattr(QInputDialog, "getMultiLineText", staticmethod(lambda *a, **k: ("looked fine", True)))
     started = []
-    monkeypatch.setattr(w, "start_plan", lambda path: started.append(path))
+    monkeypatch.setattr(w, "start_plan", lambda path: started.append(path) or True)
     w.decide("REJECTED")
     assert started == []                                                      # a rejection never restarts anything
     w.reviews.setCurrentRow(0)                                                # the refresh cleared the selection
     w.decide("APPROVED")
     assert len(started) == 1 and started[0].endswith("plan.json")             # the saved plan of the job
+    assert "continuing" in w.banner.text() and not w.banner.isHidden()             # the main window says so
     started.clear()
-    w.thread = object()                                                       # a run is going: it picks the approval up
-    assert w.continue_job("rv") is False and started == []
+    w._running_plan = str(tmp_path / "plans" / "rv" / "plan.json")             # this job is running: it picks it up
+    monkeypatch.setattr(w.services, "job_plan_path", lambda ep, job: tmp_path / "plans" / job / "plan.json")
+    w.thread = object()
+    assert w.continue_job("rv") is True and started == [] and "picks it up" in w.banner.text()
     w.thread = None
+
+
+@pytest.mark.gui
+def test_work_started_during_another_run_is_queued_not_dropped(services, tmp_path, qtbot):
+    from fstk.ui.app import MainWindow
+
+    w = MainWindow(services, actor="op")
+    qtbot.addWidget(w)
+    w.show_episode("S01E20")
+    w.thread, w._running_plan = object(), "other/plan.json"                  # another job is running
+    assert w.start_plan(str(review_plan(tmp_path))) is False
+    assert w._queued_plans == [str(review_plan(tmp_path))]
+    w.thread, w._running_plan = None, None
+    w._done()                                                                 # the other run ends …
+    qtbot.waitUntil(lambda: w.thread is None and not w._queued_plans and "rv" in services.jobs("S01E20"),
+                    timeout=20000)                                            # … and the queued one ran
+    assert services.job_state("S01E20", "rv")["steps"]["r"]["status"] == "awaiting-review"
+    qtbot.waitUntil(lambda: "Waiting for you" in w.banner.text(), timeout=5000)
+    assert w.tabs.currentWidget() is w.review_page and w.reviews.currentRow() == 0
 
 
 @pytest.mark.gui
@@ -380,7 +402,7 @@ def test_delivery_window_approval_carries_the_job_on(services, tmp_path, qtbot, 
     assert waiting
     monkeypatch.setattr(services, "pending_reviews", lambda episode: waiting)
     started = []
-    monkeypatch.setattr(w, "start_plan", lambda path: started.append(path))
+    monkeypatch.setattr(w, "start_plan", lambda path: started.append(path) or True)
     for decision, expect in (("REJECTED", 0), ("APPROVED", 1)):
         f = tmp_path / f"{decision}.json"
         f.write_text(json.dumps({"decision": decision}), encoding="utf-8")
@@ -401,3 +423,37 @@ def test_only_the_newest_job_s_review_is_offered(services, tmp_path):
     assert {j for j in services.jobs("S01E20")} >= {"rv", "rw"}
     pending = services.pending_reviews("S01E20")
     assert [p.job for p in pending] == ["rw"]
+
+
+@pytest.mark.gui
+def test_reviews_tab_shows_the_stage_pictures_not_a_file_list(services, tmp_path, qtbot):
+    from PIL import Image
+
+    from fstk.ui.app import MainWindow
+    from fstk.ui.services import PendingReview
+
+    sheet = tmp_path / "sheet.png"
+    Image.new("RGB", (500, 400), (40, 90, 160)).save(sheet)
+    report = tmp_path / "report.json"
+    report.write_text(json.dumps({"review_summary": "two spots", "review_view": {
+        "verdict": "LOOKS GOOD", "tone": "good", "headline": "All 2 picture spot checks agree.", "duration_s": 100.0,
+        "timeline": [{"start_s": 0, "end_s": 100, "tone": "info", "label": "act 1"}], "sheet": "sheet.png",
+        "how_to_look": "Press Blink.",
+        "spots": [{"time_s": 10, "label": "act 1: start", "verdict": "agrees", "tone": "good",
+                   "views": [{"name": "LaserDisc", "rect": [0, 0, 240, 180]}, {"name": "DVD", "rect": [250, 0, 240, 180]}]},
+                  {"time_s": 60, "label": "act 1: middle", "verdict": "agrees", "tone": "good",
+                   "views": [{"name": "LaserDisc", "rect": [0, 200, 240, 180]}, {"name": "DVD", "rect": [250, 200, 240, 180]}]}]}}))
+    w = MainWindow(services, actor="op")
+    qtbot.addWidget(w)
+    w._pending = [PendingReview("j", "dvd-alignment", "dvd-alignment", "dvd-alignment", (str(report), str(sheet)), "")]
+    w.show_review(0)
+    assert "LOOKS GOOD" in w.review_headline.text() and "DVD alignment" in w.review_headline.text()
+    assert len(w.review_spots.spots) == 2 and w.review_spots.thumbs.count() == 2
+    assert [t["time_s"] for t in w.review_timeline.ticks] == [10, 60] and not w.review_timeline.isHidden()
+    assert w.review_detail.isHidden() and w.review_scroll.isHidden()        # no file list, no raw sheet
+    w.review_timeline.tick_clicked.emit(1)                                    # clicking the marker shows that spot
+    assert w.review_spots.index == 1 and w.review_timeline.selected_key == 1
+    w.review_spots.blink.setChecked(True)
+    view = w.review_spots.view
+    w.review_spots._flip()
+    assert w.review_spots.view != view

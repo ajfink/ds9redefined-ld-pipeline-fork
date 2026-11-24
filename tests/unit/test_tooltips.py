@@ -82,9 +82,9 @@ def test_delivery_review_has_tooltips_including_row_widgets(tmp_path, qtbot):
     dlg = reviews.DeliveryReview(Services(prof), "DS9:S01E20", actor="op")
     qtbot.addWidget(dlg)
     dlg._add_fix_from_moment(dlg.moments.item(0))
-    assert dlg.stretches.rowCount() == 1
+    assert len(dlg.stretch_cards) == 1
     _none_missing(dlg, "delivery review")
-    assert dlg.fix_table.cellWidget(0, 2).toolTip() and dlg.stretches.cellWidget(0, 4).toolTip()
+    assert dlg.fix_table.cellWidget(0, 2).toolTip() and dlg.stretch_cards[0].toolTip()
 
 
 def test_override_flag_shows_only_for_an_episode_with_its_own_settings(services, qtbot):  # noqa: F811

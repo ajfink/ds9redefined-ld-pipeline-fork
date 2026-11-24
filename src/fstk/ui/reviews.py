@@ -11,9 +11,10 @@ test runs without an audio/video backend.
 """
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QFont, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
@@ -40,6 +41,7 @@ from PySide6.QtWidgets import (
 
 from fstk.core.errors import FstkError
 from fstk.tools.orc_efm import PARETO_METRICS
+from fstk.ui.visual import DetailsToggle, TimelineBar, headline_html
 
 STATUS_COLOURS = {"PASS": "#2e7d32", "WARN": "#ef6c00", "FAIL": "#c62828", "ERROR": "#6a1b9a", "SKIP": "#616161"}
 EFM_COLUMNS = (("capture", "Capture"), ("assessment", "Assessment"), ("post_c2_data_loss_pct", "Post-C2 %"),
@@ -169,9 +171,21 @@ class EfmCaptureReview(QDialog):
         super().__init__(parent)
         self.services, self.episode = services, episode
         self.setWindowTitle(f"EFM capture review — {episode}")
-        self.resize(1100, 620)
+        self.resize(1100, 720)
         self.summary = QLabel()
         self.summary.setWordWrap(True)
+        self.headline = QLabel("")
+        self.headline.setWordWrap(True)
+        self.headline.setTextFormat(Qt.TextFormat.RichText)
+        self.strips_box = QWidget()
+        self.strips_layout = QVBoxLayout(self.strips_box)
+        self.strips_layout.setContentsMargins(0, 0, 0, 0)
+        self.strips_scroll = QScrollArea()
+        self.strips_scroll.setWidget(self.strips_box)
+        self.strips_scroll.setWidgetResizable(True)
+        self.strips: dict[str, tuple] = {}
+        self._overviews: dict[str, dict] = {}
+        self._waiting = 0
         self.table = QTableWidget(0, len(EFM_COLUMNS) + 1)
         self.table.setHorizontalHeaderLabels([h for _, h in EFM_COLUMNS] + ["Pad frames"])
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -204,6 +218,9 @@ class EfmCaptureReview(QDialog):
 
         apply_tips(self, {
             "table": "One row per EFM decode with its quality measures. Select a row to audition that capture.",
+            "headline": "Which capture the app would use, and why, in plain words.",
+            "strips_scroll": "One strip per capture: its sound over the whole disc side. Red marks are places where "
+                             "the sound suddenly drops out. Click anywhere on a strip to listen to that capture there.",
             "jump": "A position in the audio, in seconds, to jump to.",
             "note": "Why you chose this capture. Required for a manual choice; stored with the decision.",
             "choose_button": "Use the selected capture for this episode. Needs a note explaining why.",
@@ -218,14 +235,30 @@ class EfmCaptureReview(QDialog):
         bottom.addWidget(self.choose_button)
         bottom.addStretch(1)
         bottom.addWidget(buttons)
+        self.details = QWidget()
+        dl = QVBoxLayout(self.details)
+        dl.setContentsMargins(0, 0, 0, 0)
+        dl.addWidget(self.table)
+        dl.addWidget(self.summary)
+        self.details_toggle = DetailsToggle(self.details, "the decoder's measurements")
         lay = QVBoxLayout(self)
-        lay.addWidget(self.summary)
-        lay.addWidget(self.table, 1)
+        lay.addWidget(self.headline)
+        lay.addWidget(QLabel("<b>Listen and compare.</b> Click a strip to hear that capture at that moment; "
+                             "red marks are sudden drop-outs."))
+        lay.addWidget(self.strips_scroll, 3)
         lay.addLayout(jump_row)
         lay.addWidget(self.media)
+        lay.addWidget(self.details_toggle)
+        lay.addWidget(self.details, 2)
         lay.addWidget(self.note)
         lay.addLayout(bottom)
         self.data: dict = {}
+        import queue
+
+        self._results: queue.Queue = queue.Queue()
+        self._poll = QTimer(self)
+        self._poll.setInterval(200)
+        self._poll.timeout.connect(self._collect)
         self.populate()
 
     def populate(self) -> None:
@@ -270,8 +303,125 @@ class EfmCaptureReview(QDialog):
         ready = bool(rows) and not d["problems"] and not d["pad_problem"]
         self.auto_button.setEnabled(ready and bool(d.get("auto")))
         self.choose_button.setEnabled(ready)
+        if d["problems"] or d["pad_problem"]:
+            self.headline.setText(headline_html("NOT READY", "; ".join([*d["problems"], d["pad_problem"]][:2])
+                                                or "Not ready.", "bad"))
+        elif d.get("auto"):
+            self.headline.setText(headline_html("AUTOMATIC CHOICE", f"{d['auto']} — the capture with the least "
+                                                "audible damage. Listen to the red places on the others if you "
+                                                "want to be sure, then accept or choose another.", "good"))
+        elif rows:
+            self.headline.setText(headline_html("YOUR CHOICE", "No capture is clearly best: listen and choose one.",
+                                                "warn"))
+        else:
+            self.headline.setText(headline_html("", "No decoded captures yet: run intake first.", "neutral"))
+        self._build_strips(rows)
         if rows:
             self.table.selectRow(0)
+
+    def _build_strips(self, rows: list[dict]) -> None:
+        import threading
+
+        from PySide6.QtWidgets import QRadioButton
+
+        from fstk.ui.visual import WaveStrip
+
+        while self.strips_layout.count():
+            item = self.strips_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.strips = {}
+        from PySide6.QtWidgets import QButtonGroup
+
+        self.capture_group = QButtonGroup(self)
+        self.capture_group.setExclusive(True)
+        todo = []
+        for i, row in enumerate(rows):
+            label = row["capture"]
+            line = QWidget()
+            hl = QHBoxLayout(line)
+            hl.setContentsMargins(0, 0, 0, 0)
+            name = label + ("  ★" if label == self.data.get("auto") else "") + \
+                ("  (in use)" if label == self.data.get("current") else "")
+            radio = QRadioButton(name)
+            radio.setMinimumWidth(130)
+            radio.setToolTip("Choose this capture (★ = the automatic choice).")
+            radio.toggled.connect(lambda on, i=i: on and self.table.selectRow(i))
+            self.capture_group.addButton(radio, i)
+            strip = WaveStrip()
+            strip.setToolTip("This capture's sound over the whole side. Click to listen here.")
+            strip.clicked.connect(lambda t, label=label, i=i: self._listen(i, label, t))
+            words = QLabel(f"{row.get('assessment') or ''}")
+            words.setMinimumWidth(190)
+            words.setWordWrap(True)
+            words.setToolTip("What the drop-out check found in this capture.")
+            hl.addWidget(radio)
+            hl.addWidget(strip, 1)
+            hl.addWidget(words)
+            self.strips_layout.addWidget(line)
+            self.strips[label] = (radio, strip, words)
+            wav = self.data.get("wavs", {}).get(label)
+            if label in self._overviews:
+                self._show_overview(label, self._overviews[label], "")
+            elif wav and Path(wav).is_file():
+                todo.append((label, wav))
+            else:
+                strip.set_overview(None, "no decoded audio")
+        self.strips_layout.addStretch(1)
+        if todo:
+            def work(jobs=tuple(todo)):
+                for label, wav in jobs:
+                    try:
+                        self._results.put((label, self.services.efm_overview(self.episode, label, wav), ""))
+                    except Exception as exc:  # unreadable WAV: say so on its strip, keep the others
+                        self._results.put((label, None, f"cannot read the audio: {exc}"))
+
+            self._waiting = len(todo)
+            threading.Thread(target=work, name="efm-overview", daemon=True).start()
+            self._poll.start()
+
+    def _collect(self) -> None:
+        """Show each capture's strip as soon as its audio has been read (the reading runs in the background)."""
+        import queue
+
+        while True:
+            try:
+                label, doc, message = self._results.get_nowait()
+            except queue.Empty:
+                break
+            self._waiting -= 1
+            if doc is not None:
+                self._overviews[label] = doc
+            self._show_overview(label, doc, message)
+        if self._waiting <= 0:
+            self._poll.stop()
+
+    def _show_overview(self, label: str, doc: dict | None, message: str) -> None:
+        from fstk.media.audio_overview import describe
+        from fstk.ui.visual import tone_colour
+
+        if label not in self.strips:
+            return
+        _radio, strip, words = self.strips[label]
+        strip.set_overview(doc, message)
+        if doc is not None:
+            text, tone = describe(doc)
+            words.setText(f"<span style='color:{tone_colour(tone)};font-weight:600'>{text}</span>")
+
+    def _listen(self, row: int, label: str, seconds: float) -> None:
+        """Choose the capture and play it from just before the clicked moment."""
+        self.table.selectRow(row)
+        wav = self.data.get("wavs", {}).get(label)
+        if not wav:
+            return
+        self.media.load(wav, keep_position=False)
+        self.media.seek_s(max(0.0, seconds - 1.0))
+        self.media.play()
+        with contextlib.suppress(RuntimeError, TypeError):
+            self.media.play_button.clicked.disconnect()
+        self.media.play_button.clicked.connect(self.media.play)
+        for other, (_r, strip, _w) in self.strips.items():
+            strip.set_cursor(seconds if other == label else None)
 
     def selected_capture(self) -> str | None:
         items = self.table.selectedItems()
@@ -279,6 +429,8 @@ class EfmCaptureReview(QDialog):
 
     def on_select(self) -> None:
         label = self.selected_capture()
+        if label in self.strips and not self.strips[label][0].isChecked():
+            self.strips[label][0].setChecked(True)
         if label and label in self.data.get("wavs", {}) and self.media.player is not None:
             self.media.load(self.data["wavs"][label], keep_position=True)
         elif label and label in self.data.get("wavs", {}):
@@ -338,12 +490,27 @@ class DeliveryReview(QDialog):
         self.reports.currentIndexChanged.connect(self.load_report)
         self.summary = QLabel()
         self.summary.setWordWrap(True)
-        self.chunks = QTableWidget(0, 3)
-        self.chunks.setHorizontalHeaderLabels(["Chunk", "Time", "Verdict"])
-        self.chunks.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self.chunks.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.chunks.verticalHeader().setVisible(False)
-        self.chunks.cellDoubleClicked.connect(lambda row, _col: self.play_chunk(row))
+        self.headline = QLabel("")
+        self.headline.setWordWrap(True)
+        self.headline.setTextFormat(Qt.TextFormat.RichText)
+        self.timeline = TimelineBar()
+        self.timeline.tick_clicked.connect(self._timeline_tick)
+        self.timeline.clicked.connect(self.play_at)
+        self.chunk_row = QHBoxLayout()
+        self.chunk_buttons: list[QPushButton] = []
+        self.current = -1
+        self._marks: dict[int, str] = {}
+        self.now_label = QLabel("Pick a chunk to watch.")
+        self.now_label.setWordWrap(True)
+        self.mark_ok = QPushButton("✓  In sync")
+        self.mark_early = QPushButton("Sound comes too early")
+        self.mark_late = QPushButton("Sound comes too late")
+        for b, v, colour in ((self.mark_ok, "ok", "#2e7d32"), (self.mark_early, "early", "#ef6c00"),
+                             (self.mark_late, "late", "#ef6c00")):
+            b.setMinimumHeight(40)
+            b.setStyleSheet(f"QPushButton {{ font-weight: 600; border: 2px solid {colour}; border-radius: 6px; "
+                            "padding: 4px 12px; }")
+            b.clicked.connect(lambda _c=False, v=v: self.mark(v))
         self.gates = QTableWidget(0, 3)
         self.gates.setHorizontalHeaderLabels(["Gate", "Status", "Detail"])
         self.gates.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
@@ -364,8 +531,14 @@ class DeliveryReview(QDialog):
 
         apply_tips(self, {
             "reports": "The QC reports for this episode, newest first.",
-            "chunks": "15-second chunks to judge by eye and ear. Double-click to play one, then mark it in sync, "
-                      "audio early or audio late.",
+            "headline": "Where this delivery stands, in plain words.",
+            "timeline": "The whole episode. Markers are the chunks to watch (grey: not judged yet, green: in sync, "
+                        "orange: out of step); red stretches are places the checks want you to look at. Click to "
+                        "play there.",
+            "now_label": "The chunk you are judging.",
+            "mark_ok": "Picture and sound are in step for this chunk. The next chunk starts by itself.",
+            "mark_early": "You hear the sound before you see it (for example the voice before the lips move).",
+            "mark_late": "You see it before you hear it (the lips move, then the voice comes).",
             "gates": "Every automatic check with its result. The A/V check below needs your eyes.",
             "intervals": "Places the checks flagged for a look (for example black frames inside a repaired frame "
                          "range). Double-click to play.",
@@ -382,14 +555,29 @@ class DeliveryReview(QDialog):
         close.button(QDialogButtonBox.StandardButton.Close).setToolTip("Close this window.")
         close.rejected.connect(self.reject)
 
+        self.details = QWidget()
+        dl = QVBoxLayout(self.details)
+        dl.setContentsMargins(0, 0, 0, 0)
+        dl.addWidget(self.gates, 2)
+        dl.addWidget(QLabel("Places the checks flagged (double-click to play):"))
+        dl.addWidget(self.intervals, 1)
+        dl.addWidget(self.warnings)
+        self.details_toggle = DetailsToggle(self.details, "the automatic checks")
         left = QWidget()
         ll = QVBoxLayout(left)
         ll.setContentsMargins(0, 0, 0, 0)
-        ll.addWidget(QLabel("A/V check — double-click a chunk to play it, then mark it:"))
-        ll.addWidget(self.chunks, 3)
-        ll.addWidget(self.gates, 2)
-        ll.addWidget(QLabel("QC-flagged intervals (double-click to play):"))
-        ll.addWidget(self.intervals, 1)
+        ll.addWidget(self.headline)
+        ll.addWidget(QLabel("<b>Watch each chunk, then say whether picture and sound are in step:</b>"))
+        ll.addWidget(self.timeline)
+        ll.addLayout(self.chunk_row)
+        ll.addWidget(self.now_label)
+        marks = QHBoxLayout()
+        for b in (self.mark_ok, self.mark_early, self.mark_late):
+            marks.addWidget(b)
+        ll.addLayout(marks)
+        ll.addStretch(1)
+        ll.addWidget(self.details_toggle)
+        ll.addWidget(self.details, 3)
         split = QSplitter(Qt.Orientation.Horizontal)
         self.quality_text = QPlainTextEdit()
         self.quality_text.setReadOnly(True)
@@ -402,12 +590,14 @@ class DeliveryReview(QDialog):
         quality = QWidget()
         ql = QVBoxLayout(quality)
         ql.setContentsMargins(0, 0, 0, 0)
+        ql.addWidget(QLabel("The worst moments the quality check found:"))
+        ql.addWidget(scroll, 4)
+        self.quality_toggle = DetailsToggle(self.quality_text, "the quality measurements")
+        ql.addWidget(self.quality_toggle)
         ql.addWidget(self.quality_text, 2)
-        ql.addWidget(QLabel("Worst moments (contact sheet):"))
-        ql.addWidget(scroll, 3)
         self.tabs = QTabWidget()
         self.tabs.addTab(self.media, "Playback")
-        self.tabs.addTab(quality, "Episode quality report")
+        self.tabs.addTab(quality, "Worst moments")
         self.tabs.addTab(self._stretch_tab(), "Video-origin stretches")
         self.tabs.addTab(self._fix_tab(), "Frame fixes")
         self._fill_quality()
@@ -430,7 +620,6 @@ class DeliveryReview(QDialog):
         lay.addLayout(top)
         lay.addWidget(self.summary)
         lay.addWidget(split, 1)
-        lay.addWidget(self.warnings)
         lay.addLayout(bottom)
         self.result: dict = {}
         self.pending = None
@@ -626,7 +815,7 @@ class DeliveryReview(QDialog):
     def _play_fix_clip(self, name: str) -> None:
         clip = self.fix_clip_paths.get(name)
         if clip:
-            self.tabs.setCurrentWidget(self.media)
+            self.tabs.setCurrentIndex(0)                     # Playback
             self.media.load(clip, keep_position=False)
             self.media.play()
 
@@ -647,33 +836,47 @@ class DeliveryReview(QDialog):
         w = QWidget()
         lay = QVBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(QLabel("Video-shot stretches are delivered at 23.976p from the nearest real frames by default. "
-                             "Double-click a row to play its preview (left: nearest real frames, right: "
-                             "interpolated), choose per stretch, then re-encode."))
-        self.stretches = QTableWidget(0, 5)
-        self.stretches.setHorizontalHeaderLabels(["Starts", "Length", "Kind", "In current encode", "Choice"])
-        self.stretches.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        self.stretches.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.stretches.verticalHeader().setVisible(False)
-        self.stretches.cellDoubleClicked.connect(lambda row, _c: self.play_stretch(row))
-        self.stretches.setToolTip("Stretches where the source was shot on video (60 fields/s) rather than film. "
-                                  "Double-click a row to play its preview.")
+        intro = QLabel("These stretches were shot on video, not film. By default they are delivered from the nearest "
+                       "real frames. Press Preview to watch one (left: nearest real frames, right: interpolated), "
+                       "choose for each, then re-encode.")
+        intro.setWordWrap(True)
+        lay.addWidget(intro)
+        self.stretch_box = QWidget()
+        self.stretch_layout = QVBoxLayout(self.stretch_box)
+        self.stretch_layout.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidget(self.stretch_box)
+        scroll.setWidgetResizable(True)
+        scroll.setToolTip("One card per video-shot stretch: where it is, a preview to watch, and how to deliver it.")
+        lay.addWidget(scroll, 1)
         self.stretch_button = QPushButton("Re-encode with these choices…")
         self.stretch_button.setToolTip("Make a new encode with the choice made for each stretch. Earlier files are "
                                        "kept.")
         self.stretch_button.clicked.connect(self.apply_stretches)
-        lay.addWidget(self.stretches, 1)
         lay.addWidget(self.stretch_button)
+        self.stretch_cards: list[QComboBox] = []
         return w
 
     def _fill_stretches(self) -> None:
+        from PySide6.QtWidgets import QFrame
+
         self.stretch_rows = self.services.video_stretches(self.episode)
-        self.stretches.setRowCount(len(self.stretch_rows))
+        while self.stretch_layout.count():
+            item = self.stretch_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.stretch_cards = []
         for i, r in enumerate(self.stretch_rows):
-            self.stretches.setItem(i, 0, QTableWidgetItem(_fmt_time(r["start_s"])))
-            self.stretches.setItem(i, 1, QTableWidgetItem(f"{r['seconds']:.1f} s"))
-            self.stretches.setItem(i, 2, QTableWidgetItem(r["kind"]))
-            self.stretches.setItem(i, 3, QTableWidgetItem(r["encoded"] or "—"))
+            card = QFrame()
+            card.setFrameShape(QFrame.Shape.StyledPanel)
+            row = QHBoxLayout(card)
+            text = QLabel(f"<b>{_fmt_time(r['start_s'])[:-4]}</b> · {r['seconds']:.1f} s · {r['kind']}"
+                          + (f" · current encode: {r['encoded']}" if r["encoded"] else ""))
+            text.setToolTip("Where the stretch starts, how long it lasts, and what the current encode used.")
+            play = QPushButton("▶  Preview")
+            play.setToolTip("Watch this stretch: nearest real frames on the left, interpolated on the right.")
+            play.setEnabled(bool(r.get("preview")))
+            play.clicked.connect(lambda _c=False, i=i: self.play_stretch(i))
             box = QComboBox()
             box.setToolTip("Nearest real frames: every output frame is a real captured frame (default). "
                            "Interpolated: smoother, evenly spaced motion made by the interpolator.")
@@ -681,12 +884,20 @@ class DeliveryReview(QDialog):
             box.addItem("Interpolated (even motion)", "interpolate")
             box.setCurrentIndex(0 if r["treatment"] == "nearest" else 1)
             box.currentIndexChanged.connect(lambda _i: self._update_stretch_button())
-            self.stretches.setCellWidget(i, 4, box)
+            row.addWidget(text, 1)
+            row.addWidget(play)
+            row.addWidget(box)
+            self.stretch_layout.addWidget(card)
+            self.stretch_cards.append(box)
+        if not self.stretch_rows:
+            none = QLabel("No video-shot stretches in this episode.")
+            none.setToolTip("Every stretch of this episode is film.")
+            self.stretch_layout.addWidget(none)
+        self.stretch_layout.addStretch(1)
         self._update_stretch_button()
 
     def stretch_choices(self) -> dict[str, str]:
-        return {str(r["first_cycle"]): self.stretches.cellWidget(i, 4).currentData()
-                for i, r in enumerate(self.stretch_rows)}
+        return {str(r["first_cycle"]): self.stretch_cards[i].currentData() for i, r in enumerate(self.stretch_rows)}
 
     def _update_stretch_button(self) -> None:
         changed = any(self.stretch_choices()[str(r["first_cycle"])] != (r["encoded"] or "nearest")
@@ -698,7 +909,7 @@ class DeliveryReview(QDialog):
         if not clip:
             QMessageBox.information(self, "No preview", "Run the stretch-preview stage to render this stretch.")
             return
-        self.tabs.setCurrentWidget(self.media)
+        self.tabs.setCurrentIndex(0)                     # Playback
         self.media.load(clip, keep_position=False)
         self.media.play()
 
@@ -723,44 +934,117 @@ class DeliveryReview(QDialog):
         return str(path)
 
     # ---------------------------------------------------------------- A/V chunks
+    def _chunks(self) -> list[dict]:
+        return (self.result.get("av_check") or {}).get("chunks", [])
+
     def _fill_chunks(self) -> None:
-        chunks = (self.result.get("av_check") or {}).get("chunks", [])
-        self.chunks.setRowCount(len(chunks))
-        for i, c in enumerate(chunks):
-            self.chunks.setItem(i, 0, QTableWidgetItem(str(i + 1)))
-            self.chunks.setItem(i, 1, QTableWidgetItem(f"{_fmt_time(c['start_s'])} – {_fmt_time(c['end_s'])}"))
-            box = QComboBox()
-            box.setToolTip("Your verdict for this chunk after watching it: in sync, audio early or audio late. "
-                           "Every chunk needs a mark before the delivery can be approved.")
-            for value, label in VERDICT_CHOICES:
-                box.addItem(label, value)
-            box.currentIndexChanged.connect(self._update_buttons)
-            self.chunks.setCellWidget(i, 2, box)
+        for btn in self.chunk_buttons:
+            self.chunk_row.removeWidget(btn)
+            btn.deleteLater()
+        self.chunk_buttons, self._marks, self.current = [], {}, -1
+        for i, c in enumerate(self._chunks()):
+            btn = QPushButton(f"{i + 1}\n{_fmt_time(c['start_s'])[:-4]}")
+            btn.setCheckable(True)
+            btn.setMinimumHeight(44)
+            btn.setToolTip(f"Chunk {i + 1}: {_fmt_time(c['start_s'])} – {_fmt_time(c['end_s'])}. Click to play it.")
+            btn.clicked.connect(lambda _c=False, i=i: self.select_chunk(i, play=True))
+            self.chunk_row.addWidget(btn)
+            self.chunk_buttons.append(btn)
         pre = (self.result.get("av_check") or {}).get("prescreen") or {}
         if pre.get("confident"):
             # advice only: the reviewer still plays each chunk and can change any mark
-            for i in range(len(chunks)):
+            for i in range(len(self.chunk_buttons)):
                 self.set_verdict(i, "ok")
             self.summary.setText(self.summary.text() + f"\nA/V pre-screen: {pre['reason']} — chunks pre-marked 'in sync'; "
                                                         "play each to confirm.")
+        if self.chunk_buttons:
+            self.select_chunk(next((i for i in range(len(self.chunk_buttons)) if i not in self._marks), 0), play=False)
+        self._paint_chunks()
+
+    def _paint_chunks(self) -> None:
+        colours = {"ok": "#2e7d32", "early": "#ef6c00", "late": "#ef6c00"}
+        for i, btn in enumerate(self.chunk_buttons):
+            v = self._marks.get(i)
+            colour = colours.get(v, "#616161")
+            btn.setStyleSheet(f"QPushButton {{ background: {colour}; color: white; border-radius: 6px; "
+                              f"border: {'3px solid white' if i == self.current else '1px solid #333'}; "
+                              "padding: 2px 10px; }")
+            btn.setChecked(i == self.current)
+        chunks = self._chunks()
+        ticks = [{"time_s": (c["start_s"] + c["end_s"]) / 2, "key": ("c", i), "label": f"chunk {i + 1}",
+                  "tone": {"ok": "good", "early": "warn", "late": "warn"}.get(self._marks.get(i), "neutral")}
+                 for i, c in enumerate(chunks)]
+        ivs = self.result.get("review_intervals", [])
+        marks = [{"start_s": iv["start_s"], "end_s": max(iv["end_s"], iv["start_s"] + 1), "tone": "bad",
+                  "label": f"{iv.get('gate', '')}: {iv.get('reason', '')}"} for iv in ivs]
+        ends = [c["end_s"] for c in chunks] + [iv["end_s"] for iv in ivs]
+        duration = float(self.result.get("duration_s") or (max(ends) if ends else 0.0))
+        self.timeline.set_data(duration, marks, ticks)
+        self.timeline.select_tick(("c", self.current) if self.current >= 0 else None)
+        has = 0 <= self.current < len(chunks)
+        for b in (self.mark_ok, self.mark_early, self.mark_late):
+            b.setEnabled(has and self.pending is not None)
+        if has:
+            c = chunks[self.current]
+            v = self._marks.get(self.current)
+            said = dict(VERDICT_CHOICES).get(v or "", "").lower() if v else "not judged yet"
+            self.now_label.setText(f"Chunk {self.current + 1} of {len(chunks)} · {_fmt_time(c['start_s'])} – "
+                                   f"{_fmt_time(c['end_s'])} · {said}")
+
+    def select_chunk(self, row: int, *, play: bool = True) -> None:
+        if not 0 <= row < len(self.chunk_buttons):
+            return
+        self.current = row
+        self._paint_chunks()
+        if play:
+            self.play_chunk(row)
+
+    def mark(self, verdict: str) -> None:
+        """Mark the current chunk and move on to the next one not judged yet (and play it)."""
+        if self.current < 0:
+            return
+        self.set_verdict(self.current, verdict)
+        nxt = next((i for i in range(len(self.chunk_buttons)) if i not in self._marks), None)
+        if nxt is not None:
+            self.select_chunk(nxt, play=True)
+
+    def _timeline_tick(self, key) -> None:
+        if isinstance(key, tuple) and key[0] == "c":
+            self.select_chunk(int(key[1]), play=True)
+
+    def play_at(self, seconds: float) -> None:
+        if any(isinstance(t.get("key"), tuple) and abs(float(t["time_s"]) - seconds) < 1e-6
+               for t in self.timeline.ticks):
+            return                                  # a chunk marker: the chunk's own clip is playing
+        if not self.result.get("deliverable_path"):
+            return
+        self.tabs.setCurrentIndex(0)                     # Playback
+        if self.media.source != self.result.get("deliverable_path"):
+            self.media.load(self.result.get("deliverable_path", ""), keep_position=False)
+        self.media.seek_s(float(seconds))
+        self.media.play()
 
     def set_verdict(self, row: int, verdict: str) -> None:
-        box = self.chunks.cellWidget(row, 2)
-        box.setCurrentIndex(next(i for i, (v, _) in enumerate(VERDICT_CHOICES) if v == verdict))
+        if verdict:
+            self._marks[row] = verdict
+        else:
+            self._marks.pop(row, None)
+        self._paint_chunks()
+        self._update_buttons()
 
     def verdicts(self) -> list[dict]:
-        chunks = (self.result.get("av_check") or {}).get("chunks", [])
         out = []
-        for i, c in enumerate(chunks):
-            value = self.chunks.cellWidget(i, 2).currentData()
+        for i, c in enumerate(self._chunks()):
+            value = self._marks.get(i)
             if value:
                 out.append({"t_s": c["t_s"], "verdict": value, "start_s": c["start_s"], "end_s": c["end_s"]})
         return out
 
     def play_chunk(self, row: int) -> None:
-        chunks = (self.result.get("av_check") or {}).get("chunks", [])
+        chunks = self._chunks()
         if not 0 <= row < len(chunks):
             return
+        self.tabs.setCurrentIndex(0)                     # Playback
         proxy = chunks[row].get("proxy")
         if proxy and Path(proxy).is_file():
             # H.264/AAC excerpt of exactly this chunk (plays where HEVC Main 10 does not); starts at 0
@@ -773,7 +1057,7 @@ class DeliveryReview(QDialog):
         self.media.play()
 
     def _update_buttons(self) -> None:
-        n = len((self.result.get("av_check") or {}).get("chunks", []))
+        n = len(self._chunks())
         marks = [v["verdict"] for v in self.verdicts()]
         pending = self.pending is not None
         self.approve_button.setEnabled(pending and not self.blockers and n > 0 and len(marks) == n
@@ -834,11 +1118,20 @@ class DeliveryReview(QDialog):
         lines.append("Approve needs every chunk marked in sync; mark any chunk 'audio too early' or "
                      "'audio too late' and press Rerun to let the app re-correct.")
         self.summary.setText("\n".join(lines))
+        if blockers:
+            self.headline.setText(headline_html("CANNOT BE APPROVED", "An automatic check failed or could not be "
+                                                "verified: " + ", ".join(blockers) + ". Reject it or fix and rerun.",
+                                                "bad"))
+        elif self.pending is None:
+            self.headline.setText(headline_html("DECIDED", "This delivery is not waiting for a decision.", "neutral"))
+        else:
+            self.headline.setText(headline_html("WATCH AND LISTEN", f"Every automatic check passed. Watch the "
+                                                f"{len(self._chunks())} chunks and mark each one.", "info"))
         self.warnings.setPlainText("Standing warnings:\n" + "\n".join(f"• {w}" for w in r.get("standing_warnings", [])))
         self.blockers = blockers
         self._fill_chunks()
         self._update_buttons()
-        self.media.status.setText(f"{Path(r.get('deliverable_path', '')).name} (double-click an interval or press Play)")
+        self.media.status.setText(f"{Path(r.get('deliverable_path', '')).name} (pick a chunk above, or click the timeline to play from there)")
         self.media.play_button.clicked.disconnect()
         self.media.play_button.clicked.connect(self._first_play)
 
@@ -875,4 +1168,6 @@ class DeliveryReview(QDialog):
             return None
         self.decided.emit(str(path))
         self.load_report(self.reports.currentIndex())
+        if decision == "APPROVED" and self.isVisible():
+            self.accept()                       # the main window shows the work carrying on
         return str(path)

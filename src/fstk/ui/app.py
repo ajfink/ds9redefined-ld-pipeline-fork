@@ -24,6 +24,7 @@ import socket
 import sys
 import time
 from pathlib import Path
+from typing import ClassVar
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
@@ -35,6 +36,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
@@ -140,32 +142,60 @@ class MainWindow(QMainWindow):
         self.jobs.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self.jobs.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
 
+        from fstk.ui.visual import DetailsToggle, SpotViewer, TimelineBar
+
         self.reviews = QListWidget()
+        self.reviews.setMaximumHeight(72)
         self.reviews.currentRowChanged.connect(self.show_review)
+        self.review_headline = QLabel("")
+        self.review_headline.setWordWrap(True)
+        self.review_headline.setTextFormat(Qt.TextFormat.RichText)
+        self.review_how = QLabel("")
+        self.review_how.setWordWrap(True)
+        self.review_how.setStyleSheet("color: #9e9e9e;")
+        self.review_timeline = TimelineBar()
+        self.review_timeline.tick_clicked.connect(lambda key: self.review_spots.show_spot(int(key)))
+        self.review_spots = SpotViewer()
+        self.review_spots.spot_changed.connect(self.review_timeline.select_tick)
         self.review_detail = QPlainTextEdit()
         self.review_detail.setReadOnly(True)
+        self.review_details_toggle = DetailsToggle(self.review_detail, "the numbers")
         self.review_image = QLabel("")
         self.review_image.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.review_scroll = QScrollArea()
         self.review_scroll.setWidget(self.review_image)
         self.review_scroll.setWidgetResizable(False)
         self.review_scroll.setVisible(False)
-        self.open_evidence = QPushButton("Open evidence")
+        self.open_evidence = QPushButton("Open files")
         self.open_evidence.clicked.connect(self.open_selected_evidence)
         self.approve = QPushButton("Approve…")
         self.reject = QPushButton("Reject…")
+        self.approve.setStyleSheet("font-weight: 600;")
         self.approve.clicked.connect(lambda: self.decide("APPROVED"))
         self.reject.clicked.connect(lambda: self.decide("REJECTED"))
         review_buttons = QHBoxLayout()
-        for b in (self.open_evidence, self.approve, self.reject):
+        review_buttons.addWidget(self.review_details_toggle)
+        review_buttons.addStretch(1)
+        for b in (self.open_evidence, self.reject, self.approve):
             review_buttons.addWidget(b)
         review_page = QWidget()
         rl = QVBoxLayout(review_page)
-        rl.addWidget(self.reviews, 1)
-        rl.addWidget(self.review_scroll, 4)
+        rl.addWidget(self.reviews)
+        rl.addWidget(self.review_headline)
+        rl.addWidget(self.review_timeline)
+        rl.addWidget(self.review_spots, 5)
+        rl.addWidget(self.review_scroll, 5)
+        rl.addWidget(self.review_how)
         rl.addWidget(self.review_detail, 2)
         rl.addLayout(review_buttons)
+        self.review_page = review_page
 
+        self.banner = QLabel("")
+        self.banner.setWordWrap(True)
+        self.banner.setVisible(False)
+        self.banner.setToolTip("What just happened and what the app is doing about it.")
+        self._queued_plans: list[str] = []
+        self._running_plan: str | None = None
         self.progress_panel = ProgressPanel()
         self.progress_panel.space_refresh.connect(self.recheck_space)
         self.status_line = QLabel("")
@@ -249,6 +279,7 @@ class MainWindow(QMainWindow):
         cl.addWidget(self.title)
         cl.addWidget(self.override_flag)
         cl.addWidget(self.status_line)
+        cl.addWidget(self.banner)
         cl.addWidget(self.tabs, 1)
         bar = QHBoxLayout()
         bar.addWidget(self.pick_button)
@@ -355,7 +386,11 @@ class MainWindow(QMainWindow):
         self._pending = self.services.pending_reviews(episode)
         self.reviews.clear()
         for p in self._pending:
-            self.reviews.addItem(f"{p.review}  ({p.job} / {p.step})")
+            item = QListWidgetItem(f"{self.REVIEW_NAMES.get(p.review, p.review)} — waiting for you")
+            item.setToolTip(f"{p.review} · job {p.job} · step {p.step}")
+            self.reviews.addItem(item)
+        if self._pending and self.reviews.currentRow() < 0:
+            self.reviews.setCurrentRow(0)
         self.tabs.setTabText(3, f"Reviews ({len(self._pending)})")
         self.show_review(self.reviews.currentRow())
 
@@ -365,23 +400,67 @@ class MainWindow(QMainWindow):
 
         return QColor(STATUS_COLOURS.get(status, "#616161"))
 
+    REVIEW_NAMES: ClassVar[dict[str, str]] = {"dvd-alignment": "DVD alignment", "cadence-review": "Film cadence",
+                    "delivery": "Delivery A/V check"}
+
     @Slot(int)
     def show_review(self, row: int) -> None:
+        from fstk.ui.visual import headline_html, load_review_view
+
         has = 0 <= row < len(getattr(self, "_pending", []))
         for b in (self.open_evidence, self.approve, self.reject):
             b.setEnabled(has)
+        self.approve.setText("Approve…")
         if not has:
+            self.review_headline.setText(headline_html("", "Nothing is waiting for you.", "neutral"))
             self.review_detail.setPlainText("No step is waiting for review.")
+            self.review_how.setText("")
+            self.review_timeline.setVisible(False)
+            self.review_spots.set_spots(None, [])
             self._show_picture(None)
             return
         p = self._pending[row]
+        name = self.REVIEW_NAMES.get(p.review, p.review)
+        view, report = load_review_view(p.evidence)
         summary = self._review_summary(p.evidence)
-        self._show_picture(next((e for e in p.evidence if e.lower().endswith(".png")), None))
         self.review_detail.setPlainText(
             (f"{summary}\n\n" if summary else "")
-            + f"Review: {p.review}\nStage: {p.stage}\nJob/step: {p.job}/{p.step}\n\nEvidence you are deciding on:\n"
-            + "\n".join(f"  {e}" for e in sorted(p.evidence, key=lambda e: not e.lower().endswith(".png")))
-            + f"\n\n{p.detail}")
+            + (("Why it was held: " + "; ".join(view["reasons"]) + "\n\n") if view.get("reasons") else "")
+            + f"Review: {name} ({p.review})\nStage: {p.stage}\nJob/step: {p.job}/{p.step}\n\nEvidence:\n"
+            + "\n".join(f"  {e}" for e in p.evidence) + f"\n\n{p.detail}")
+        if p.review == "delivery":
+            self.review_headline.setText(headline_html(
+                "WATCH AND LISTEN", "The delivery is ready for the A/V check: play each chunk in the A/V check "
+                "window and mark whether picture and sound are in step.", "info"))
+            self.approve.setText("Open A/V check…")
+            self.reject.setEnabled(False)
+            self.review_how.setText("")
+            self.review_timeline.setVisible(False)
+            self.review_spots.set_spots(None, [])
+            self._show_picture(None)
+            return
+        if view:
+            self.review_headline.setText(headline_html(view.get("verdict", ""), f"{name}: {view.get('headline', '')}",
+                                                       view.get("tone", "neutral")))
+            spots = view.get("spots", [])
+            sheet = report.parent / view["sheet"] if report is not None and view.get("sheet") else None
+            self.review_timeline.set_data(view.get("duration_s", 0.0), view.get("timeline", []),
+                                          [{"time_s": s["time_s"], "tone": s.get("tone"), "key": i,
+                                            "label": f"{s.get('label', '')} — {s.get('verdict', '')}"}
+                                           for i, s in enumerate(spots)])
+            self.review_timeline.setVisible(True)
+            self.review_spots.set_spots(sheet if sheet and sheet.is_file() else None, spots)
+            self.review_how.setText(view.get("how_to_look", ""))
+            self._show_picture(None if self.review_spots.spots else
+                               (str(sheet) if sheet and sheet.is_file() else None))
+            return
+        # an older report without a picture description: its plain summary and its picture sheet, if any
+        self.review_headline.setText(headline_html("LOOK", f"{name}: " + (summary.splitlines()[0] if summary else
+                                                   "look at the picture and decide."), "info"))
+        self.review_timeline.setVisible(False)
+        self.review_spots.set_spots(None, [])
+        self.review_how.setText("")
+        self._show_picture(next((e for e in p.evidence if e.lower().endswith(".png")), None))
 
     @staticmethod
     def _review_summary(evidence) -> str:
@@ -399,7 +478,7 @@ class MainWindow(QMainWindow):
         return ""
 
     def _show_picture(self, path: str | None) -> None:
-        """Show a review's picture sheet in the panel (scrollable, full size); hide the area when there is none."""
+        """Show a picture sheet that has no spot description (older reports), scrollable at full size."""
         from PySide6.QtGui import QPixmap
 
         pix = QPixmap(path) if path else QPixmap()
@@ -438,24 +517,57 @@ class MainWindow(QMainWindow):
             return
         self.append_log(f"{decision} recorded: {path}")
         self.show_episode(self.episode)
+        name = self.REVIEW_NAMES.get(p.review, p.review)
         if decision == "APPROVED":
-            self.continue_job(p.job)
+            self.continue_job(p.job, what=f"{name} approved")
+        else:
+            self.set_banner(f"{name} rejected. The step stays stopped until it is redone; nothing else runs from it.",
+                            "warn")
 
-    def continue_job(self, job: str) -> bool:
+    def continue_job(self, job: str, *, what: str = "Approved") -> bool:
         """Carry on a job that was waiting for a review that has just been approved.
 
         The run that stopped at the review has ended, so the saved plan is run again: finished steps are kept,
-        the approved step is committed and the rest follows. Does nothing while a run is already going (it picks
-        the approval up by itself) or when the saved plan is gone. Returns True when a run was started."""
-        if not self.episode or self.thread is not None:
+        the approved step is committed and the rest follows. If that job is the one running now it picks the
+        approval up by itself; if another run is going, this one is queued and starts when that ends. Returns
+        True when the job is running, queued or already picking it up."""
+        if not self.episode:
             return False
         path = self.services.job_plan_path(self.episode, job)
         if path is None:
             self.append_log(f"approved, but the plan for job {job} is not saved; use Run plan… to continue")
+            self.set_banner(f"{what}, but its plan was not found: press Run to delivery to carry on.", "warn")
             return False
+        if self.thread is not None and self._running_plan and Path(self._running_plan).parent.name == job:
+            self.set_banner(f"{what} — the running job picks it up and carries on.", "good")
+            return True
+        nxt = self._next_steps(job)
         self.append_log(f"continuing job {job} after the approval")
-        self.start_plan(str(path))
+        started = self.start_plan(str(path))
+        if started:
+            self.set_banner(f"{what} — continuing: {nxt}. Follow it on the Progress tab.", "good")
+        else:
+            self.set_banner(f"{what} — queued: it continues ({nxt}) as soon as the current run ends.", "info")
         return True
+
+    def _next_steps(self, job: str) -> str:
+        """The steps still to do in a saved job, for the banner."""
+        try:
+            steps = self.services.job_state(self.episode, job)["steps"]
+        except (OSError, ValueError, KeyError, FstkError):
+            return "the remaining steps"
+        todo = [sid for sid, st in steps.items() if st.get("status") != "passed"]
+        if not todo:
+            return "the remaining steps"
+        return ", ".join(todo[:3]) + (f" and {len(todo) - 3} more" if len(todo) > 3 else "")
+
+    def set_banner(self, text: str, tone: str = "info") -> None:
+        from fstk.ui.visual import tone_colour
+
+        self.banner.setText(text)
+        self.banner.setStyleSheet(f"background: {tone_colour(tone)}; color: white; padding: 6px 10px; "
+                                  "border-radius: 4px; font-weight: 600;")
+        self.banner.setVisible(bool(text))
 
     def on_delivery_decided(self, path: str) -> None:
         import json
@@ -467,8 +579,12 @@ class MainWindow(QMainWindow):
             approved = json.loads(Path(path).read_text(encoding="utf-8")).get("decision") == "APPROVED"
         except (OSError, ValueError):
             approved = False
+        self.raise_()
+        self.activateWindow()
         if approved:
             self.continue_after_delivery_decision()
+        else:
+            self.set_banner("Delivery decision recorded.", "info")
 
     def continue_after_delivery_decision(self) -> None:
         """The QC window recorded an approval: continue the job whose delivery review it answered."""
@@ -476,7 +592,7 @@ class MainWindow(QMainWindow):
             return
         for pending in self.services.pending_reviews(self.episode):
             if pending.review == "delivery":
-                self.continue_job(pending.job)
+                self.continue_job(pending.job, what="Delivery approved")
                 return
 
     # ---------------------------------------------------------------- review windows
@@ -499,7 +615,7 @@ class MainWindow(QMainWindow):
         if not self.episode:
             return None
         dlg = EfmCaptureReview(self.services, self.episode, parent=self)
-        dlg.plan_ready.connect(self.start_plan)
+        dlg.plan_ready.connect(lambda path: self.run_from_window(path, "EFM capture chosen", dlg))
         dlg.open()
         return dlg
 
@@ -509,10 +625,21 @@ class MainWindow(QMainWindow):
         if not self.episode:
             return None
         dlg = DeliveryReview(self.services, self.episode, actor=self.actor, parent=self)
-        dlg.plan_ready.connect(self.start_plan)
+        dlg.plan_ready.connect(lambda path: self.run_from_window(path, "Your choices are being applied", dlg))
         dlg.decided.connect(self.on_delivery_decided)
         dlg.open()
         return dlg
+
+    def run_from_window(self, path: str, what: str, dlg=None) -> None:
+        """A review window decided something that needs work: close it, start (or queue) the work, show it."""
+        if dlg is not None and dlg.isVisible():
+            dlg.accept()
+        self.raise_()
+        self.activateWindow()
+        if self.start_plan(path):
+            self.set_banner(f"{what} — the work has started. Follow it on the Progress tab.", "good")
+        else:
+            self.set_banner(f"{what} — queued: it starts as soon as the current run ends.", "info")
 
     def handoff_to(self, device: str, note: str) -> dict | None:
         if not self.episode:
@@ -667,9 +794,14 @@ class MainWindow(QMainWindow):
         if path:
             self.start_plan(path)
 
-    def start_plan(self, path: str) -> None:
+    def start_plan(self, path: str) -> bool:
+        """Run a plan now; while another run is going, queue it (it starts when that run ends). True if started."""
         if self.thread is not None:
-            return
+            if path != self._running_plan and path not in self._queued_plans:
+                self._queued_plans.append(path)
+                self.append_log(f"queued {path}: it starts when the current run ends")
+            return False
+        self._running_plan = path
         self._begin_progress(path)
         self.thread = QThread(self)
         self.worker = PlanWorker(self.services, path, self.actor)
@@ -687,6 +819,7 @@ class MainWindow(QMainWindow):
         self.append_log(f"running {path}")
         self.thread.start()
         self.update_progress()
+        return True
 
     def check_catalog_age(self) -> None:
         if self.catalog_thread is not None:
@@ -728,8 +861,13 @@ class MainWindow(QMainWindow):
                     "and any issues.",
             "reviews": "Checks waiting for a person to look at the evidence. Select one to read what was measured.",
             "review_scroll": "The review's picture sheet (a stage's evidence image), shown at full size; scroll to see every row.",
-            "review_detail": "What was measured, and what to look for before approving or rejecting.",
-            "open_evidence": "Open the evidence files for the selected review (images, videos, reports).",
+            "review_detail": "The measurements behind the review, for reference.",
+            "review_headline": "What the automatic checks concluded, in plain words.",
+            "review_how": "What to look for before you decide.",
+            "review_timeline": "The whole programme: coloured stretches are what the checks flagged, markers are the "
+                               "places shown below. Click a marker to see it.",
+            "review_spots": "The pictures at each checked place.",
+            "open_evidence": "Open the evidence files for the selected review in other apps (images, reports).",
             "approve": "Record that you checked the evidence and it is right. Your name and a note are stored with "
                        "the decision, and the next step may start.",
             "reject": "Record that the evidence is wrong. The step stays blocked until it is fixed or redone.",
@@ -1002,9 +1140,14 @@ class MainWindow(QMainWindow):
         self.pause_button.setText("Pause")
         self.tick.stop()
         self.update_progress()
+        self._running_plan = None
         self.refresh()
         if self.episode:
             self.show_episode(self.episode)
+        if self._queued_plans:
+            nxt = self._queued_plans.pop(0)
+            self.append_log(f"starting the queued plan {nxt}")
+            QTimer.singleShot(0, lambda: self.start_plan(nxt))
 
     @Slot(dict)
     def on_finished(self, state: dict) -> None:
@@ -1015,6 +1158,16 @@ class MainWindow(QMainWindow):
             if snap.state == "finished":
                 self.notify("Run complete", f"{self.episode}: all {snap.total} steps done")
         self._done()
+        waiting = [s for s, st in state["steps"].items() if st.get("status") == "awaiting-review"]
+        failed = [s for s, st in state["steps"].items() if st.get("status") in ("failed", "blocked")]
+        if waiting and not self._queued_plans:
+            self.set_banner(f"Waiting for you: {', '.join(waiting)} — look at it on the Reviews tab and decide.",
+                            "warn")
+            self.tabs.setCurrentWidget(self.review_page)
+        elif failed:
+            self.set_banner(f"Stopped: {', '.join(failed[:3])} needs attention (see Jobs and the log).", "bad")
+        elif all(st.get("status") == "passed" for st in state["steps"].values()):
+            self.set_banner(f"Finished: all {len(state['steps'])} steps of {state['job']} are done.", "good")
 
     @Slot(str)
     def on_failed(self, message: str) -> None:

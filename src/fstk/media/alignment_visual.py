@@ -20,6 +20,8 @@ SHOT = (320, 240)           # size the frames are extracted at (4:3, like the de
 LIKE = 0.80                 # grey-picture correlation that counts as "the same picture"
 UNLIKE = 0.60               # below this nothing around the predicted frame resembles the LD frame
 MAX_POINTS = 14
+SHEET_PAD, SHEET_HEAD = 10, 64
+VIEWS = ("LaserDisc", "DVD", "Difference")
 GOOD, SHIFTED, UNSURE = "agrees", "off by frames", "no similar picture"
 
 
@@ -168,7 +170,7 @@ def render_sheet(spots: list[Spot], master_frames: dict[int, np.ndarray], dvd_fr
     from PIL import Image, ImageDraw
 
     cw, ch = CELL
-    pad, head, row_h = 10, 64, ch + 34
+    pad, head, row_h = SHEET_PAD, SHEET_HEAD, ch + 34
     width = pad + 3 * (cw + pad)
     height = head + len(spots) * row_h + pad
     img = Image.new("RGB", (width, max(height, head + 40)), (24, 24, 24))
@@ -199,6 +201,44 @@ def render_sheet(spots: list[Spot], master_frames: dict[int, np.ndarray], dvd_fr
         draw.rectangle((pad + cw + pad - 1, y + 29, pad + cw + pad + cw, y + 30 + ch), outline=outline)
     img.save(path, format="PNG")
     return path
+
+
+def tile_rect(row: int, col: int) -> list[int]:
+    """Where picture ``col`` of spot ``row`` sits in the sheet (x, y, w, h)."""
+    cw, ch = CELL
+    y = SHEET_HEAD + row * (ch + 34) + 30
+    return [SHEET_PAD + col * (cw + SHEET_PAD), y, cw, ch]
+
+
+def tone(verdict: str) -> str:
+    return {GOOD: "good", SHIFTED: "warn", UNSURE: "bad"}.get(verdict, "neutral")
+
+
+def review_view(res: AlignmentResult, spots: list[Spot], fit: dict, *, sheet: str, duration_s: float,
+                rendered: bool) -> dict:
+    """What the app shows for this review (``fstk.ui.visual``): verdict, timeline and the spot pictures."""
+    overall = {"LOOKS GOOD": "good", "CHECK THE FLAGGED POINTS": "warn"}.get(fit.get("verdict", ""), "neutral")
+    marks = []
+    for n, act in enumerate(res.acts, 1):
+        marks.append({"start_s": act.start_frame / FPS, "end_s": act.end_frame / FPS, "tone": "info", "alpha": 120,
+                      "label": f"act {n}: matched to the DVD"})
+        for s0, s1 in act.inconsistent_spans:
+            marks.append({"start_s": s0, "end_s": max(s1, s0 + 0.5), "tone": "warn",
+                          "label": f"act {n}: the numbers flagged this stretch"})
+    spot_rows = []
+    for r, s in enumerate(spots):
+        detail = ("" if np.isnan(s.ncc) else
+                  f"Similarity {s.ncc_predicted:.2f} at the chosen DVD frame"
+                  + ("" if s.best_shift == 0 else f"; best {s.ncc:.2f} {s.best_shift:+d} frame(s) away"))
+        spot_rows.append({"time_s": round(s.time_s, 2), "label": s.label, "verdict": s.verdict or "not checked",
+                          "tone": tone(s.verdict), "detail": detail,
+                          "views": ([{"name": v, "rect": tile_rect(r, c)} for c, v in enumerate(VIEWS)]
+                                    if rendered else [])})
+    return {"title": "DVD alignment", "verdict": fit.get("verdict", ""), "tone": overall,
+            "headline": fit.get("text", ""), "duration_s": duration_s, "timeline": marks,
+            "sheet": sheet, "spots": spot_rows,
+            "how_to_look": "Pick a spot and press Blink: if the alignment is right the LaserDisc and DVD pictures "
+                           "show the same moment and only the colours/sharpness change; a jump means a shift."}
 
 
 def _norm_luma(rgb: np.ndarray) -> np.ndarray:

@@ -180,8 +180,10 @@ class DvdAlignment(Stage):
                   "master": Path(d["master"]).name, "dvd": Path(d["dvd"]).name, "descriptors": names,
                   "descriptor_frames": {"master": len(master), "dvd": len(dvd)},
                   "alignment_path": Path(d["npy"]).name, "diagnostics": Path(d["tsv"]).name, **summary,
-                  "picture_check": fit, "picture_sheet": Path(d["png"]).name,
-                  "review_summary": self._review_summary(res, fit)}
+                  "picture_check": {k: v for k, v in fit.items() if k != "view"},
+                  "picture_sheet": Path(d["png"]).name,
+                  "review_summary": self._review_summary(res, fit),
+                  "review_view": {**fit["view"], "reasons": list(res.reasons)}}
         atomic_write_json(d["json"], report)
         out = StepOutput(report=Path(d["json"]))
         record = {k: summary[k] for k in ("decision", "reasons", "acts", "breaks", "common_slope_ppm", "consistency",
@@ -226,14 +228,20 @@ class DvdAlignment(Stage):
             result = vis.assess(spots)
             vis.render_sheet(spots, got_m, got_d, png, title=f"DVD alignment spot checks — {ctx.episode}",
                              summary=result["text"])
-            return {**result, "points": [sp.to_dict() for sp in spots]}
+            fit = {**result, "points": [sp.to_dict() for sp in spots]}
+            fit["view"] = vis.review_view(res, spots, fit, sheet=png.name, duration_s=master_frames / al.FPS,
+                                          rendered=True)
+            return fit
         except (FstkError, OSError, ValueError, KeyError) as exc:
             if ctx.cancel.is_set():
                 raise
             why = f"picture spot checks could not be made: {exc}"
             vis.render_note(png, why)
-            return {"verdict": "NOT CHECKED", "text": why, "checked": 0, "agree": 0, "points": [],
-                    "recommendation": "use the numeric reasons below"}
+            fit = {"verdict": "NOT CHECKED", "text": why, "checked": 0, "agree": 0, "points": [],
+                   "recommendation": "use the numeric reasons below"}
+            fit["view"] = vis.review_view(res, [], fit, sheet=png.name, duration_s=master_frames / al.FPS,
+                                          rendered=False)
+            return fit
 
     @staticmethod
     def _review_summary(res, fit: dict) -> str:
@@ -242,9 +250,9 @@ class DvdAlignment(Stage):
             lines.append("Why the numbers held it for review: " + "; ".join(res.reasons) + ".")
         else:
             lines.append("All of the numeric checks passed too.")
-        lines.append("Open the picture sheet (evidence): each row is a LaserDisc frame, the DVD frame the alignment "
-                     "pairs with it, and where they differ. Approve if the pairs show the same moment; reject if "
-                     "they are clearly out of step.")
+        lines.append("Look at the spots: each shows a LaserDisc frame and the DVD frame the alignment pairs with it "
+                     "(Blink flips between them). Approve if they show the same moment; reject if they are clearly "
+                     "out of step.")
         return "\n".join(lines)
 
     def verify(self, ctx, plan, output):

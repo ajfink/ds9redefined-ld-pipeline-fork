@@ -22,9 +22,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fstk.core.errors import ArtifactError
+from fstk.core.errors import ArtifactError, FstkError
 from fstk.core.fsio import atomic_write_bytes, atomic_write_json, decode_text, read_json
 from fstk.core.timeutil import utc_now_iso, utc_stamp
+from fstk.media import cadence_visual as cvis
 from fstk.media import hybrid
 from fstk.media.cadence import analyze_tfm_rows, load_motion_trace, parse_tfm_log
 from fstk.media.cadence_map import di_map_text, repair_mask, repair_ranges
@@ -50,6 +51,23 @@ def cadence_issues(analysis: dict) -> list[str]:
     return issues
 
 
+def cadence_issues_plain(analysis: dict) -> list[str]:
+    """``cadence_issues`` in words a person deciding by eye can use."""
+    out = []
+    if float(analysis["period5_agreement_pct"]) < AUTO_ACCEPT["min_period5_pct"]:
+        out.append(f"the film pattern is steady in only {analysis['period5_agreement_pct']:.0f}% of the episode "
+                   f"(finished episodes: {AUTO_ACCEPT['min_period5_pct']:.0f}% or more)")
+    if int(analysis["unmatched_count"]) > AUTO_ACCEPT["max_unmatched"]:
+        out.append(f"{analysis['unmatched_count']} frame(s) have fields that match no neighbour")
+    if float(analysis["repair_frame_pct"]) > AUTO_ACCEPT["max_repair_pct"]:
+        out.append(f"{analysis['repair_frame_pct']:.1f}% of frames would be repaired "
+                   f"(finished episodes: up to {AUTO_ACCEPT['max_repair_pct']:.0f}%)")
+    if int(analysis["insert_count"]) > AUTO_ACCEPT["max_inserts"]:
+        out.append(f"{analysis['insert_count']} stretches look like video inserts "
+                   f"(finished episodes: up to {AUTO_ACCEPT['max_inserts']})")
+    return out
+
+
 @register
 class CadenceEvidence(Stage):
     id = "cadence-evidence"
@@ -60,7 +78,7 @@ class CadenceEvidence(Stage):
     writes = ("video.tfm_period5_pct", "video.tfm_unmatched", "video.tfm_combed_count",
               "video.tfm_combed_spans", "video.inserts", "video.repair_frames", "video.repair_pct",
               "video.hybrid_seconds")
-    writes_artifacts = ("tfm_log", "di_map", "cadence_summary", "hybrid_plan")
+    writes_artifacts = ("tfm_log", "di_map", "cadence_summary", "hybrid_plan", "cadence_sheet")
     resource = "compute"
     review = "cadence-review"
     review_when = "only when a cadence measurement is outside the v38-calibrated ranges"
@@ -79,11 +97,12 @@ class CadenceEvidence(Stage):
                  "log": probe / f"full-tfm-log-{slug}.txt", "di_map": probe / f"di-map-{slug}.txt",
                  "hybrid": probe / f"hybrid-plan-{slug}.json", "fd_script": ctx.root("scripts") / f"field-diff-{slug}.vpy",
                  "fd_log": probe / f"field-diff-{slug}.txt",
-                 "report": ctx.root("reports") / "cadence.json"}
+                 "report": ctx.root("reports") / "cadence.json",
+                 "sheet": ctx.root("reports") / "cadence-sheet.png"}
         motion = params.get("motion_trace")
         inputs = [master] + ([Path(motion)] if motion else [])
         return StepPlan(self.id, params, inputs=inputs,
-                        outputs=[files["log"], files["di_map"], files["hybrid"], files["report"]],
+                        outputs=[files["log"], files["di_map"], files["hybrid"], files["report"], files["sheet"]],
                         summary=f"TFM over {expected} frames (pad {pad})",
                         data={k: str(v) for k, v in files.items()} | {
                             "master": str(master), "pad": pad, "expected": expected,
@@ -122,13 +141,15 @@ class CadenceEvidence(Stage):
         atomic_write_bytes(d["di_map"], di_map_text(ranges).encode())
         plan_doc = self._hybrid_plan(ctx, d, rows)
         atomic_write_json(d["hybrid"], plan_doc)
+        issues = cadence_issues(analysis)
+        view = self._pictures(ctx, d, analysis, [int(r["mic"]) for r in rows], held=bool(issues))
         atomic_write_json(d["report"], {"schema": "fstk-cadence-v1", "hybrid": plan_doc["summary"], "created_utc": utc_now_iso(),
                                         "episode": str(ctx.episode), "source_pad": d["pad"],
                                         "decoded_frames": decode.frames, "repair_ranges": ranges,
                                         "analysis": analysis, "auto_accept": AUTO_ACCEPT,
-                                        "auto_accept_issues": cadence_issues(analysis)})
+                                        "auto_accept_issues": issues,
+                                        "review_summary": view["headline"], "review_view": view})
         out = StepOutput(report=Path(d["report"]))
-        issues = cadence_issues(analysis)
         out.needs_review = bool(issues)
         out.notes += issues
         out.measure("video.tfm_period5_pct", float(analysis["period5_agreement_pct"]))
@@ -144,10 +165,35 @@ class CadenceEvidence(Stage):
         out.artifacts["di_map"] = {"root": "probe", "name": Path(d["di_map"]).relative_to(probe).as_posix()}
         out.artifacts["cadence_summary"] = {"root": "reports", "name": "cadence.json"}
         out.artifacts["hybrid_plan"] = {"root": "probe", "name": Path(d["hybrid"]).relative_to(probe).as_posix()}
+        out.artifacts["cadence_sheet"] = {"root": "reports", "name": Path(d["sheet"]).name}
         out.measure("video.hybrid_seconds", float(plan_doc["summary"]["video_seconds"]),
                     note=f"{plan_doc['summary']['video_segments']} video-origin stretch(es) converted at 23.976p; "
                          f"{plan_doc['summary']['plate_segments']} film plate(s) under a video overlay kept as film")
         return out
+
+    def _pictures(self, ctx, d, analysis: dict, mics: list[int], *, held: bool) -> dict:
+        """The cadence picture sheet and what the app shows for the review. Frames are extracted only when the
+        episode is held for review (one more sequential pass over the master); never fails the stage."""
+        sheet = Path(d["sheet"])
+        plain = cadence_issues_plain(analysis)
+        title = f"Film cadence — {ctx.episode}"
+        if not held:
+            cvis.render_note(sheet, title, cvis.headline([]))
+            return cvis.review_view(analysis, [], sheet=sheet.name, rendered=False, issues_plain=[], held=False)
+        spots = cvis.choose_spots(analysis, mics)
+        try:
+            ff = ctx.tool("ffmpeg")
+            ctx.report(0.99, f"pictures of {len(spots)} flagged place(s)")
+            info = ff.probe(Path(d["master"])).only("video").raw
+            frames = ff.frames_by_index(d["master"], cvis.frames_needed(spots, int(d["pad"])),
+                                        int(info["width"]), int(info["height"]), cancel=ctx.cancel)
+            cvis.render_sheet(spots, frames, int(d["pad"]), sheet, title=title, summary=cvis.headline(plain))
+            return cvis.review_view(analysis, spots, sheet=sheet.name, rendered=True, issues_plain=plain, held=True)
+        except (FstkError, OSError, ValueError, KeyError) as exc:
+            if ctx.cancel.is_set():
+                raise
+            cvis.render_note(sheet, title, f"pictures could not be made: {exc}")
+            return cvis.review_view(analysis, spots, sheet=sheet.name, rendered=False, issues_plain=plain, held=True)
 
     def _hybrid_plan(self, ctx, d, rows) -> dict:
         """Video-origin stretches and, for each, whether its main picture is still a telecined film plate."""

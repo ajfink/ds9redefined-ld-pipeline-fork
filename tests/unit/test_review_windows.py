@@ -100,7 +100,7 @@ def test_delivery_review_records_approval_only_for_a_clean_pending_report(tmp_pa
     prof, ws, report = _delivery_env(tmp_path, {"pass": 2, "fail": 0, "failed_gates": [], "unverified_gates": []})
     dlg = reviews.DeliveryReview(Services(prof), "DS9:S01E20", actor="op")
     qtbot.addWidget(dlg)
-    assert dlg.gates.rowCount() == 2 and dlg.intervals.count() == 1 and dlg.chunks.rowCount() == 3
+    assert dlg.gates.rowCount() == 2 and dlg.intervals.count() == 1 and len(dlg.chunk_buttons) == 3
     assert not dlg.approve_button.isEnabled()                      # chunks not checked yet
     dlg.set_verdict(0, "ok")
     dlg.set_verdict(1, "ok")
@@ -264,15 +264,15 @@ def test_delivery_review_stretch_choice_writes_a_fresh_encode_plan(tmp_path, qtb
     clip = _with_stretches(prof, ws, tmp_path)
     dlg = reviews.DeliveryReview(Services(prof), "DS9:S01E20", actor="op")
     qtbot.addWidget(dlg)
-    assert dlg.stretches.rowCount() == 1                           # the film plate is not offered
-    assert dlg.stretches.item(0, 3).text() == "nearest" and not dlg.stretch_button.isEnabled()
+    assert len(dlg.stretch_cards) == 1                             # the film plate is not offered
+    assert dlg.stretch_rows[0]["encoded"] == "nearest" and not dlg.stretch_button.isEnabled()
     assert dlg.stretch_rows[0]["start_s"] == pytest.approx((400 - 40) * 1001 / 24000, abs=0.01)
     loaded = []
     monkeypatch.setattr(dlg.media, "load", lambda p, keep_position=True: loaded.append(p))
     monkeypatch.setattr(dlg.media, "play", lambda: None)
     dlg.play_stretch(0)
     assert loaded == [str(clip)]
-    dlg.stretches.cellWidget(0, 4).setCurrentIndex(1)
+    dlg.stretch_cards[0].setCurrentIndex(1)
     assert dlg.stretch_button.isEnabled()
     plans = []
     dlg.plan_ready.connect(plans.append)
@@ -327,3 +327,45 @@ def test_delivery_review_frame_fix_tab_previews_and_applies(tmp_path, qtbot, mon
     plan = json.loads(Path(plans[-1]).read_text())
     assert [s["stage"] for s in plan["steps"]][:3] == ["frame-fixes", "video-quality", "encode-final"]
     assert ws.store.load().get("video.manual_fixes")[0]["first"] == 240
+
+
+def test_efm_window_shows_a_waveform_strip_per_capture_and_click_listens(efm_env, qtbot, monkeypatch):
+    from fstk.ui import reviews
+
+    prof, _ws, _ledger, _ = efm_env
+    efm._stack(efm_env)
+    efm.run(efm_env, [efm.DECODE], "d3", orc=efm.FakeOrc(quality={"L1": dict(concealed=50), "P1": dict(muted=3)}))
+    dlg = reviews.EfmCaptureReview(Services(prof), "DS9:S01E20")
+    qtbot.addWidget(dlg)
+    assert set(dlg.strips) == {r["capture"] for r in dlg.data["rows"]}
+    assert "AUTOMATIC CHOICE" in dlg.headline.text() and dlg.details.isHidden()        # numbers hidden by default
+    with_audio = [k for k, v in dlg.data["wavs"].items() if Path(v).is_file()]
+    assert with_audio
+    qtbot.waitUntil(lambda: all(k in dlg._overviews for k in with_audio), timeout=20000)
+    assert dlg.strips[with_audio[0]][1].peaks and "drop-outs" in dlg.strips[with_audio[0]][2].text()
+    played = []
+    monkeypatch.setattr(dlg.media, "load", lambda path, keep_position=True: played.append(path))
+    monkeypatch.setattr(dlg.media, "play", lambda: None)
+    label = dlg.data["rows"][1]["capture"]
+    dlg._listen(1, label, 12.0)
+    assert dlg.selected_capture() == label and dlg.strips[label][0].isChecked()
+    assert played == [dlg.data["wavs"][label]]
+
+
+def test_delivery_marks_move_on_to_the_next_chunk_and_show_on_the_timeline(tmp_path, qtbot, monkeypatch):
+    from fstk.ui import reviews
+
+    prof, ws, report = _delivery_env(tmp_path, {"pass": 2, "fail": 0, "failed_gates": [], "unverified_gates": []})
+    dlg = reviews.DeliveryReview(Services(prof), "DS9:S01E20", actor="op")
+    qtbot.addWidget(dlg)
+    played = []
+    monkeypatch.setattr(dlg, "play_chunk", played.append)
+    assert dlg.current == 0 and dlg.details.isHidden() and "WATCH AND LISTEN" in dlg.headline.text()
+    assert [t["tone"] for t in dlg.timeline.ticks] == ["neutral"] * 3 and dlg.timeline.marks   # + the flagged place
+    dlg.mark("ok")
+    assert dlg.current == 1 and played == [1]                      # next chunk plays by itself
+    dlg.mark("ok")
+    dlg.mark("ok")
+    assert [t["tone"] for t in dlg.timeline.ticks] == ["good"] * 3 and dlg.approve_button.isEnabled()
+    dlg.show()
+    assert dlg.decide("APPROVED") and not dlg.isVisible()          # approving closes the window

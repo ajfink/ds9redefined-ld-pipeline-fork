@@ -339,6 +339,13 @@ class Services:
                 "wavs": {label: str(self.profile.root("audio", ctx.episode) / p["wav"]["relative_path"])
                          for label, p in provs.items()}}
 
+    def efm_overview(self, episode: str | EpisodeId, label: str, wav: str | Path) -> dict[str, Any]:
+        """Waveform and sudden drop-outs of one decoded capture (``media.audio_overview``), cached per episode."""
+        from fstk.media.audio_overview import cached_overview
+
+        cache = self.workspace(episode).state_dir / "cache" / f"efm-overview-{label}.json"
+        return cached_overview(wav, cache)
+
     def write_efm_select_plan(self, episode: str | EpisodeId, *, capture: str | None, note: str) -> Path:
         """Plan with one ``efm-select`` step carrying the operator's choice (or none → automatic)."""
         from fstk.core.fsio import atomic_write_json

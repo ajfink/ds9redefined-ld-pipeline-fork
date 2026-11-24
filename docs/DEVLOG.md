@@ -1144,3 +1144,40 @@ names that no longer exist; required tools never found) and, if any, lists them 
 - Fix 2, `Services.pending_reviews`: one entry per review kind, the one whose evidence is newest (step
   `finished_utc`), so the stale review of an older job is not offered.
 - Existing job states keep their recorded `full` fingerprints until those steps run again.
+
+## CP49 — every review is decided by looking and listening, in the app; approvals visibly carry on (owner)
+
+- Owner: all approval stages must have visual/audible elements (no tables or lists of data), previewers baked into
+  the app; every approval continues the work; the continued work must be evident in the main window.
+- Approval points audited: engine reviews `dvd-alignment`, `cadence-review`, `delivery`; the EFM capture choice
+  (window); the delivery window's rerun / stretch / frame-fix decisions. (The DVD file choice is a source choice,
+  not a review; unchanged.)
+- New `ui/visual.py`: `TimelineBar` (programme bar, coloured stretches, clickable markers), `WaveStrip` (waveform +
+  drop-out marks), `SpotViewer` (thumbnails, large view, view buttons, **Blink** between the first two views),
+  `DetailsToggle` (numbers hidden unless asked), `headline_html`.
+- Stages describe what to show in a `review_view` block in their JSON report (verdict, tone, headline, timeline,
+  sheet, spots with `views[].rect` into the sheet, how-to-look). `alignment_visual.review_view` (LaserDisc / DVD /
+  Difference per spot). New `media/cadence_visual.py` + `cadence-evidence` writes `reports/cadence-sheet.png`
+  (artifact `cadence_sheet`): when held, the flagged places at their most combed frame — close-up ×2 of the most
+  combed area (nearest-neighbour, fields stay visible), the next frame at the same place, the whole frame — plus two
+  clean places for comparison; plain-language reasons (`cadence_issues_plain`). Frames come from one sequential
+  `frames_by_index` pass at native size, only when held. Best effort: a failure leaves a note picture.
+- Reviews tab: headline, timeline, spot viewer, how-to-look; the evidence list moved behind "Show the numbers";
+  "Open files" kept for outside apps; delivery reviews say "Open A/V check…". Older reports without `review_view`
+  fall back to the picture sheet.
+- Delivery window: chunk buttons (grey/green/orange) + big **In sync / Sound too early / Sound too late** buttons;
+  marking plays the next unjudged chunk; the episode timeline shows chunks and flagged places (click to play there);
+  gates/intervals/warnings behind "Show the automatic checks"; quality tab shows the worst-moments sheet first;
+  video stretches are cards with ▶ Preview + choice. Approving closes the window.
+- EFM window: one waveform strip per capture with sudden drop-outs in red (`media/audio_overview.py`: exact digital
+  silence in both channels with sound within 50 ms either side; fades don't count), read in a background thread and
+  cached in `<episode>/cache/efm-overview-<label>.json`; click a strip to hear that capture there; the metrics table
+  behind "Show the decoder's measurements".
+- Continuation: `MainWindow.start_plan` queues a plan while another run is going (started from `_done`) instead of
+  dropping it; `continue_job` says when the running job picks the approval up itself; work started from a review
+  window closes it and raises the main window (`run_from_window`); a coloured banner above the tabs says what is
+  happening ("… approved — continuing: <steps>. Follow it on the Progress tab", queued, rejected, finished, stopped);
+  when a run ends waiting for a review the app switches to the Reviews tab with it selected.
+- Tests: cadence pictures (fake ffmpeg), audio overview (block boundaries, fades, cache), Reviews tab spot viewer +
+  timeline + blink, delivery marking/auto-advance/close, EFM strips + listen, queued plans.
+- **Unverified on real footage:** cadence close-up choice and the drop-out detector on real EFM decodes.
