@@ -258,10 +258,25 @@ class StackRender(Stage):
             raise GateError(f"{master} exists; move it aside before re-rendering (fstk never overwrites a master)")
         render_project = ctx.root("stack") / f"{project.stem}-lossless.orcprj"
         report = ctx.root("reports") / "stack-render.json"
-        # A project made before ADR 0004 still carries Orc's CLV time-code PADs: they are taken out here, the
-        # frame count drops by as many, and a master already rendered with them loses them by a lossless copy.
+        # A project made before ADR 0004 still carries Orc's CLV time-code PADs: they are taken out here, and a
+        # master already rendered with them loses them by a lossless copy. What the master holds is recorded by
+        # the project it was rendered from (``…-lossless.orcprj``), so that is where its PADs are read; the
+        # stack project itself may already have been stripped (CP53 stripped it before checking the master).
         pads = strip_timecode_pads(project.read_text(encoding="utf-8"))
-        frames = int(m.require("stack.frames")) - pads.count
+        project_has_pads = pads.count > 0
+        if reuse and render_project.is_file():
+            rendered = strip_timecode_pads(render_project.read_text(encoding="utf-8"))
+            if rendered.count:
+                if rendered.text != lossless_render_project(pads.text, master):
+                    raise GateError(f"{master.name} was rendered from {render_project.name}, which is not the "
+                                    f"current {project.name} (apart from its time-code PADs); move the master "
+                                    "aside to re-render it")
+                pads = rendered
+        recorded = int(m.require("stack.frames"))
+        # stack.frames counts the PADs when the project still has them (made before ADR 0004). With the project
+        # already stripped it may count them or not (CP53 re-measured an unmigrated master), so the pad-free count
+        # then comes from the master's own packets in run().
+        frames = recorded - pads.count if project_has_pads else (None if pads.count else recorded)
         space = None
         if not reuse:
             space = SpaceNeed("prores", planned, basis)
@@ -273,7 +288,7 @@ class StackRender(Stage):
                                  + (f" without its {pads.count} time-code PAD frames" if pads.count else "")
                                  if reuse else f"render {project.name} → {master.name} (FFV1)"),
                         data={"project": str(project), "render_project": str(render_project), "master": str(master),
-                              "report": str(report), "frames": frames, "orc_frames": frames + pads.count,
+                              "report": str(report), "frames": frames, "recorded_frames": recorded,
                               "pad_positions": list(pads.master_positions),
                               "groups": m.get("stack.pressing_groups"), "reuse": reuse})
 
@@ -282,8 +297,12 @@ class StackRender(Stage):
         d = plan.data
         project, master = Path(d["project"]), Path(d["master"])
         labels = project_source_labels(project)
-        stripped = strip_timecode_pads(project.read_text(encoding="utf-8"))
+        original = project.read_text(encoding="utf-8")
+        stripped = strip_timecode_pads(original)
         if stripped.count:                       # the project itself goes without them from now on
+            kept = project.with_name(project.stem + "-with-timecode-pads.orcprj")
+            if not kept.exists():
+                atomic_write_bytes(kept, original.encode("utf-8"))
             atomic_write_bytes(project, stripped.text.encode("utf-8"))
         if d["reuse"]:
             ctx.report(0.05, f"checking the existing master {master.name}")
@@ -294,11 +313,23 @@ class StackRender(Stage):
                 issues.append(f"existing {master.name} is {codec!r}, not lossless; move it aside to re-render")
             index = ff.packet_index(master, cancel=ctx.cancel)
             actual = len(index["pts"])
-            if not issues and actual == int(d["orc_frames"]) and d["pad_positions"] and actual != int(d["frames"]):
-                migration = self._drop_timecode_pads(ctx, ff, master, index, d["pad_positions"])
+            positions = d["pad_positions"]
+            # the master holds the PADs: it has the pad-free count plus them, or (recorded before CP53) the
+            # recorded count itself
+            with_pads = {int(d["recorded_frames"]), int(d["recorded_frames"]) + len(positions)}
+            expected = d["frames"] if d["frames"] is not None else actual - len(positions)
+            if not issues and positions and actual in with_pads and actual - len(positions) == expected:
+                migration = self._drop_timecode_pads(ctx, ff, master, index, positions)
                 actual = migration["frames"]
-            if actual != int(d["frames"]):
-                issues.append(f"existing {master.name} has {actual} frames; it should have {d['frames']}")
+                render = Path(d["render_project"])        # it now records what the master holds
+                if render.is_file():
+                    keep_render = render.with_name(render.stem + "-with-timecode-pads.orcprj")
+                    if not keep_render.exists():
+                        atomic_write_bytes(keep_render, render.read_bytes())
+                atomic_write_bytes(render, lossless_render_project(stripped.text, master).encode())
+            if actual != int(expected):
+                issues.append(f"existing {master.name} has {actual} frames; it should have {expected}")
+            d["frames"] = int(expected)
             evidence = {"ok": not issues, "issues": issues, "reused": True, "master_codec": codec,
                         "decoded_frames": actual, "frames_counted_from": "packets (intra-only FFV1)"}
             if migration:
@@ -403,6 +434,21 @@ class StackRender(Stage):
         tmp.rename(master)
         return {"count": len(positions), "positions": list(positions), "frames": want,
                 "original_kept_as": kept.name, "method": "stream copy (noise=drop, setts); packets byte-identical"}
+
+    def still_current(self, step_state: dict) -> str | None:
+        """A master that still holds Orc's CLV time-code PAD frames is not current (ADR 0004): CP53 could pass
+        one while its project had already been stripped. Its render project records what it holds."""
+        for fp in step_state.get("inputs", []):
+            path = Path(fp.get("path", ""))
+            if path.suffix != ".orcprj" or path.stem.endswith("-lossless"):
+                continue
+            render = path.with_name(path.stem + "-lossless.orcprj")
+            try:
+                if render.is_file() and strip_timecode_pads(render.read_text(encoding="utf-8")).count:
+                    return f"the stack master still has Orc's time-code PAD frames ({render.name}; ADR 0004)"
+            except Exception as e:  # unreadable or inconsistent: run the step, which reports it properly
+                return f"cannot tell whether the stack master still has time-code PADs: {e}"
+        return None
 
     def verify(self, ctx, plan, output):
         return list(output.data["evidence"]["issues"])

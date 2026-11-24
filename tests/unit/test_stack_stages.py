@@ -302,3 +302,87 @@ def test_a_read_error_is_reported_as_one_and_retried_never_as_picture_content(tm
         StackRender()._drop_timecode_pads(_Ctx(), ff, other, index, [900])
     assert "not all-zero" not in str(e.value) and "Read error at pos" in str(e.value)
     assert other.stat().st_size == size and not list(tmp_path.glob("other*timecode*"))
+
+
+class _PadMasterFF:
+    """A master of ``n`` FFV1 frames with blank PAD packets at ``positions``; drop_frames really writes the copy."""
+
+    def __init__(self, n, positions):
+        self.n, self.positions, self.copies = n, set(positions), {}
+
+    def probe(self, path):
+        from types import SimpleNamespace
+        stream = SimpleNamespace(raw={"codec_name": "ffv1"})
+        return SimpleNamespace(only=lambda kind: stream)
+
+    def packet_index(self, path, cancel=None):
+        n = self.copies.get(Path(path).name, self.n)
+        sizes = [500 if (n == self.n and i in self.positions) else 400_000 for i in range(n)]
+        return {"pts": list(range(n)), "size": sizes, "key": [True] * n, "time_base": "1001/30000"}
+
+    def frame_at(self, path, at_s, w, h, **kw):
+        import numpy as np
+        return np.zeros((h, w), np.uint8)
+
+    def drop_frames(self, src, dst, indices, **kw):
+        Path(dst).write_bytes(b"copy")
+        self.copies[Path(dst).name] = self.n - len(indices)
+        self.copies[Path(src).name] = self.n                  # the original keeps its frames
+        return None
+
+
+def _legion_cp53_state(env):
+    """What CP53 left on the Legion: stack project already stripped, the master and its render project with PADs,
+    stack.frames = the master's padded count, and a passed stack-render."""
+    from fstk.tools.orc_project import lossless_render_project, strip_timecode_pads
+
+    prof, ws, _ = env
+    fixture = (Path(__file__).parents[1] / "fixtures" / "orc" / "s01e20-stack-with-timecode-pads.orcprj").read_text()
+    pads = strip_timecode_pads(fixture)
+    stack = prof.root("stack", EP)
+    stack.mkdir(parents=True, exist_ok=True)
+    project = stack / "stack-full-ds9-s01e20.orcprj"
+    project.write_text(pads.text)
+    master = prof.root("prores", EP) / "S01E20-stack-master.mkv"
+    master.parent.mkdir(parents=True, exist_ok=True)
+    master.write_bytes(b"ffv1 with pads")
+    (stack / "stack-full-ds9-s01e20-lossless.orcprj").write_text(lossless_render_project(fixture, master))
+    with ws.store.transaction(by="t", reason="CP53 state") as m:
+        m.set("stack.reference", "P6", by="t", note="fixture")
+        m.set("stack.alignment_map", "1+0", by="t", note="fixture")
+        m.set("stack.frames", 83335, by="t", note="CP53 re-measured the unmigrated master")
+        m.set_artifact("stack_project", root="stack", name=project.name)
+    return prof, pads, master
+
+
+def test_a_master_cp53_passed_with_its_pads_is_stale_and_then_migrated(env):
+    """Legion 2026-11-24 13:28: CP53 stripped the stack project before checking the master; the next run saw no
+    PADs and passed the master with all 83 still in it. The render project records what the master holds."""
+    from fstk.stages.stack import StackRender
+
+    prof, pads, master = _legion_cp53_state(env)
+    project = prof.root("stack", EP) / "stack-full-ds9-s01e20.orcprj"
+    held = {"inputs": [{"path": str(project)}], "outputs": [{"path": str(master)}]}
+    assert "still has Orc's time-code PAD frames" in StackRender().still_current(held)
+
+    ff = _PadMasterFF(83335, pads.master_positions)
+    render = {**RENDER, "after": []}
+    state = run(env, [render], "legion-1", ffmpeg=ff, orc=FakeOrc())
+    assert state["steps"]["render"]["status"] == "passed", state["steps"]["render"].get("issues")
+    rep = json.loads((prof.root("reports", EP) / "stack-render.json").read_text())
+    assert rep["evidence"]["timecode_pads_removed"]["count"] == 83
+    assert env[1].store.load().get("stack.frames") == 83335 - 83
+    assert (master.parent / "S01E20-stack-master-with-timecode-pads.mkv").is_file()
+    assert StackRender().still_current(held) is None           # the render project now matches the master
+    assert (prof.root("stack", EP) / "stack-full-ds9-s01e20-lossless-with-timecode-pads.orcprj").is_file()
+
+
+def test_a_render_project_for_another_project_is_refused(env):
+    prof, pads, master = _legion_cp53_state(env)
+    project = prof.root("stack", EP) / "stack-full-ds9-s01e20.orcprj"
+    project.write_text(project.read_text().replace("0-83251", "0-83250", 1))
+    state = run(env, [{**RENDER, "after": []}], "legion-2", ffmpeg=_PadMasterFF(83335, pads.master_positions),
+                orc=FakeOrc())
+    assert state["steps"]["render"]["status"] in ("failed", "blocked")
+    assert any("not the current" in i for i in state["steps"]["render"]["issues"]), state["steps"]["render"]
+    assert master.read_bytes() == b"ffv1 with pads"

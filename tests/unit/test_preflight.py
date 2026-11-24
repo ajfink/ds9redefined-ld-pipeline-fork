@@ -77,3 +77,30 @@ def test_the_pinned_plugin_set_includes_mvutensils_for_qtgmc():
     lock = json.loads((root / "vendor" / "vapoursynth-plugins" / "LOCK.json").read_text())["packages"]
     assert any(r.startswith("vapoursynth-mvutensils") for r in media) and "mvu" in VS_NAMESPACES
     assert lock["vapoursynth-mvutensils"]["version"] == "9"
+    # Legion 2026-11-24 13:48: vsrgtools' median blur inside QTempGaussMC needs zsmooth
+    assert any(r.startswith("vapoursynth-zsmooth") for r in media) and "zsmooth" in VS_NAMESPACES
+    assert lock["vapoursynth-zsmooth"]["version"] == "0.20.0"
+    wheel = root / "vendor" / "vapoursynth-plugins" / lock["vapoursynth-zsmooth"]["file"]
+    import hashlib
+    assert hashlib.sha256(wheel.read_bytes()).hexdigest() == lock["vapoursynth-zsmooth"]["sha256"]
+
+
+def test_a_qtgmc_that_cannot_render_stops_the_plan_at_the_start():
+    rows = [("vs plugin zsmooth", "PASS", "loaded"),
+            ("QTempGaussMC renders", "FAIL", "the scripts' QTGMC call fails: AttributeError: no zsmooth")]
+    assert preflight.vapoursynth_problems(lambda: rows) == [
+        "VapourSynth QTempGaussMC renders: the scripts' QTGMC call fails: AttributeError: no zsmooth"]
+
+
+def test_the_qtgmc_probe_runs_the_scripts_own_lines():
+    import pytest
+
+    from fstk.media.cadence_map import QTGMC_LINES, ivtc_vpy_script
+    from fstk.tools.requirements import probe_qtgmc
+
+    script = ivtc_vpy_script("m.mkv", 3, 0, 0, [(10, 40)], "qtgmc")
+    assert "\n".join(QTGMC_LINES) in script                  # the probe runs exactly this text
+    pytest.importorskip("vapoursynth")
+    pytest.importorskip("vsdeinterlace")
+    label, status, note = probe_qtgmc()
+    assert status == "PASS", note

@@ -78,8 +78,9 @@ EXECUTABLES = (
 )
 PINNED = (Requirement("orc", pinned=True), Requirement("x265", pinned=True))
 
-# resize2: default bobber of QTempGaussMC; mvu (mvutensils): vsjetpack 2.2's QTempGaussMC motion search
-VS_NAMESPACES = ("bs", "tivtc", "mv", "mvu", "znedi3", "eedi3m", "resize2")
+# resize2: default bobber of QTempGaussMC; mvu (mvutensils): vsjetpack 2.2's QTempGaussMC motion search;
+# zsmooth: its median/repair filters (vsrgtools)
+VS_NAMESPACES = ("bs", "tivtc", "mv", "mvu", "zsmooth", "znedi3", "eedi3m", "resize2")
 
 
 def package_version(dist: str) -> str | None:
@@ -128,13 +129,35 @@ def probe_vapoursynth() -> list[tuple[str, str, str]]:
         note = "loaded" if ns in have else ("missing — `repair=qtgmc` will fail; `pp2` still works" if ns == "resize2"
                                             else "missing")
         out.append((f"vs plugin {ns}", status, note))
-    try:
-        from vsdeinterlace import QTempGaussMC
-        api = ("SourceMatchMode API" if hasattr(QTempGaussMC, "SourceMatchMode") else "legacy kwargs API")
-        out.append(("QTempGaussMC", "PASS", api + " (generated scripts handle both)"))
-    except Exception as exc:
-        out.append(("QTempGaussMC", "WARN", f"vsdeinterlace not importable ({exc.__class__.__name__}); qtgmc repair unavailable"))
+    out.append(probe_qtgmc())
     return out
+
+
+def probe_qtgmc() -> tuple[str, str, str]:
+    """Run the generated scripts' QTempGaussMC call (``cadence_map.QTGMC_LINES``) on a small moving test clip and
+    render frames from it. Loading plugins by name is not enough: vsjetpack reaches new plugins from release to
+    release (`mvu` on 2026-11-24 07:57, `zsmooth` at 13:48), and only running the filter shows every one it needs."""
+    try:
+        import vapoursynth as vs
+
+        from fstk.media.cadence_map import QTGMC_LINES
+    except Exception as exc:
+        return ("QTempGaussMC renders", "WARN", f"vapoursynth not importable ({exc.__class__.__name__})")
+    try:
+        core = vs.core
+        src = core.std.BlankClip(width=176, height=120, format=vs.YUV422P10, length=12, fpsnum=30000, fpsden=1001)
+        src = core.std.FrameEval(src, lambda n, c=src: core.std.BlankClip(c, color=[(n * 97) % 1024, 512, 512]))
+        src = core.std.SetFieldBased(src, 2)
+        scope = {"src": src, "core": core, "vs": vs}
+        exec("\n".join(QTGMC_LINES), scope)  # our own constant: the scripts' exact text
+        di = scope["di"]
+        for n in (0, di.num_frames // 2, di.num_frames - 1):
+            di.get_frame(n)
+    except Exception as exc:
+        text = str(exc).strip().splitlines()
+        return ("QTempGaussMC renders", "FAIL",
+                f"the scripts' QTGMC call fails: {exc.__class__.__name__}: {text[-1] if text else ''}")
+    return ("QTempGaussMC renders", "PASS", f"{di.num_frames} frames from a test clip with the scripts' settings")
 
 
 # ------------------------------------------------------------------------------ the report

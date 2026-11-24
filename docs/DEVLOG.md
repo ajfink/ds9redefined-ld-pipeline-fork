@@ -1292,3 +1292,33 @@ names that no longer exist; required tools never found) and, if any, lists them 
   with ffmpeg's message; `stack-render` reports "could not read frame N … the drive gave a read error. Nothing was
   changed; run again". Only a frame that really decoded can fail the all-zero check. Test simulates the Legion's
   failure (retry succeeds; persistent failure reported as a read error, master untouched).
+
+## CP55 — CP53 bug: a master could pass with its PADs still in (Legion bundle 2026-11-24 13:49)
+
+- After the CP54 read error, the next run (13:27) passed stack-render in 27 s without touching the master:
+  CP53's first attempt had already rewritten `stack-full-ds9-s01e20.orcprj` without its PADs *before* checking the
+  master, so the retry found no PADs, compared the master's 83,335 packets with `stack.frames` = 83,335 (the padded
+  count) and passed. dvd-alignment and cadence then ran on the padded master; video-trim stopped on zsmooth
+  (below). Nothing was lost: the master and its render project `…-lossless.orcprj` (27 KB, with 83 PADs, whose
+  stripped text equals the lossless version of today's project byte for byte — checked on the Legion's files) are
+  intact.
+- Fix: the render project is the record of what the master holds. `stack-render` reads the PAD positions from it
+  (refusing one that is not the current project apart from its PADs), accepts the master with the pad-free count
+  plus the PADs or the recorded count, migrates, then rewrites the render project (old one kept as
+  `…-lossless-with-timecode-pads.orcprj`; the stack project's original is kept as `…-with-timecode-pads.orcprj`).
+- New `Stage.still_current(step_state)` hook, called by the engine's reconcile for every passed step: StackRender
+  answers "the stack master still has Orc's time-code PAD frames" while its render project has them, so the
+  Legion's passed step and everything after it (alignment, cadence) run again by themselves.
+- Tests: the Legion state rebuilt from the S01E20 fixture (stale → migrated → current); a render project for a
+  different project is refused. Full suite 608 passed.
+- Same bundle, second fault: video-trim stopped at `vspipe --info` because vsrgtools' median blur inside
+  QTempGaussMC calls `core.zsmooth.VerticalCleaner` (vsjetpack 2.2.7 lists `vapoursynth-zsmooth>=0.18` in its
+  `deinterlace`/`denoise` extras, which we don't install). Reproduced in a Linux venv with the Legion's exact set
+  (VapourSynth R82, mvutensils 9, vsjetpack 2.2.7): same AttributeError. `vapoursynth-zsmooth` joins the `media`
+  extra, pinned **0.20.0** (MIT; unmodified PyPI macOS arm64 wheel vendored, sha256 in LOCK), and `zsmooth` joins
+  `VS_NAMESPACES`. With it the generated encode script with `repair=qtgmc` renders 96/96 frames end to end.
+- So the next plugin vsjetpack reaches for cannot surface hours into a run again: the start-of-run check now runs
+  the scripts' own QTGMC lines (`cadence_map.QTGMC_LINES`, shared with the generated script) on a small test clip
+  and renders frames (`requirements.probe_qtgmc`, ~0.5 s); any failure is a FAIL that stops the plan at the start
+  with the filter's own error. Verified: without zsmooth it reports exactly the Legion's error.
+- Full suite 609 passed, 1 skipped (the real-QTGMC probe test needs VapourSynth; run by hand in the venv: PASS); the requirements hash changes, so each machine's launcher updates its environment.

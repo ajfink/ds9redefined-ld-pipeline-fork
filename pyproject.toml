@@ -26,6 +26,7 @@ media = [
     "vapoursynth-tivtc",
     "vapoursynth-mvtools",
     "vapoursynth-mvutensils",  # namespace `mvu`: vsjetpack 2.2's QTempGaussMC motion search (its `denoise` extra)
+    "vapoursynth-zsmooth",     # namespace `zsmooth`: vsrgtools' median/repair inside QTempGaussMC (vsjetpack `deinterlace` extra)
     "vapoursynth-znedi3",
     "vapoursynth-eedi3",
     "vapoursynth-resize2",

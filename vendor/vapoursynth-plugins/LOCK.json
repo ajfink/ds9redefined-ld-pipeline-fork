@@ -1,6 +1,6 @@
 {
   "about": "Pinned VapourSynth + plugin set used by FromStunToKill. Windows/Linux install these exact versions from PyPI; macOS arm64 installs the vendored wheels below after sha256 verification. The wheels are UNMODIFIED upstream releases downloaded from PyPI (built by the upstream projects); nothing here was compiled or patched by FromStunToKill.",
-  "retrieved": "2026-11-23",
+  "retrieved": "2026-11-24",
   "macos_min_version": 15,
   "macos_arch": "arm64",
   "python_abi": "cp312-abi3 or py3-none (Python 3.12-3.15)",
@@ -125,6 +125,17 @@
       "pypi": "https://pypi.org/project/vapoursynth-mvutensils/9/",
       "pypi_url": "https://files.pythonhosted.org/packages/ff/0e/db41e5701a2e25dd6c320be52395ea8828235873dfa78e66788425ef1b82/vapoursynth_mvutensils-9-py3-none-macosx_15_0_arm64.whl",
       "platform_tag": "macosx_15_0_arm64"
+    },
+    "vapoursynth-zsmooth": {
+      "version": "0.20.0",
+      "file": "macos-arm64/vapoursynth_zsmooth-0.20.0-py3-none-macosx_11_0_arm64.whl",
+      "sha256": "78a994cdccd219e4ef0eaade74d0837af7d513c16ae419a2d0427270a3bafed8",
+      "size": 1359384,
+      "license": "MIT",
+      "upstream": "https://github.com/adworacz/zsmooth",
+      "pypi": "https://pypi.org/project/vapoursynth-zsmooth/0.20.0/",
+      "pypi_url": "https://files.pythonhosted.org/packages/7c/1f/8f4d4b214f59486752dbb857959879bb6d22e9903c3634291777a5a0a136/vapoursynth_zsmooth-0.20.0-py3-none-macosx_11_0_arm64.whl",
+      "platform_tag": "macosx_11_0_arm64"
     }
   }
 }

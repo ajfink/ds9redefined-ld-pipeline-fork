@@ -373,6 +373,9 @@ class Engine:
             for fp in st.get(group, []):
                 if not Fingerprint.from_dict(fp).matches(trust_mtime=False):
                     return False, f"{group[:-1]} changed: {fp['path']}"
+        why = get_stage(self._step(sid)["stage"]).still_current(st)
+        if why:
+            return False, why
         return True, "fingerprints match"
 
     def _review_ok(self, sid: str) -> tuple[bool, str]:

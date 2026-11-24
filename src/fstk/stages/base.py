@@ -305,6 +305,13 @@ class Stage:
     def verify(self, ctx: StageContext, plan: StepPlan, output: StepOutput) -> list[str]:
         return []
 
+    def still_current(self, step_state: dict) -> str | None:
+        """Why a passed step must run again although none of its recorded files changed (None: it is current).
+
+        For results that later code knows to be incomplete (e.g. a master that still has frames a newer rule
+        removes). Called by the engine for every passed step it would otherwise reuse."""
+        return None
+
     # -- engine helpers
     def check_writes(self, output: StepOutput) -> None:
         illegal = [m.key for m in output.measurements if m.key not in self.writes]

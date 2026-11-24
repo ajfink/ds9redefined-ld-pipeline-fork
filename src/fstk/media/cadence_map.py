@@ -20,6 +20,25 @@ from .cadence import INSERT_COMBED_FRAMES, INSERT_WINDOW_FRAMES, INSERT_WINDOW_S
 RANGE_RE = re.compile(r"\[(\d+)\s+(\d+)\]")
 REPAIR_CHOICES = ("none", "qtgmc", "pp2")
 
+#: The QTempGaussMC call every generated script makes (``src`` in, ``di`` out, 59.94p). Kept in one place so the
+#: start-of-run check (``fstk.tools.requirements.probe_qtgmc``) runs exactly what the scripts run.
+QTGMC_LINES = (
+    "from vsdeinterlace import QTempGaussMC",
+    "# vsdeinterlace changed its option spelling between releases (source_match iterations ->",
+    "# SourceMatchMode, 'x__y' -> 'x_y' kwargs). The settings methods exist in the current API;",
+    "# older releases only take the double-underscore kwargs.",
+    "if hasattr(QTempGaussMC, 'SourceMatchMode'):",
+    "    di = (QTempGaussMC()",
+    "          .source_match(mode=QTempGaussMC.SourceMatchMode.TWICE_REFINED)   # QTGMC SourceMatch=3",
+    "          .lossless(mode=QTempGaussMC.LosslessMode.PRESHARPEN)",
+    "          .final(tr=2)",
+    "          .sharpen(strength=0.2)",
+    "          .deinterlace(src))                # tff inferred from _FieldBased",
+    "else:",
+    "    di = QTempGaussMC(source_match__iterations=3, lossless__mode=QTempGaussMC.LosslessMode.PRESHARPEN,",
+    "                      final__tr=2, sharpen__strength=0.2).deinterlace(src)",
+)
+
 
 def repair_mask(codes: list[str], mics: list[int]) -> list[bool]:
     """v38 build_map.ps1 repair set, ported line for line."""
@@ -172,20 +191,8 @@ def ivtc_vpy_script(source: str, pad: int, trim_start: int, trim_end: int,
         a("#        replicated, so effective sharpness may differ slightly.")
         a("#   FPSDivisor=2     -> QTGMC.avsi:1002 SelectEvery(FPSDivisor, 0):")
         a("#        bob to double rate, then drop alternate frames, phase 0.")
-        a("from vsdeinterlace import QTempGaussMC")
-        a("# vsdeinterlace changed its option spelling between releases (source_match iterations ->")
-        a("# SourceMatchMode, 'x__y' -> 'x_y' kwargs). The settings methods exist in the current API;")
-        a("# older releases only take the double-underscore kwargs.")
-        a("if hasattr(QTempGaussMC, 'SourceMatchMode'):")
-        a("    di = (QTempGaussMC()")
-        a("          .source_match(mode=QTempGaussMC.SourceMatchMode.TWICE_REFINED)   # QTGMC SourceMatch=3")
-        a("          .lossless(mode=QTempGaussMC.LosslessMode.PRESHARPEN)")
-        a("          .final(tr=2)")
-        a("          .sharpen(strength=0.2)")
-        a("          .deinterlace(src))                # tff inferred from _FieldBased")
-        a("else:")
-        a("    di = QTempGaussMC(source_match__iterations=3, lossless__mode=QTempGaussMC.LosslessMode.PRESHARPEN,")
-        a("                      final__tr=2, sharpen__strength=0.2).deinterlace(src)")
+        for line in QTGMC_LINES:
+            a(line)
         a("bob = di                                  # 59.94p, every field a frame (reused for video stretches)")
         a("di = core.std.SelectEvery(di, 2, 0)      # FPSDivisor=2, phase 0")
         a("assert di.num_frames == fm.num_frames, (di.num_frames, fm.num_frames)")
