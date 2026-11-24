@@ -1128,3 +1128,19 @@ names that no longer exist; required tools never found) and, if any, lists them 
 - Audit of every Approve path (owner: "make sure all Approve buttons advance the work"): Reviews-tab Approve and the
   delivery window's "Approve delivery" both continue the job; the EFM capture review (Accept automatic / manual choice)
   already starts its plan via `plan_ready`. Added `test_delivery_window_approval_carries_the_job_on`.
+
+## CP48 — an approval survives a re-run that changed nothing; only the newest review is offered (Mac debug bundle)
+
+- Bundle 2026-11-23 20:39: Approve *did* resume job …012217 ("continuing job … after the approval"), but a second
+  delivery job (…035441, started 20:30) had meanwhile re-run stack-render/cadence/dvd-probe, rewriting
+  `stack-render.json`, `hybrid-plan-*.json` and `dvd-probe.json` with identical data and a new `created_utc`. On resume
+  the engine saw "output changed", marked them stale and cascaded to everything downstream, including the approved
+  dvd-alignment, which would re-decode (5 min), make new time-stamped evidence and ask for the review again: a loop.
+  The Reviews tab also listed both jobs' dvd-alignment reviews; all three approvals went to the older job's evidence.
+- Fix 1, `core.hashing.SCOPE_JSON` ("json-content"): SHA-256 of a JSON file's canonical content with keys `utc` and
+  `*_utc` removed (raw bytes if not JSON; no size check). `stages.base.output_scope_for`/new `input_scope_for` use it
+  for `.json` step outputs/inputs; other files unchanged; approvals still bind with `full`. A re-run that measured
+  the same thing no longer invalidates later steps; a real change still does (tests).
+- Fix 2, `Services.pending_reviews`: one entry per review kind, the one whose evidence is newest (step
+  `finished_utc`), so the stale review of an older job is not offered.
+- Existing job states keep their recorded `full` fingerprints until those steps run again.

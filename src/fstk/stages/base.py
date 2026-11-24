@@ -30,7 +30,7 @@ from typing import Any, ClassVar
 
 from fstk.config.profile import Profile
 from fstk.core.errors import GateError, ManifestError, WorkflowError
-from fstk.core.hashing import SCOPE_FULL, SCOPE_HEAD_TAIL, Fingerprint
+from fstk.core.hashing import SCOPE_FULL, SCOPE_HEAD_TAIL, SCOPE_JSON, Fingerprint
 from fstk.core.identity import EpisodeId
 from fstk.manifest.model import Manifest
 from fstk.manifest.registry import field_def
@@ -331,7 +331,17 @@ LARGE_OUTPUT_BYTES = 1024 ** 3
 def output_scope_for(path: Path, explicit: dict[str, str]) -> str:
     if str(path) in explicit:
         return explicit[str(path)]
-    return SCOPE_HEAD_TAIL if Path(path).stat().st_size >= LARGE_OUTPUT_BYTES else SCOPE_FULL
+    size = Path(path).stat().st_size
+    if size >= LARGE_OUTPUT_BYTES:
+        return SCOPE_HEAD_TAIL
+    return SCOPE_JSON if Path(path).suffix.lower() == ".json" else SCOPE_FULL
+
+
+def input_scope_for(path: Path, explicit: dict[str, str]) -> str:
+    """Step inputs: full hashes, except JSON reports, which are compared by content (time stamps ignored)."""
+    if str(path) in explicit:
+        return explicit[str(path)]
+    return SCOPE_JSON if Path(path).suffix.lower() == ".json" else SCOPE_FULL
 
 
 def fingerprint_paths(paths: Iterable[Path], scopes: dict[str, str] | None = None) -> list[dict]:

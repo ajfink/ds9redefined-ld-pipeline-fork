@@ -294,7 +294,7 @@ def test_value_set_requires_declared_key():
 
 
 def test_large_outputs_are_fingerprinted_head_tail(tmp_path):
-    from fstk.core.hashing import SCOPE_FULL, SCOPE_HEAD_TAIL, Fingerprint
+    from fstk.core.hashing import SCOPE_FULL, SCOPE_HEAD_TAIL, SCOPE_JSON, Fingerprint
     from fstk.stages.base import LARGE_OUTPUT_BYTES, output_scope_for
     big = tmp_path / "master.mkv"
     with open(big, "wb") as f:  # sparse: costs no disk, reads only head + tail
@@ -305,7 +305,10 @@ def test_large_outputs_are_fingerprinted_head_tail(tmp_path):
     small = tmp_path / "report.json"
     small.write_text("{}")
     assert output_scope_for(big, {}) == SCOPE_HEAD_TAIL
-    assert output_scope_for(small, {}) == SCOPE_FULL
+    assert output_scope_for(small, {}) == SCOPE_JSON                  # reports: content without time stamps
+    sheet = tmp_path / "sheet.png"
+    sheet.write_bytes(b"png")
+    assert output_scope_for(sheet, {}) == SCOPE_FULL
     assert output_scope_for(big, {str(big): SCOPE_FULL}) == SCOPE_FULL
     fp = Fingerprint.of(big, scope=output_scope_for(big, {}))
     assert fp.scope == SCOPE_HEAD_TAIL and fp.matches()
@@ -392,3 +395,52 @@ def test_heavy_gate_prefers_the_lower_queue_position():
     assert not gate.try_acquire(c, 9)            # b (position 2) is waiting and goes first
     assert gate.try_acquire(b, 2)
     assert gate.try_acquire(b, 2)                # the holder may run its own second heavy step
+
+
+@register
+class TJsonReport(Stage):
+    id = "t-json-report"
+
+    def plan(self, ctx, params):
+        out = ctx.root("reports") / "probe.json"
+        return StepPlan(self.id, params, outputs=[out], data={"out": str(out)})
+
+    def run(self, ctx, plan):
+        import json
+        from datetime import UTC, datetime
+
+        _bump("json")
+        Path(plan.data["out"]).parent.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(UTC).isoformat()
+        Path(plan.data["out"]).write_text(json.dumps({"created_utc": stamp, "frames": 4,
+                                                      "nested": [{"probe_utc": stamp, "ok": True}]}))
+        return StepOutput()
+
+
+def test_a_rewrite_with_only_new_time_stamps_keeps_later_steps_and_their_approval(env):
+    """Mac 2026-11-23: a second job rewrote the shared reports (same data, new created_utc); resuming the first job
+    after Approve then threw away the approved alignment and asked for the review again, forever."""
+    prof, ws, _src, _ = env
+    first = plan("first", step("p", "t-json-report"), step("r", "t-review", after=["p"]))
+    state = run(env, first)
+    assert state["steps"]["r"]["status"] == "awaiting-review"
+    assert state["steps"]["p"]["outputs"][0]["scope"] == "json-content"
+    ws.approvals.record(review="t-evidence", decision="APPROVED", note="ok", actor="op",
+                        evidence=[Path(fp["path"]) for fp in state["steps"]["r"]["outputs"]], manifest=ws.store.load())
+    time.sleep(0.01)
+    run(env, plan("second", step("p", "t-json-report")))                # same data, new time stamps
+    assert CALLS["json"] == 2
+    state = run(env, first)
+    assert state["steps"]["p"]["status"] == "passed" and state["steps"]["r"]["status"] == "passed"
+    assert CALLS["json"] == 2 and CALLS["review"] == 1                   # nothing re-ran
+
+
+def test_a_real_change_in_a_json_report_still_invalidates(env):
+    import json
+
+    state = run(env, plan("j-json", step("p", "t-json-report")))
+    out = Path(state["steps"]["p"]["outputs"][0]["path"])
+    doc = json.loads(out.read_text())
+    out.write_text(json.dumps({**doc, "frames": 5}))
+    state = run(env, plan("j-json", step("p", "t-json-report")))
+    assert CALLS["json"] == 2 and state["steps"]["p"]["status"] == "passed"

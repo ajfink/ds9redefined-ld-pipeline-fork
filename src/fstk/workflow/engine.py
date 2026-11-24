@@ -40,12 +40,20 @@ import fstk.stages  # noqa: F401  (registers built-in stages)
 from fstk.config.profile import Profile
 from fstk.core.errors import FstkError, GateError, WorkflowError
 from fstk.core.fsio import atomic_write_json, canonical_json, exclusive_lock, read_json
-from fstk.core.hashing import SCOPE_FULL, Fingerprint, sha256_bytes
+from fstk.core.hashing import Fingerprint, sha256_bytes
 from fstk.core.identity import EpisodeId
 from fstk.core.timeutil import utc_now_iso
 from fstk.evidence.approvals import ApprovalBook
 from fstk.manifest.store import ManifestStore
-from fstk.stages.base import RESOURCES, StageContext, StepOutput, StepPlan, get_stage, output_scope_for
+from fstk.stages.base import (
+    RESOURCES,
+    StageContext,
+    StepOutput,
+    StepPlan,
+    get_stage,
+    input_scope_for,
+    output_scope_for,
+)
 from fstk.tools.process import PAUSE
 from fstk.workspace.space import SpaceLedger
 from fstk.workspace.volumes import hint_for_space
@@ -508,7 +516,7 @@ class Engine:
         try:
             stage.assert_gates(ctx)
             plan = stage.plan(ctx, dict(step.get("params") or {}))
-            inputs = [Fingerprint.of(p, scope=plan.input_scope.get(str(p), SCOPE_FULL)).to_dict()
+            inputs = [Fingerprint.of(p, scope=input_scope_for(Path(p), plan.input_scope)).to_dict()
                       for p in plan.inputs]
             st["inputs"] = inputs
             st["plan_summary"] = plan.describe()

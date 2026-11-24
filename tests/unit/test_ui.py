@@ -387,3 +387,17 @@ def test_delivery_window_approval_carries_the_job_on(services, tmp_path, qtbot, 
         w.on_delivery_decided(str(f))
         assert len(started) == expect
     assert started[0].endswith("plan.json")
+
+
+def test_only_the_newest_job_s_review_is_offered(services, tmp_path):
+    """Two jobs waiting on the same review: the older one's evidence is out of date, so only the newest is listed."""
+    import json as _json
+
+    old = review_plan(tmp_path)
+    services.run_plan(old, actor="op")
+    newer = tmp_path / "plan2.json"
+    newer.write_text(_json.dumps({**_json.loads(old.read_text()), "job": "rw"}))
+    services.run_plan(newer, actor="op")
+    assert {j for j in services.jobs("S01E20")} >= {"rv", "rw"}
+    pending = services.pending_reviews("S01E20")
+    assert [p.job for p in pending] == ["rw"]

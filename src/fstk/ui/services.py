@@ -257,6 +257,17 @@ class Services:
 
     # ---------------------------------------------------------------- reviews
     def pending_reviews(self, episode: str | EpisodeId) -> list[PendingReview]:
+        """Reviews waiting for a decision: one per kind of review, the one with the newest evidence.
+
+        Several jobs of one episode share its files, so when another job produced newer evidence for the same review the
+        older evidence is out of date; listing both invited approving the stale one (seen on the Mac, 2026-11-23)."""
+        newest: dict[str, tuple[tuple[str, str], PendingReview]] = {}
+        for when, p in self._all_pending(episode):
+            if p.review not in newest or when >= newest[p.review][0]:
+                newest[p.review] = (when, p)
+        return [p for _when, p in sorted(newest.values(), key=lambda v: v[0])]
+
+    def _all_pending(self, episode: str | EpisodeId) -> list[tuple[tuple[str, str], PendingReview]]:
         out = []
         for job in self.jobs(episode):
             state = self.job_state(episode, job)
@@ -266,9 +277,10 @@ class Services:
                 plan_step = st.get("stage")
                 stage_id = plan_step or self._stage_of(episode, job, sid)
                 stage = get_stage(stage_id)
-                out.append(PendingReview(job, sid, stage_id, stage.review or "",
-                                         tuple(fp["path"] for fp in st.get("outputs", [])),
-                                         st.get("review_detail", "")))
+                when = (str(st.get("finished_utc") or state.get("created_utc") or ""), job)   # newest evidence
+                out.append((when, PendingReview(job, sid, stage_id, stage.review or "",
+                                                tuple(fp["path"] for fp in st.get("outputs", [])),
+                                                st.get("review_detail", ""))))
         return out
 
     def _stage_of(self, episode, job: str, sid: str) -> str:

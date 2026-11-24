@@ -8,6 +8,10 @@ Two fingerprint scopes exist:
   ("balanced" policy) and uses it for 80 GB TBC captures where a full hash per resume is
   impractical. It detects replacement/truncation, not single-byte edits in the middle,
   and is labelled as such everywhere it is stored.
+* ``json-content`` – SHA-256 of a JSON report's *content*, with time stamps (keys ``utc`` and ``*_utc``) left
+  out. Stages write a fresh ``created_utc`` every run, so a re-run that measured exactly the same thing would
+  otherwise look like a changed result and throw away everything after it (and every approval bound to it).
+  Engine step fingerprints use it for ``.json`` files; approvals still bind with ``full``.
 """
 from __future__ import annotations
 
@@ -22,6 +26,7 @@ HEAD_TAIL_BYTES = 4 * 1024 * 1024
 
 SCOPE_FULL = "full"
 SCOPE_HEAD_TAIL = "head-tail"
+SCOPE_JSON = "json-content"
 _V38_SCOPE_ALIASES = {"first-last-4MiB": SCOPE_HEAD_TAIL, "full": SCOPE_FULL}
 
 
@@ -79,6 +84,27 @@ def head_tail_sha256(path: str | os.PathLike, window: int = HEAD_TAIL_BYTES) -> 
     return digest.hexdigest(), scope
 
 
+def _drop_times(obj):
+    if isinstance(obj, dict):
+        return {k: _drop_times(v) for k, v in obj.items() if not (k == "utc" or k.endswith("_utc"))}
+    if isinstance(obj, list):
+        return [_drop_times(v) for v in obj]
+    return obj
+
+
+def json_content_sha256(path: str | os.PathLike) -> str:
+    """Content hash of a JSON file without its time stamps; falls back to the raw bytes if it is not JSON."""
+    import json
+
+    raw = Path(path).read_bytes()
+    try:
+        doc = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return sha256_bytes(raw)
+    canon = json.dumps(_drop_times(doc), sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=True)
+    return sha256_bytes(canon.encode("utf-8"))
+
+
 @dataclass(frozen=True)
 class Fingerprint:
     path: str
@@ -99,6 +125,8 @@ class Fingerprint:
                 raise OSError(f"file changed while it was fingerprinted: {p}")
         elif scope == SCOPE_HEAD_TAIL:
             digest, scope = head_tail_sha256(p)
+        elif scope == SCOPE_JSON:
+            digest = json_content_sha256(p)
         else:
             raise ValueError(f"unknown fingerprint scope {scope!r}")
         return cls(str(p), stat.st_size, stat.st_mtime_ns, digest, scope)
@@ -110,6 +138,8 @@ class Fingerprint:
             stat = p.stat()
         except FileNotFoundError:
             return False
+        if self.scope == SCOPE_JSON:          # a new time stamp may change the size, not the content
+            return json_content_sha256(p) == self.sha256
         if stat.st_size != self.size_bytes:
             return False
         if trust_mtime and stat.st_mtime_ns == self.mtime_ns:
