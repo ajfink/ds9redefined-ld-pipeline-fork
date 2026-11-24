@@ -1125,3 +1125,6 @@ names that no longer exist; required tools never found) and, if any, lists them 
   same on Windows, macOS and Linux. Tests: `test_ui.py` (approve resumes and finishes), `test_alignment_visual.py`,
   integration alignment tests assert the sheet and summary.
 - **Unverified:** thresholds on real LD/DVD footage (synthetic only).
+- Audit of every Approve path (owner: "make sure all Approve buttons advance the work"): Reviews-tab Approve and the
+  delivery window's "Approve delivery" both continue the job; the EFM capture review (Accept automatic / manual choice)
+  already starts its plan via `plan_ready`. Added `test_delivery_window_approval_carries_the_job_on`.

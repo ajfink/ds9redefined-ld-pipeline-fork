@@ -362,3 +362,28 @@ def test_approval_really_resumes_and_finishes_the_job(services, tmp_path, qtbot,
     qtbot.waitUntil(lambda: w.thread is None, timeout=20000)
     assert services.job_state("S01E20", "rv")["steps"]["r"]["status"] == "passed"
     assert services.pending_reviews("S01E20") == []
+
+
+@pytest.mark.gui
+def test_delivery_window_approval_carries_the_job_on(services, tmp_path, qtbot, monkeypatch):
+    """The delivery A/V window's own "Approve delivery" must continue the job like the Reviews-tab button."""
+    import dataclasses
+    import json
+
+    from fstk.ui.app import MainWindow
+
+    services.run_plan(review_plan(tmp_path), actor="op")
+    w = MainWindow(services, actor="op")
+    qtbot.addWidget(w)
+    w.show_episode("S01E20")
+    waiting = [dataclasses.replace(p, review="delivery") for p in services.pending_reviews("S01E20")]
+    assert waiting
+    monkeypatch.setattr(services, "pending_reviews", lambda episode: waiting)
+    started = []
+    monkeypatch.setattr(w, "start_plan", lambda path: started.append(path))
+    for decision, expect in (("REJECTED", 0), ("APPROVED", 1)):
+        f = tmp_path / f"{decision}.json"
+        f.write_text(json.dumps({"decision": decision}), encoding="utf-8")
+        w.on_delivery_decided(str(f))
+        assert len(started) == expect
+    assert started[0].endswith("plan.json")
