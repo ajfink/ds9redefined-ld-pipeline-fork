@@ -113,7 +113,7 @@ def test_install_commands_per_manager_and_ffprobe_rides_with_ffmpeg():
     assert prov.install_command("ffmpeg", "winget")[:3] == ["winget", "install", "-e"]
     assert prov.install_command("ffprobe", "brew") == prov.install_command("ffmpeg", "brew")
     assert prov.install_command("ffmpeg", "dnf") is None            # needs RPM Fusion: guidance only
-    assert prov.install_command("orc", "brew") is None              # pinned releases are never auto-installed
+    assert prov.install_command("orc", "brew") is None              # Orc is fetched from its release, not a manager
     assert prov.install_command("rife_engine", "apt") is None
 
 
@@ -263,7 +263,8 @@ def test_setup_offers_the_package_manager_install_and_only_after_confirmation(tm
     assert ran == []
     accepted = wiz.Console(assume_yes=True, ask_fn=lambda q: "", out=lambda t: None)
     wiz.run_setup(accepted, profile_path=path, system="linux", env=env, home=tmp_path, run=run,
-                  run_text=lambda c: " libx265", doctor=_doctor_ok, venv_bin=tmp_path / "x")
+                  run_text=lambda c: " libx265", doctor=_doctor_ok, venv_bin=tmp_path / "x",
+                  orc_installer=lambda *a, **k: False)
     # (7-Zip is the observed tool: a real ffmpeg in /usr/bin would be found without any install)
     assert [["sudo", str(tmp_path / "pm" / "apt-get"), "install", "-y", "p7zip-full"]] == ran
 
@@ -504,3 +505,252 @@ def test_doctor_warns_when_state_lives_inside_the_shared_app_folder(tmp_path, mo
 def test_the_launcher_configures_vapoursynth_and_re_runs_it_for_existing_environments(launch):
     assert launch.stamp()["vsconfig"] >= 1
     assert callable(launch.configure_vapoursynth)
+
+
+# ---------------------------------------------------------------- a vanished tool is offered for repair at start
+
+def test_profile_problems_names_tools_that_disappeared(tmp_path):
+    venv_bin = tmp_path / "venv" / "bin"
+    path = _profile_with_vspipe(tmp_path, venv_bin)
+    before = wiz.profile_problems(path)             # whatever this fake machine lacks (it has no Decode-Orc)
+    assert not any("FFmpeg" in p for p in before)
+    gone = Path(Profile.load(path).tool("ffmpeg"))
+    gone.unlink()                                   # what happened to ~/tools/ffmpeg/ffmpeg on the Mac
+    new = [p for p in wiz.profile_problems(path) if p not in before]
+    assert len(new) == 1 and "FFmpeg" in new[0] and str(gone) in new[0]
+    assert wiz.profile_problems(tmp_path / "nowhere.json") == []          # no readable profile: nothing to report here
+
+
+def test_launcher_offers_setup_when_a_tool_vanished_and_only_in_a_terminal(tmp_path, monkeypatch, launch):
+    mod = launch
+    calls: list[list[str]] = []
+    monkeypatch.setattr(mod, "child_env", lambda: {})
+    monkeypatch.setattr(mod, "say", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "run_fstk", lambda vpy, args, **k: calls.append(args) or 0)
+
+    class Done:
+        stdout = "FFmpeg is gone: /x/ffmpeg\n"
+
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: Done())
+    tty = type("T", (), {"isatty": staticmethod(lambda: True)})
+    monkeypatch.setattr(mod.sys, "stdin", tty)
+    monkeypatch.setattr("builtins.input", lambda *_: "")                   # Enter = yes
+    mod.repair_tools(tmp_path / "python")
+    assert calls == [["setup"]]
+    calls.clear()
+    monkeypatch.setattr("builtins.input", lambda *_: "n")
+    mod.repair_tools(tmp_path / "python")
+    assert calls == []
+    monkeypatch.setattr(mod.sys, "stdin", type("T", (), {"isatty": staticmethod(lambda: False)}))
+    mod.repair_tools(tmp_path / "python")                                  # a shortcut or scheduled start never asks
+    assert calls == []
+
+
+# ---------------------------------------------------------------- Decode-Orc download and install
+
+from fstk.install import orc as orc_inst  # noqa: E402
+
+
+def _release(version, names, *, draft=False, pre=False, digests=None):
+    assets = [{"name": n, "browser_download_url": f"https://example.invalid/{version}/{n}", "size": 4,
+               **({"digest": "sha256:" + digests[n]} if digests and n in digests else {})} for n in names]
+    return {"tag_name": f"v{version}", "draft": draft, "prerelease": pre, "assets": assets}
+
+
+ALL = lambda v: [f"Decode-Orc-{v}-windows-x64.msi", f"Decode-Orc-{v}-macos-arm64.dmg",   # noqa: E731
+                 f"Decode-Orc-{v}-linux.flatpak", f"Decode-Orc-{v}-source.zip"]
+
+
+def test_pick_asset_prefers_the_pinned_version_and_skips_prereleases():
+    rels = [_release("2.12.0-rc1", ALL("2.12.0-rc1"), pre=True), _release("2.12.0", ALL("2.12.0")),
+            _release("2.11.1", ALL("2.11.1"))]
+    pinned, newest = orc_inst.pick_asset(rels, "windows", version="2.11.1")
+    assert pinned.name == "Decode-Orc-2.11.1-windows-x64.msi" and pinned.version == "2.11.1"
+    assert newest.version == "2.12.0"
+    assert orc_inst.pick_asset(rels, "linux", version="2.11.1")[0].name.endswith("linux.flatpak")
+    assert orc_inst.pick_asset(rels, "macos", "arm64", version="2.11.1")[0].name.endswith("macos-arm64.dmg")
+    assert orc_inst.pick_asset(rels, "macos", "x86_64", version="2.11.1") == (None, None)   # Apple silicon only
+    assert orc_inst.pick_asset("not a list", "windows", version="2.11.1") == (None, None)
+
+
+def test_verify_checks_size_and_checksum(tmp_path):
+    f = tmp_path / "x"
+    f.write_bytes(b"data")
+    good = hashlib.sha256(b"data").hexdigest()
+    assert orc_inst.verify(orc_inst.Asset("x", "u", 4, good), f) == good
+    with pytest.raises(orc_inst.OrcInstallError, match="cut off"):
+        orc_inst.verify(orc_inst.Asset("x", "u", 9, good), f)
+    with pytest.raises(orc_inst.OrcInstallError, match="checksum"):
+        orc_inst.verify(orc_inst.Asset("x", "u", 4, "0" * 64), f)
+
+
+class _Con:
+    def __init__(self, answer=True):
+        self.lines, self.answer, self.asked = [], answer, []
+
+    def say(self, t=""):
+        self.lines.append(t)
+
+    def confirm(self, q, default=True):
+        self.asked.append(q)
+        return self.answer
+
+
+def _fetchers(tmp_path, version="2.11.1", **kw):
+    rels = [_release("2.12.0", ALL("2.12.0")), _release(version, ALL(version), **kw)]
+    got = []
+
+    def fetch_file(url, dest):
+        got.append(url)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"data")
+
+    return (lambda url: rels), fetch_file, got
+
+
+def test_windows_install_runs_the_msi_and_first_the_vc_runtime_when_missing(tmp_path):
+    fetch, fetch_file, got = _fetchers(tmp_path)
+    ran = []
+    con = _Con()
+    ok = orc_inst.install_orc(con, system="windows", env={"SystemRoot": str(tmp_path / "win")}, home=tmp_path,
+                              run=lambda c: ran.append(c) or 0, machine="AMD64", fetch=fetch, fetch_file=fetch_file,
+                              work_dir=tmp_path / "w")
+    assert ok
+    assert got[0].endswith("2.11.1/Decode-Orc-2.11.1-windows-x64.msi") and got[1] == orc_inst.VC_REDIST_URL
+    assert ran[0][0].endswith("vc_redist.x64.exe") and ran[1][:2] == ["msiexec", "/i"]   # runtime before Orc
+    # with the runtime present nothing extra is fetched, and 3010 (restart needed) still counts as installed
+    sys32 = tmp_path / "win2" / "System32"
+    sys32.mkdir(parents=True)
+    for n in ("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll"):
+        (sys32 / n).write_bytes(b"")
+    fetch, fetch_file, got = _fetchers(tmp_path)
+    ran.clear()
+    assert orc_inst.install_orc(_Con(), system="windows", env={"SystemRoot": str(tmp_path / "win2")}, home=tmp_path,
+                                run=lambda c: ran.append(c) or 3010, machine="AMD64", fetch=fetch,
+                                fetch_file=fetch_file, work_dir=tmp_path / "w2")
+    assert len(got) == 1 and len(ran) == 1
+
+
+def test_windows_installer_failure_is_reported_with_the_manual_instructions(tmp_path):
+    fetch, fetch_file, _ = _fetchers(tmp_path)
+    con = _Con()
+    ok = orc_inst.install_orc(con, system="windows", env={"SystemRoot": str(tmp_path)}, home=tmp_path,
+                              run=lambda c: 1603 if c[0] == "msiexec" else 0, machine="AMD64", fetch=fetch,
+                              fetch_file=fetch_file, work_dir=tmp_path / "w")
+    text = "\n".join(con.lines)
+    assert not ok and "Windows Installer failed" in text and "Decode-Orc is not installed" in text
+
+
+def test_a_corrupt_download_is_never_installed(tmp_path):
+    rels = [_release("2.11.1", ALL("2.11.1"), digests={"Decode-Orc-2.11.1-linux.flatpak": "0" * 64})]
+    ran = []
+
+    def fetch_file(url, dest):
+        dest.write_bytes(b"data")
+
+    con = _Con()
+    ok = orc_inst.install_orc(con, system="linux", env={}, home=tmp_path, run=lambda c: ran.append(c) or 0,
+                              machine="x86_64", fetch=lambda u: rels, fetch_file=fetch_file, work_dir=tmp_path / "w")
+    assert not ok and ran == [] and "checksum" in "\n".join(con.lines)
+
+
+def test_macos_install_copies_the_app_to_user_applications_and_clears_quarantine(tmp_path):
+    fetch, fetch_file, _ = _fetchers(tmp_path)
+    ran = []
+
+    def run(cmd):
+        ran.append(cmd)
+        if cmd[0] == "hdiutil" and cmd[1] == "attach":
+            (Path(cmd[cmd.index("-mountpoint") + 1]) / "orc-gui.app").mkdir(parents=True)
+        if cmd[0] == "ditto":
+            _exe(Path(cmd[2]) / "Contents" / "MacOS" / "orc-cli")
+        return 0
+
+    assert orc_inst.install_orc(_Con(), system="macos", env={}, home=tmp_path, run=run, machine="arm64",
+                                fetch=fetch, fetch_file=fetch_file, work_dir=tmp_path / "w")
+    assert [c[0] for c in ran] == ["hdiutil", "ditto", "hdiutil", "xattr"] and ran[2][1] == "detach"
+    assert ran[3][-1] == str(tmp_path / "Applications" / "orc-gui.app")
+    found = disc.discover("orc", system="macos", env={"PATH": ""}, home=tmp_path)
+    assert [Path(f.path).name for f in found] == ["orc-cli"]
+
+
+def test_macos_detaches_the_image_even_when_the_copy_fails(tmp_path):
+    fetch, fetch_file, _ = _fetchers(tmp_path)
+    ran = []
+
+    def run(cmd):
+        ran.append(cmd[0] + " " + (cmd[1] if len(cmd) > 1 else ""))
+        if cmd[0] == "hdiutil" and cmd[1] == "attach":
+            (Path(cmd[cmd.index("-mountpoint") + 1]) / "orc-gui.app").mkdir(parents=True)
+        return 1 if cmd[0] == "ditto" else 0
+
+    con = _Con()
+    assert not orc_inst.install_orc(con, system="macos", env={}, home=tmp_path, run=run, machine="arm64",
+                                    fetch=fetch, fetch_file=fetch_file, work_dir=tmp_path / "w")
+    assert "hdiutil detach" in ran
+
+
+def test_linux_install_needs_flatpak_and_installs_for_this_user(tmp_path, monkeypatch):
+    fetch, fetch_file, _ = _fetchers(tmp_path)
+    ran = []
+    monkeypatch.setattr(orc_inst.shutil, "which", lambda n: None)
+    con = _Con()
+    assert not orc_inst.install_orc(con, system="linux", env={}, home=tmp_path, run=lambda c: 0, machine="x86_64",
+                                    fetch=fetch, fetch_file=fetch_file, work_dir=tmp_path / "w")
+    assert "Flatpak is not installed" in "\n".join(con.lines)
+    monkeypatch.setattr(orc_inst.shutil, "which", lambda n: "/usr/bin/flatpak")
+    assert orc_inst.install_orc(_Con(), system="linux", env={}, home=tmp_path, run=lambda c: ran.append(c) or 0,
+                                machine="x86_64", fetch=fetch, fetch_file=fetch_file, work_dir=tmp_path / "w")
+    assert ran[-1][:4] == ["flatpak", "install", "--user", "-y"]
+
+
+def test_a_missing_pinned_version_asks_before_installing_another(tmp_path):
+    rels = [_release("2.12.0", ALL("2.12.0"))]
+    ran = []
+
+    def fetch_file(url, dest):
+        dest.write_bytes(b"data")
+
+    no = _Con(answer=False)
+    assert not orc_inst.install_orc(no, system="windows", env={"SystemRoot": str(tmp_path)}, home=tmp_path,
+                                    run=lambda c: ran.append(c) or 0, machine="AMD64", fetch=lambda u: rels,
+                                    fetch_file=fetch_file, work_dir=tmp_path / "w")
+    assert ran == [] and any("2.12.0" in q for q in no.asked)
+
+
+def test_no_network_is_a_message_not_a_crash(tmp_path):
+    def boom(url):
+        raise orc_inst.OrcInstallError("could not read the release list from GitHub (offline)")
+
+    con = _Con()
+    assert not orc_inst.install_orc(con, system="windows", env={}, home=tmp_path, run=lambda c: 0,
+                                    machine="AMD64", fetch=boom, fetch_file=lambda u, d: None)
+    assert "offline" in "\n".join(con.lines) and "Decode-Orc is not installed" in "\n".join(con.lines)
+
+
+def test_setup_installs_orc_after_confirmation_and_records_it(tmp_path):
+    env = {"PATH": "", "XDG_DATA_HOME": str(tmp_path / "data")}
+    _exe(tmp_path / "pm" / "apt-get")
+    asked: list[str] = []
+
+    def installer(console, **kw):
+        asked.append(kw["system"])
+        _exe(tmp_path / "Applications" / "orc-gui.app" / "Contents" / "MacOS" / "orc-cli")
+        return True
+
+    path = tmp_path / "p" / "machine.json"
+    kw = {"profile_path": path, "system": "macos", "env": env, "home": tmp_path, "run": lambda c: 0,
+          "run_text": lambda c: " libx265", "doctor": _doctor_ok, "venv_bin": tmp_path / "x",
+          "orc_installer": installer}
+    wiz.run_setup(wiz.Console(ask_fn=lambda q: "n", out=lambda t: None), **kw)
+    assert asked == []                                                # declined: nothing downloaded
+    wiz.run_setup(wiz.Console(ask_fn=lambda q: "", assume_yes=True, out=lambda t: None), **kw)
+    assert asked == ["macos"]
+    assert Path(Profile.load(path).tool("orc")).name == "orc-cli"
+
+
+def test_linux_flatpak_wrapper_uses_the_installed_application_id(tmp_path):
+    assert prov.orc_flatpak_id(lambda c: 0 if c[-1] == prov.ORC_FLATPAKS[1] else 1) == prov.ORC_FLATPAKS[1]
+    wrapper = prov.write_orc_flatpak_wrapper(tmp_path, prov.ORC_FLATPAKS[1])
+    assert prov.ORC_FLATPAKS[1] in wrapper.read_text(encoding="utf-8")
+    assert prov.ORC_FLATPAK == "io.github.decode_orc.decode-orc"

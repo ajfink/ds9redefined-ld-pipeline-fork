@@ -1,8 +1,10 @@
 """How a missing tool can be obtained: a package-manager command when that is safe, otherwise exact instructions.
 
-Only tools whose output does not depend on the exact build are installed automatically (FFmpeg with libx265,
-7-Zip). Decode-Orc and RIFE are *pinned* by the pipeline (their version changes the pixels and the audio), so
-they are never fetched silently: the wizard says where to get them and records the one the owner points at.
+Tools whose output does not depend on the exact build are installed with the package manager (FFmpeg with
+libx265, 7-Zip). Decode-Orc is *pinned* by the pipeline (its version changes the pixels and the audio): it is
+downloaded from its GitHub release by ``fstk.install.orc`` (the pinned version, after asking), never through a
+package manager. RIFE is never fetched: the model changes the repaired frames, so the wizard says where to get
+it and records the one the owner points at.
 """
 from __future__ import annotations
 
@@ -12,8 +14,13 @@ import stat
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-ORC_DOCS = "https://simoninns.github.io/decode-orc/"
-ORC_FLATPAK = "io.github.simoninns.decode-orc"
+ORC_DOCS = "https://decode-orc.github.io/decode-orc/"
+ORC_RELEASES = "https://github.com/decode-orc/decode-orc/releases"
+#: the release the owner's episodes were built with; the installer fetches this one
+ORC_VERSION = "2.11.1"
+#: Flatpak application ids, current first (upstream renamed it from the simoninns one)
+ORC_FLATPAKS = ("io.github.decode_orc.decode-orc", "io.github.simoninns.decode-orc")
+ORC_FLATPAK = ORC_FLATPAKS[0]
 RIFE_RELEASES = "https://github.com/nihui/rife-ncnn-vulkan/releases"
 FFMPEG_WINDOWS = "https://www.gyan.dev/ffmpeg/builds/"
 
@@ -94,8 +101,9 @@ def guidance(tool: str, system: str) -> str:
         extra = {"macos": " The DMG is self-signed: after copying orc-gui.app to Applications run "
                           "`xattr -dr com.apple.quarantine /Applications/orc-gui.app` (or right-click → Open once).",
                  "linux": f" Install the Flatpak ({ORC_FLATPAK}); fstk can then create an `orc-cli` wrapper for it."}
-        return (f"Decode-Orc is not installed. Get the release your episodes were built with (2.11.1 on the "
-                f"owner's machines) from {ORC_DOCS}{page}.{extra.get(system, '')} The pipeline pins Orc's version, "
+        return (f"Decode-Orc is not installed. Get the release your episodes were built with ({ORC_VERSION} on the "
+                f"owner's machines) from {ORC_RELEASES} (instructions: {ORC_DOCS}{page}).{extra.get(system, '')} "
+                "The pipeline pins Orc's version, "
                 "so install the same one on every machine.")
     if tool in ("rife_engine", "rife_model_dir"):
         extra = {"macos": " The macOS build runs on Metal through MoltenVK; unpack it to ~/tools/rife-ncnn-vulkan. "
@@ -122,14 +130,22 @@ def guidance(tool: str, system: str) -> str:
     return f"{tool} is not installed."
 
 
+def orc_flatpak_id(runner: Callable[[list[str]], int]) -> str | None:
+    """The application id Decode-Orc is installed under as a Flatpak, or ``None``."""
+    for app_id in ORC_FLATPAKS:
+        try:
+            if runner(["flatpak", "info", app_id]) == 0:
+                return app_id
+        except OSError:
+            return None
+    return None
+
+
 def flatpak_has_orc(runner: Callable[[list[str]], int]) -> bool:
-    try:
-        return runner(["flatpak", "info", ORC_FLATPAK]) == 0
-    except OSError:
-        return False
+    return orc_flatpak_id(runner) is not None
 
 
-def write_orc_flatpak_wrapper(directory: Path) -> Path:
+def write_orc_flatpak_wrapper(directory: Path, app_id: str = ORC_FLATPAK) -> Path:
     """An ``orc-cli`` shell script that runs Decode-Orc's CLI inside its Flatpak with access to the file system.
 
     The sandbox cannot see the capture and working folders unless it is told to (``--filesystem=host`` on this
@@ -137,7 +153,7 @@ def write_orc_flatpak_wrapper(directory: Path) -> Path:
     """
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "orc-cli"
-    path.write_text(f'#!/bin/sh\nexec flatpak run --filesystem=host --command=orc-cli {ORC_FLATPAK} "$@"\n',
+    path.write_text(f'#!/bin/sh\nexec flatpak run --filesystem=host --command=orc-cli {app_id} "$@"\n',
                     encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return path

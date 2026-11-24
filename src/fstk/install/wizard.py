@@ -22,6 +22,7 @@ from pathlib import Path
 from fstk.config.profile import KNOWN_TOOLS, SCHEMA, Profile, current_os, default_profile_path
 from fstk.core.errors import ConfigError
 from fstk.core.timeutil import utc_now_iso
+from fstk.install import orc as orc_install
 from fstk.install import providers
 from fstk.install.discover import TOOL_ORDER, Found, discover, tools_dir
 
@@ -96,7 +97,7 @@ def run_setup(console: Console, *, profile_path: str | os.PathLike | None = None
               env: Mapping[str, str] | None = None, home: Path | None = None,
               run: Callable[[list[str]], int] = _run, run_text: Callable[[list[str]], str] = _run_text,
               install: bool = True, check_only: bool = False, venv_bin: Path | None = None,
-              volumes=None, doctor: Callable | None = None) -> SetupResult:
+              volumes=None, doctor: Callable | None = None, orc_installer: Callable | None = None) -> SetupResult:
     system = system or current_os()
     env = os.environ if env is None else env
     home = Path.home() if home is None else home
@@ -111,7 +112,8 @@ def run_setup(console: Console, *, profile_path: str | os.PathLike | None = None
     if profile is None:
         return result
     _tools(console, profile, system=system, env=env, home=home, run=run, run_text=run_text,
-           install=install and not check_only, venv_bin=venv_bin, result=result)
+           install=install and not check_only, venv_bin=venv_bin, result=result,
+           orc_installer=orc_installer or orc_install.install_orc)
     _ensure_vspipe(console, profile, venv_bin, run, system, result, check_only=check_only)
     if result.created and not check_only:
         _sources(console, profile, result, system=system)
@@ -206,7 +208,7 @@ def _shared_tool_dirs(profile: Profile) -> list[Path]:
 
 
 def _tools(console: Console, profile: Profile, *, system, env, home, run, run_text, install, venv_bin,
-           result: SetupResult) -> None:
+           result: SetupResult, orc_installer: Callable | None = None) -> None:
     say = console.say
     found_manager = providers.find_manager(system, env) if install else None
     manager, manager_program = found_manager if found_manager else (None, None)
@@ -226,7 +228,8 @@ def _tools(console: Console, profile: Profile, *, system, env, home, run, run_te
                          extra_dirs=extra_dirs)
         if not found and install:
             found = _try_install(console, name, system, env, home, venv_bin, manager, run, engine=engine,
-                                 profile=profile, program=manager_program, extra_dirs=extra_dirs)
+                                 profile=profile, program=manager_program, extra_dirs=extra_dirs,
+                                 orc_installer=orc_installer)
         choice = _choose(console, name, found, run_text, sibling_of=profile.tools.get("ffmpeg"))
         if choice is None:
             choice = _ask_path(console, name, label, spec["required"], system)
@@ -242,15 +245,14 @@ def _tools(console: Console, profile: Profile, *, system, env, home, run, run_te
 
 
 def _try_install(console: Console, name: str, system: str, env, home: Path, venv_bin, manager, run, *, engine,
-                 profile: Profile, program: str | None = None, extra_dirs=()) -> list[Found]:
+                 profile: Profile, program: str | None = None, extra_dirs=(),
+                 orc_installer: Callable | None = None) -> list[Found]:
     def look() -> list[Found]:
         return discover(name, system=system, env=env, home=home, venv_bin=venv_bin, engine=engine,
                         extra_dirs=extra_dirs)
 
-    flatpak_orc = name == "orc" and system == "linux" and providers.flatpak_has_orc(run)
-    if flatpak_orc and console.confirm("  Decode-Orc is installed as a Flatpak. Create an `orc-cli` wrapper for it?"):
-        providers.write_orc_flatpak_wrapper(tools_dir(system, env, home) / "bin")
-        return look()
+    if name == "orc":
+        return _try_install_orc(console, system, env, home, run, look, orc_installer)
     cmd = providers.install_command(name, manager, program)
     if cmd:
         pretty = " ".join(cmd)
@@ -265,6 +267,29 @@ def _try_install(console: Console, name: str, system: str, env, home: Path, venv
     if name not in ("vspipe", "rife_model_dir", "ffprobe"):
         console.say("  " + providers.guidance(name, system))
     return []
+
+
+def _try_install_orc(console: Console, system: str, env, home: Path, run, look, orc_installer) -> list[Found]:
+    """Decode-Orc: use a Flatpak that is already there, else offer to download and install the pinned release."""
+    wrapper_dir = tools_dir(system, env, home) / "bin"
+    app_id = providers.orc_flatpak_id(run) if system == "linux" else None
+    if app_id is None:
+        question = (f"  {LABELS['orc']} is missing. Download Decode-Orc {providers.ORC_VERSION} from GitHub "
+                    "and install it now?")
+        if not console.confirm(question):
+            console.say("  " + providers.guidance("orc", system))
+            return []
+        if not (orc_installer or orc_install.install_orc)(console, system=system, env=env, home=home, run=run):
+            return []
+        found = look()
+        if found or system != "linux":
+            return found
+        app_id = providers.orc_flatpak_id(run)
+    if app_id is not None and system == "linux" and (
+            console.assume_yes or console.confirm("  Decode-Orc is installed as a Flatpak. Create an `orc-cli` "
+                                                  "wrapper for it?")):
+        providers.write_orc_flatpak_wrapper(wrapper_dir, app_id)
+    return look()
 
 
 def _choose(console: Console, name: str, found: list[Found], run_text, sibling_of: str | None = None) -> str | None:
@@ -386,4 +411,32 @@ def check_environment() -> list[str]:
     return problems
 
 
-__all__ = ["Console", "SetupResult", "check_environment", "run_setup"]
+def profile_problems(profile_path: str | os.PathLike | None = None) -> list[str]:
+    """Tools this machine's profile relies on that are no longer there, or that a required tool still lacks.
+
+    The launcher asks this on every start so a tool that disappeared (a cleaned-up folder, an uninstalled Homebrew
+    package) is offered for repair at once instead of failing a step hours later. Empty means nothing to fix; a
+    profile that cannot be read is not reported here (the app reports that itself).
+    """
+    path = Path(profile_path) if profile_path else default_profile_path()
+    try:
+        profile = Profile.load(path)
+    except Exception:
+        return []
+    problems = []
+    for name in TOOL_ORDER:
+        spec = KNOWN_TOOLS[name]
+        configured = profile.tools.get(name) or ""
+        if configured:
+            ok = Path(configured).is_dir() if spec["kind"] == "dir" else Path(configured).is_file()
+            if not ok:
+                problems.append(f"{LABELS[name]} is gone: {configured}")
+        elif spec["required"]:
+            try:
+                profile.tool(name)
+            except Exception:
+                problems.append(f"{LABELS[name]} is required and was not found")
+    return problems
+
+
+__all__ = ["Console", "SetupResult", "check_environment", "profile_problems", "run_setup"]

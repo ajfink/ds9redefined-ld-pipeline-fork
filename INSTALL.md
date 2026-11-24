@@ -10,6 +10,9 @@ The folder itself is never written to, so one copy can serve Windows, Mac and Li
 | Apple Silicon Mac (macOS 15 or newer) | `FromStunToKill.command` |
 | Linux | `./FromStunToKill.sh` |
 
+On every start in a terminal window the launcher also checks that the tools the profile names still exist (for example a
+folder you cleaned up) and, if one is gone, offers to run setup to find or install it again before the app opens.
+
 Extra words after the launcher name: `setup` (run the setup wizard again), `check` (read-only readiness report),
 `cli ...` (an `fstk` command line), `env` (where this computer keeps its files), `reset-env` (delete this
 computer's Python environment; it is rebuilt on the next start).
@@ -42,7 +45,8 @@ Where things live on each computer (never inside the app folder):
 | FFmpeg + FFprobe (needs libx265) | `winget install Gyan.FFmpeg` | `brew install ffmpeg` | apt / pacman (Fedora: RPM Fusion, instructions only) |
 | 7-Zip (unpacks the .7z EFM archives) | `winget install 7zip.7zip` | `brew install sevenzip` (the program is `7zz`) | p7zip |
 | VapourSynth + plugins | in fstk's own environment (pinned wheels) | same | same |
-| Decode-Orc, RIFE | never automatic — see below | never automatic | never automatic |
+| Decode-Orc 2.11.1 | downloaded from its GitHub release: MSI (+ Visual C++ runtime if missing) | DMG → `~/Applications/orc-gui.app` | Flatpak for this user + `orc-cli` wrapper |
+| RIFE | never automatic — see below | never automatic | never automatic |
 
 Setup offers each install and shows the exact command first; nothing is installed without a yes. It looks for
 programs on PATH **and** in the places a double-clicked launcher cannot see — on macOS `/opt/homebrew/bin`,
@@ -57,11 +61,15 @@ even without the executable bit, which a Windows share often drops.
 
 ## What is never installed for you
 
-* **Decode-Orc** and **RIFE** change the output when their version changes, so the wizard only tells you where to
-  get the pinned release (Orc 2.11.1 on the owner's machines) and then asks for the path. Windows: MSI. macOS: DMG,
-  self-signed, after copying `orc-gui.app` to Applications run `xattr -dr com.apple.quarantine /Applications/orc-gui.app`
-  (or right-click → Open once). Linux: the Flatpak `io.github.simoninns.decode-orc`; the wizard can create an
-  `orc-cli` wrapper for it.
+* **RIFE** changes the output with its model, so setup only tells you where to get it (see below).
+* **Decode-Orc** is installed for you, but only the *pinned* release (2.11.1 on the owner's machines), because its
+  version changes the pixels and the audio. Setup asks first, reads GitHub's release list, downloads the file
+  for your system, checks its size and SHA-256, and installs it: Windows runs the (unsigned) MSI, so Windows asks
+  for permission once, after installing the Visual C++ runtime if the PC lacks it; macOS (Apple silicon) copies
+  `orc-gui.app` to `~/Applications` and clears the quarantine mark (the app is only ad-hoc signed); Linux installs the
+  Flatpak `io.github.decode_orc.decode-orc` for your user (Flatpak itself must be installed) and writes the `orc-cli`
+  wrapper. If 2.11.1 is not on GitHub's list setup names the newest one and asks before installing it; if the
+  network or the installer fails it prints the manual steps and carries on.
 * Fedora/RHEL: FFmpeg with x265 needs RPM Fusion, so the wizard gives instructions instead of installing.
 * **RIFE on macOS and Linux.** Only needed to repair single-frame PAD blanks. Unpack the release to
   `~/tools/rife-ncnn-vulkan` (the macOS build runs on Metal through MoltenVK; Linux needs a Vulkan driver) and put

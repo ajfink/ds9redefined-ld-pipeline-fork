@@ -191,6 +191,27 @@ def pause() -> None:
             input("\nPress Enter to close this window. ")
 
 
+def repair_tools(vpy: Path) -> None:
+    """A tool the profile names has vanished (or a required one is missing): offer the setup wizard before starting.
+
+    Only in a terminal, so a start from a shortcut or a scheduled task never waits for an answer."""
+    probe = subprocess.run(
+        [str(vpy), "-c", "from fstk.install.wizard import profile_problems\nprint('\\n'.join(profile_problems()))"],
+        env=child_env(), capture_output=True, text=True, check=False)
+    problems = [line for line in probe.stdout.splitlines() if line.strip()]
+    if not problems or not (sys.stdin and sys.stdin.isatty()):
+        return
+    say("Something this computer's profile relies on is missing:")
+    for line in problems:
+        say(f"  - {line}")
+    try:
+        answer = input("Run setup to find or install it now? [Y/n] ").strip().lower()
+    except EOFError:
+        return
+    if not answer.startswith("n"):
+        run_fstk(vpy, ["setup"])
+
+
 def launch_gui(vpy: Path, extra: list[str]) -> int:
     probe = subprocess.run(
         [str(vpy), "-c", "import sys\nfrom fstk.install.wizard import check_environment\n"
@@ -256,6 +277,8 @@ def main(argv: list[str]) -> int:
                     return 0
             except EOFError:
                 pass
+    else:
+        repair_tools(vpy)
     return launch_gui(vpy, rest)
 
 

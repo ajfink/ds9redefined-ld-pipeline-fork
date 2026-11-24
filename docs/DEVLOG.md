@@ -1032,3 +1032,29 @@ the Mac/Linux launcher uses curl and was never affected.
 
 CP38b: a missing configured tool (the Mac's `~/tools/ffmpeg/ffmpeg` disappeared between 15:59 and 16:06) now reports that the
 file was there when setup ran, to run `FromStunToKill setup`, and any copy found on PATH.
+
+## CP40 — launcher repairs a vanished tool (Mac: ffmpeg gone, `FromStunToKill.command` just started the app)
+
+The launcher ran setup only for a machine with no profile (or on `setup`), so after `~/tools/ffmpeg` disappeared it opened the
+app and the failure only showed when a step ran. Now every GUI start in a terminal calls `profile_problems()` (tools the profile
+names that no longer exist; required tools never found) and, if any, lists them and asks "Run setup to find or install it now?
+[Y/n]"; declining still starts the app. Never asked without a terminal (shortcut, scheduled start). Tests: 2 added.
+
+
+## CP41 — setup downloads and installs Decode-Orc when it is missing (owner request, second Windows PC)
+
+- The other Windows PC finished setup but was blocked at `[FAIL] tool:orc`. Owner: "Orc should also be downloaded and
+  installed if missing." This **reverses the CP-earlier "never auto-install Orc" rule**, at the owner's explicit
+  request; the version pin is kept: only 2.11.1 (`providers.ORC_VERSION`) is installed without a second question.
+- New `src/fstk/install/orc.py`: reads `api.github.com/repos/decode-orc/decode-orc/releases` at install time,
+  picks this system's asset (`Decode-Orc-<v>-windows-x64.msi`, `-macos-arm64.dmg` (Apple silicon only), `-linux.flatpak`),
+  verifies size and GitHub's `sha256:` digest when listed, then installs: Windows `msiexec /i … /passive` (UAC once;
+  VC++ runtime from aka.ms first if `vcruntime140_1.dll` etc. are absent), macOS `hdiutil attach` → `ditto` to
+  `~/Applications` → detach → `xattr -dr com.apple.quarantine`, Linux `flatpak install --user -y` (adds Flathub remote
+  for the KDE runtime). Pinned version missing → names the newest and asks (default no). Every failure is a message
+  plus the manual guidance; setup continues. `wizard._try_install_orc` hooks it (`run_setup(orc_installer=…)` for tests).
+- Fixed a stale Flatpak id: upstream is `io.github.decode_orc.decode-orc` (we had `simoninns`); both are probed and the
+  wrapper uses the installed one. Docs link now `decode-orc/decode-orc`.
+- 12 new tests with fake runner/fetcher (no network). **Unverified on real machines:** the MSI run (UAC, SmartScreen),
+  VC++ redist, DMG mount, Flatpak. The shell here cannot reach GitHub releases, so asset names come from upstream's
+  workflows/docs and the digest check is skipped when GitHub lists none.
