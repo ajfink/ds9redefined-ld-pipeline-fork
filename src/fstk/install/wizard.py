@@ -315,25 +315,14 @@ def _choose(console: Console, name: str, found: list[Found], run_text, sibling_o
         same = [f for f in found if sibling_of and Path(f.path).parent == Path(sibling_of).parent]
         return (same or found)[0].path
     if name == "rife_model_dir":
-        pinned = [f for f in found if Path(f.path).name == providers.RIFE_MODEL]
-        if pinned:
-            return pinned[0].path
-        if len(found) == 1:
-            console.say(f"  The model every machine must use ({providers.RIFE_MODEL}) was not found; only "
-                        f"{Path(found[0].path).name} is here (it repairs frames differently).")
-            # asked in words even under --yes: a different model changes the output, so it is never assumed
-            if console.ask(f"  Use {Path(found[0].path).name} anyway? [y/N]").lower().startswith("y"):
-                return found[0].path
-            console.say(f"  Copy {providers.RIFE_MODEL} next to the RIFE engine or into the shared folder's "
-                        "`tools` directory and run setup again.")
-            return None
-        console.say("  Several RIFE models were found; the model changes the repaired frames, so choose:")
-        for i, f in enumerate(found, 1):
-            console.say(f"    {i}. {f.path}")
-        answer = console.ask("  Number (Enter to skip):")
-        if answer.isdigit() and 1 <= int(answer) <= len(found):
-            return found[int(answer) - 1].path
-        return None
+        # the default is the most recent versioned model (4.26 beats 4.6); a folder with no version never wins
+        best = providers.newest_rife_model([Path(f.path).name for f in found])
+        if best:
+            pick = next(f for f in found if Path(f.path).name == best)
+            if len(found) > 1:
+                console.say(f"  RIFE model: using the most recent, {best}.")
+            return pick.path
+        return found[0].path
     return found[0].path
 
 

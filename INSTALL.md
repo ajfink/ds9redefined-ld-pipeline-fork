@@ -47,7 +47,7 @@ Where things live on each computer (never inside the app folder):
 | VapourSynth + plugins | in fstk's own environment (pinned wheels) | same | same |
 | Decode-Orc 2.11.1 | downloaded from its GitHub release: MSI (+ Visual C++ runtime if missing) | DMG → `~/Applications/orc-gui.app` | Flatpak for this user + `orc-cli` wrapper |
 | RIFE engine (rife-ncnn-vulkan) | downloaded from nihui's GitHub release (zip) into fstk's tools folder | same | same (Vulkan driver needed) |
-| RIFE model (`rife-v4.26`) | never chosen for you — see below | same | same |
+| RIFE model | most recent version found (4.6 today) | same | same |
 
 Setup offers each install and shows the exact command first; nothing is installed without a yes. It looks for
 programs on PATH **and** in the places a double-clicked launcher cannot see — on macOS `/opt/homebrew/bin`,
@@ -62,9 +62,9 @@ even without the executable bit, which a Windows share often drops.
 
 ## What is never installed for you
 
-* **The RIFE model** changes the repaired frames, so every machine must use the same one (`rife-v4.26`). The public
-  engine download only carries older models, so setup uses `rife-v4.26` when it is next to the engine or in the shared
-  folder's `tools` directory, and otherwise asks (default no) before settling for another model.
+* **The RIFE model** defaults to the most recent versioned model setup finds (`rife-v4.6` in the public download
+  today; a newer folder such as `rife-v4.26` next to the engine or in the shared `tools` folder wins automatically).
+  Use the same model on every machine: it changes the repaired frames.
 * **Decode-Orc** is installed for you, but only the *pinned* release (2.11.1 on the owner's machines), because its
   version changes the pixels and the audio. Setup asks first, reads GitHub's release list, downloads the file
   for your system, checks its size and SHA-256, and installs it: Windows runs the (unsigned) MSI, so Windows asks

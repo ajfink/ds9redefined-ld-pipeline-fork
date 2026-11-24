@@ -143,7 +143,7 @@ def test_guidance_names_the_version_pin_and_the_mac_quarantine_step():
     text = prov.guidance("orc", "macos")
     assert "2.11.1" in text and "xattr" in text
     assert "libx265" in prov.guidance("ffmpeg", "linux")
-    assert "never chosen for you" in prov.guidance("rife_engine", "windows")
+    assert "most recent model" in prov.guidance("rife_engine", "windows")
 
 
 def test_mac_guidance_says_how_to_install_7zip_and_to_keep_the_same_rife_model():
@@ -798,7 +798,13 @@ def test_rife_extract_flattens_the_top_folder_and_makes_the_engine_executable(tm
         rife_inst.extract(bad, tmp_path / "d2", "linux")
 
 
-def test_setup_installs_rife_then_prefers_the_pinned_model_and_never_assumes_another(tmp_path):
+def test_newest_rife_model_is_numeric_and_ignores_unversioned_folders():
+    assert prov.newest_rife_model(["rife-v4", "rife-v4.6", "rife-v4.26", "rife-HD", "rife-anime"]) == "rife-v4.26"
+    assert prov.newest_rife_model(["rife-v4.6", "rife-v3.1", "rife"]) == "rife-v4.6"
+    assert prov.newest_rife_model(["rife", "rife-HD"]) is None
+
+
+def test_setup_installs_rife_and_defaults_to_the_newest_model(tmp_path):
     env = {"PATH": "", "XDG_DATA_HOME": str(tmp_path / "data")}
     dests = []
 
@@ -814,15 +820,15 @@ def test_setup_installs_rife_then_prefers_the_pinned_model_and_never_assumes_ano
           "orc_installer": lambda *a, **k: False, "rife_installer": rife_installer}
     wiz.run_setup(wiz.Console(ask_fn=lambda q: "n", out=lambda t: None), **kw)
     assert dests == []                                              # declined: nothing downloaded
-    lines: list[str] = []
-    wiz.run_setup(wiz.Console(ask_fn=lambda q: "", assume_yes=True, out=lines.append), **kw)
+    wiz.run_setup(wiz.Console(ask_fn=lambda q: "", assume_yes=True, out=lambda t: None), **kw)
     prof = Profile.load(path)
     assert dests and Path(prof.tool("rife_engine")).name == "rife-ncnn-vulkan"
-    assert prof.tools.get("rife_model_dir") is None                 # only rife-v4.6 here: not assumed under --yes
-    assert any("rife-v4.26" in ln for ln in lines)
+    assert Path(prof.tool("rife_model_dir")).name == "rife-v4.6"    # the newest the public download carries
     (Path(prof.tool("rife_engine")).parent / "rife-v4.26").mkdir()
+    prof.tools.pop("rife_model_dir")
+    prof.save(path)
     wiz.run_setup(wiz.Console(ask_fn=lambda q: "", assume_yes=True, out=lambda t: None), **kw)
-    assert Path(Profile.load(path).tool("rife_model_dir")).name == "rife-v4.26"
+    assert Path(Profile.load(path).tool("rife_model_dir")).name == "rife-v4.26"      # a newer one wins
 
 
 def test_launcher_check_also_reports_optional_tools_that_were_never_set_up(tmp_path):

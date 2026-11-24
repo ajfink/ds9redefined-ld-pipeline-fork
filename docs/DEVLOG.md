@@ -1072,3 +1072,9 @@ names that no longer exist; required tools never found) and, if any, lists them 
   Optional tools the owner declines are therefore reported on every terminal start.
 - Not done: a static-FFmpeg download fallback (Homebrew broke on the Mac: old brew vs macOS 27.2.1); I have no
   verifiable source URL/version for FFmpeg 9.x builds. Unverified on real machines: the RIFE download and Metal run.
+
+## CP43 — RIFE model defaults to the most recent version (owner decision; replaces the CP42 "ask, default no")
+
+- Owner: set the most recent RIFE version as the default (4.6 today). `providers.newest_rife_model` compares versions
+  numerically (4.26 > 4.6; unversioned folders like rife-HD never win); `_choose` takes it without asking and says so
+  when several exist. The `rife-v4.26` pin and the "asked even under --yes" rule are gone.
