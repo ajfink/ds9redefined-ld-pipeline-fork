@@ -186,7 +186,7 @@ class CadenceEvidence(Stage):
             ctx.report(0.99, f"pictures of {len(spots)} flagged place(s)")
             info = ff.probe(Path(d["master"])).only("video").raw
             frames = ff.frames_by_index(d["master"], cvis.frames_needed(spots, int(d["pad"])),
-                                        int(info["width"]), int(info["height"]), cancel=ctx.cancel)
+                                        int(info["width"]), int(info["height"]), cancel=ctx.cancel, grid="decoded")
             cvis.render_sheet(spots, frames, int(d["pad"]), sheet, title=title, summary=cvis.headline(plain))
             return cvis.review_view(analysis, spots, sheet=sheet.name, rendered=True, issues_plain=plain, held=True)
         except (FstkError, OSError, ValueError, KeyError) as exc:

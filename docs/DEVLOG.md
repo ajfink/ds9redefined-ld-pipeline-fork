@@ -1207,3 +1207,20 @@ names that no longer exist; required tools never found) and, if any, lists them 
 - Mac bundle 21:32: the still-open pre-CP48 app finished the run and stopped at the DVD-alignment review as expected
   (its picture check ran on 11 spots); restart to get the CP49 viewer.
 - Tests: preflight (3), deleted-environment vspipe, resumable job, update notice, restarted percentage. 623 pass.
+
+## CP51 — DVD-alignment pictures on the descriptor grid; a rejected review is redone (Mac screenshot 21:44)
+
+- Mac S02E03: "Automatic picture check: NOT CHECKED … frame extraction from the DVD failed or was incomplete
+  (63/77 frames)". Cause: the alignment's DVD frame numbers are positions on the 29.97 grid that the descriptor
+  decode produces (ffmpeg's default output timing repeats frames for the DVD's repeat flags: 81,828 positions), but
+  `frames_by_index` picked *decoded* frames with `select=n` (67,642 frames). Every spot fetched the wrong picture,
+  and the two spots past frame 67,642 did not exist (the 14 missing). ffmpeg also logged "non monotonically
+  increasing dts … 91 >= 91" for the `-fps_mode passthrough` output, which can drop frames.
+- `FFmpeg.frames_by_index(grid="descriptor")` (default): the exact descriptor decode (no select/fps_mode), streamed
+  through new `process.run(on_stdout=…)` chunk by chunk, keeping only the wanted frames; stops after the last
+  wanted one. `grid="decoded"` (cadence pictures): `select` + `setpts=N/TB` so shared timestamps cannot drop frames.
+  Alignment pictures are now extracted at 240×180 (the sheet's size). Test on a stream with holes in its timing.
+- Engine: a review rejected *for the result the step is holding* (rejection recorded after the step finished, bound
+  to its outputs) makes the step run again when the job runs (not for `delivery`, whose windows start their own
+  reruns); a redone step asks again and is not redone twice. Reviews tab → Reject asks "Redo now / Later".
+- 626 tests pass.

@@ -335,8 +335,9 @@ def test_approving_a_review_carries_the_job_on(services, tmp_path, qtbot, monkey
     monkeypatch.setattr(QInputDialog, "getMultiLineText", staticmethod(lambda *a, **k: ("looked fine", True)))
     started = []
     monkeypatch.setattr(w, "start_plan", lambda path: started.append(path) or True)
+    monkeypatch.setattr(w, "ask_redo", lambda name: False)
     w.decide("REJECTED")
-    assert started == []                                                      # a rejection never restarts anything
+    assert started == [] and "redone the next time" in w.banner.text()       # "Later": nothing restarts now
     w.reviews.setCurrentRow(0)                                                # the refresh cleared the selection
     w.decide("APPROVED")
     assert len(started) == 1 and started[0].endswith("plan.json")             # the saved plan of the job
@@ -499,3 +500,29 @@ def test_an_update_while_the_app_is_open_is_noticed(services, qtbot, monkeypatch
     monkeypatch.setattr(app_mod, "code_stamp", lambda: (999, 1))
     assert w.check_code_updated() is True
     assert "updated while it was open" in w.banner.text() and not w.code_watch.isActive()
+
+
+@pytest.mark.gui
+def test_rejecting_and_redoing_runs_the_step_again_and_asks_again(services, tmp_path, qtbot, monkeypatch):
+    """Mac 2026-11-23: the alignment review had no pictures (extraction bug); after the fix the step must be redone,
+    and a rejected step used to stay stuck for good."""
+    from PySide6.QtWidgets import QInputDialog
+
+    import tests.unit.test_engine as te
+    from fstk.ui.app import MainWindow
+
+    services.run_plan(review_plan(tmp_path), actor="op")
+    runs = te.CALLS.get("review", 0)
+    w = MainWindow(services, actor="op")
+    qtbot.addWidget(w)
+    w.show_episode("S01E20")
+    w.reviews.setCurrentRow(0)
+    monkeypatch.setattr(QInputDialog, "getMultiLineText", staticmethod(lambda *a, **k: ("no pictures", True)))
+    monkeypatch.setattr(w, "ask_redo", lambda name: True)
+    w.decide("REJECTED")
+    qtbot.waitUntil(lambda: w.thread is None and te.CALLS.get("review", 0) == runs + 1, timeout=20000)
+    assert "redoing" in w.log.toPlainText() or "rejected" in w.banner.text()
+    state = services.job_state("S01E20", "rv")
+    assert state["steps"]["r"]["status"] == "awaiting-review"                 # redone once, then asks again
+    _, state = services.run_plan(review_plan(tmp_path), actor="op")
+    assert te.CALLS.get("review", 0) == runs + 1                             # not redone a second time

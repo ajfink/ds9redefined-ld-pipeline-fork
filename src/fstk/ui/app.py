@@ -557,9 +557,23 @@ class MainWindow(QMainWindow):
         name = self.REVIEW_NAMES.get(p.review, p.review)
         if decision == "APPROVED":
             self.continue_job(p.job, what=f"{name} approved")
+        elif self.ask_redo(name):
+            self.continue_job(p.job, what=f"{name} rejected — redoing it")
         else:
-            self.set_banner(f"{name} rejected. The step stays stopped until it is redone; nothing else runs from it.",
-                            "warn")
+            self.set_banner(f"{name} rejected. It is redone the next time this job runs (Run to delivery).", "warn")
+
+    def ask_redo(self, name: str) -> bool:
+        """After a rejection: redo the step now? (A method so tests can answer.)"""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Redo it?")
+        box.setText(f"{name} rejected. Redo this step now?")
+        box.setInformativeText("It is measured again from the same files, and you get a new review. If the files "
+                               "themselves are wrong (wrong DVD, bad render), fix that first and choose Later.")
+        now = box.addButton("Redo now", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        return box.clickedButton() is now
 
     def continue_job(self, job: str, *, what: str = "Approved") -> bool:
         """Carry on a job that was waiting for a review that has just been approved.

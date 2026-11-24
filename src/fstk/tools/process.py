@@ -245,10 +245,15 @@ class _Log:
 
 
 def _pump(stream: IO[bytes], name: str, log: _Log, tail: deque, on_line: LineCallback | None,
-          sink: list[bytes] | None) -> None:
+          sink) -> None:
+    """Read a stream: stderr lines go to the log; stdout goes to ``sink`` (a list, or a callable that takes each
+    chunk as it arrives, for output too large to keep)."""
     splitter = _LineSplitter()
     try:
-        while chunk := stream.read1(65536) if hasattr(stream, "read1") else stream.read(65536):
+        while chunk := stream.read1(1 << 20) if hasattr(stream, "read1") else stream.read(1 << 20):
+            if callable(sink):
+                sink(chunk)
+                continue
             if sink is not None:
                 sink.append(chunk)
                 continue
@@ -283,11 +288,13 @@ def run(args: Sequence[str | os.PathLike], *, log_path: Path | None = None, cwd:
         stdout_path: Path | None = None, stdin_bytes: bytes | None = None,
         on_line: LineCallback | None = None, timeout: float | None = None,
         cancel: threading.Event | None = None, redact: Callable[[str], str] | None = None,
-        poll_interval: float = 0.2) -> ProcessResult:
-    """Run one tool. stdout is captured in memory, written to ``stdout_path``, or streamed as lines."""
+        poll_interval: float = 0.2, on_stdout: Callable[[bytes], None] | None = None) -> ProcessResult:
+    """Run one tool. stdout is captured in memory, written to ``stdout_path``, handed chunk by chunk to
+    ``on_stdout``, or streamed as lines."""
     return run_pipeline([args], log_path=log_path, cwd=cwd, env=env, capture_stdout=capture_stdout,
                         stdout_path=stdout_path, stdin_bytes=stdin_bytes, on_line=on_line,
-                        timeout=timeout, cancel=cancel, redact=redact, poll_interval=poll_interval)
+                        timeout=timeout, cancel=cancel, redact=redact, poll_interval=poll_interval,
+                        on_stdout=on_stdout)
 
 
 def run_pipeline(commands: Sequence[Sequence[str | os.PathLike]], *, log_path: Path | None = None,
@@ -296,10 +303,10 @@ def run_pipeline(commands: Sequence[Sequence[str | os.PathLike]], *, log_path: P
                  stdin_bytes: bytes | None = None, on_line: LineCallback | None = None,
                  timeout: float | None = None, cancel: threading.Event | None = None,
                  redact: Callable[[str], str] | None = None,
-                 poll_interval: float = 0.2) -> ProcessResult:
+                 poll_interval: float = 0.2, on_stdout: Callable[[bytes], None] | None = None) -> ProcessResult:
     """Run ``cmd1 | cmd2 | ...``; stderr of every stage is logged as ``[name#i]``."""
-    if capture_stdout and stdout_path:
-        raise ToolError("choose capture_stdout or stdout_path, not both")
+    if sum(bool(x) for x in (capture_stdout, stdout_path, on_stdout)) > 1:
+        raise ToolError("choose one of capture_stdout, stdout_path or on_stdout")
     argv = [_check_args(c) for c in commands]
     if not argv:
         raise ToolError("no commands")
@@ -338,7 +345,7 @@ def run_pipeline(commands: Sequence[Sequence[str | os.PathLike]], *, log_path: P
         last_proc = procs[-1]
         if not out_file and last_proc.stdout is not None:
             threads.append(threading.Thread(target=_pump, args=(last_proc.stdout, "stdout", log, tail,
-                                                                on_line, sink), daemon=True))
+                                                                on_line, on_stdout or sink), daemon=True))
         for t in threads:
             t.start()
         if stdin_bytes is not None and procs[0].stdin:

@@ -161,7 +161,7 @@ class FakeFF:
     def probe(self, _path):
         return self._Probe()
 
-    def frames_by_index(self, path, indices, width, height, *, cancel=None, frame_count=None):
+    def frames_by_index(self, path, indices, width, height, *, cancel=None, frame_count=None, grid="descriptor"):
         import numpy as np
 
         out = {}

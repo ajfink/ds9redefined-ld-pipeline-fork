@@ -384,6 +384,22 @@ class Engine:
                                           expected_evidence=outputs)
         return status.satisfied, f"review {stage.review}: {status.state} {'; '.join(status.reasons)}"
 
+    def _rejected_here(self, sid: str) -> bool:
+        """The latest decision on this step's review rejected the result this step is holding (recorded after
+        the step finished, on its evidence). The delivery review is left alone: its own windows start the
+        reruns (corrections, re-encodes)."""
+        stage = get_stage(self._step(sid)["stage"])
+        if not stage.review or stage.review == "delivery":
+            return False
+        rows = self.ws.approvals.history(stage.review)
+        latest = rows[-1] if rows else None
+        if not latest or latest.get("decision") != "REJECTED":
+            return False
+        st = self.state["steps"][sid]
+        outputs = {fp["path"] for fp in st.get("outputs", [])}
+        bound = {fp.get("path") for fp in (latest.get("bindings") or {}).get("evidence", [])}
+        return bool(outputs) and outputs <= bound and str(latest.get("utc", "")) >= str(st.get("finished_utc", ""))
+
     # ---------------------------------------------------------------- run
     def run(self) -> dict[str, Any]:
         from fstk.workspace.shared import frozen_reason, try_publish
@@ -443,7 +459,13 @@ class Engine:
                     self._commit_pending(s["id"])
                     st["status"] = "passed"
                     self._emit("review-satisfied", step=s["id"])
-                continue
+                    continue
+                if not self._rejected_here(s["id"]):
+                    continue
+                # a person rejected exactly this result: do the step again (its values were never committed)
+                st.pop("pending_commit", None)
+                st.update(status="pending", previous_status="rejected")
+                self._emit("review-rejected-redo", step=s["id"])
             if st["status"] != "pending":
                 continue
             deps_ok = True

@@ -16,7 +16,7 @@ from fstk.media.alignment import FPS, AlignmentResult
 
 SEARCH = 3                  # DVD frames either side of the predicted one that are compared
 CELL = (240, 180)           # picture size in the sheet
-SHOT = (320, 240)           # size the frames are extracted at (4:3, like the descriptors)
+SHOT = (240, 180)           # size the frames are extracted at (4:3, like the descriptors; the sheet size)
 LIKE = 0.80                 # grey-picture correlation that counts as "the same picture"
 UNLIKE = 0.60               # below this nothing around the predicted frame resembles the LD frame
 MAX_POINTS = 14

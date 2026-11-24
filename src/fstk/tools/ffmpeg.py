@@ -333,22 +333,59 @@ class FFmpeg:
         return np.frombuffer(data, np.uint8).reshape(-1, size)
 
     def frames_by_index(self, path: str | Path, indices: list[int], width: int, height: int, *, cancel=None,
-                        frame_count: int | None = None):
+                        frame_count: int | None = None, grid: str = "descriptor"):
         """Full-colour frames of v:0 by exact index, decoded sequentially (never seeked), scaled to
-        ``width``×``height`` (area scaling, like the descriptors). Returns ``{index: uint8[h, w, 3] RGB}``.
+        ``width``×``height`` (area scaling). Returns ``{index: uint8[h, w, 3] RGB}``; indices at or past the end
+        (or ``frame_count``) are skipped.
 
-        Indices at or past ``frame_count`` (when given) are skipped. One ``select=`` pass per 32 terms.
+        ``grid="descriptor"`` numbers frames exactly like ``gray_thumbnails`` (ffmpeg's default output timing, no
+        ``select``/``fps_mode``): a DVD with repeat-field flags comes out on the 29.97 grid with repeated frames,
+        and the alignment's DVD indices are positions on that grid, not decoded frames (Mac 2026-11-23: S02E03's
+        DVD has 67,642 decoded frames but 81,828 grid positions; picking by decoded number fetched wrong pictures
+        and found none past 67,642). Every frame passes through the pipe; only the wanted ones are kept.
+
+        ``grid="decoded"`` picks decoded frames with ``select=`` (one pass per 32 terms) and renumbers the
+        timestamps, so frames that share one are not dropped by the muxer. For sources whose frames are the
+        decoded frames (the stack master, the cadence frame numbers).
         """
         import numpy as np
 
         wanted = sorted({int(i) for i in indices if i >= 0 and (frame_count is None or i < frame_count)})
         out: dict[int, Any] = {}
         size = width * height * 3
+        if not wanted:
+            return out
+        if grid == "descriptor":
+            want, last = set(wanted), wanted[-1]
+            state = {"buf": bytearray(), "n": 0}
+
+            def take(chunk: bytes) -> None:
+                buf = state["buf"]
+                buf += chunk
+                whole = len(buf) // size
+                for k in range(whole):
+                    n = state["n"] + k
+                    if n in want:
+                        out[n] = np.frombuffer(bytes(buf[k * size:(k + 1) * size]), np.uint8).reshape(height, width, 3)
+                state["n"] += whole
+                del buf[:whole * size]
+
+            res = process.run(
+                [self.ffmpeg, "-hide_banner", "-nostdin", "-v", "error", "-i", str(path), "-map", "0:v:0",
+                 "-frames:v", str(last + 1),
+                 "-vf", f"scale={width}:{height}:flags=area,format=rgb24", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                on_stdout=take, log_path=self._log("frames-by-index"), cancel=cancel)
+            if res.returncode != 0 or state["buf"]:
+                raise ArtifactError(f"frame extraction from {path} failed or was cut short after {state['n']} "
+                                    f"frames: {res.describe()}")
+            return out
+        if grid != "decoded":
+            raise ToolError(f"unknown frame grid {grid!r}")
         for group, expr in frame_selection_chunks(wanted):
             res = process.run(
                 [self.ffmpeg, "-hide_banner", "-nostdin", "-v", "error", "-i", str(path), "-map", "0:v:0",
-                 "-vf", f"select='{expr}',scale={width}:{height}:flags=area,format=rgb24", "-fps_mode", "passthrough",
-                 "-frames:v", str(len(group)), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                 "-vf", f"select='{expr}',setpts=N/TB,scale={width}:{height}:flags=area,format=rgb24",
+                 "-fps_mode", "passthrough", "-frames:v", str(len(group)), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
                 capture_stdout=True, log_path=self._log("frames-by-index"), cancel=cancel)
             data = res.stdout or b""
             if res.returncode != 0 or len(data) != size * len(group):
