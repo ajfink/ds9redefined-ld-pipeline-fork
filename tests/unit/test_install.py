@@ -811,7 +811,8 @@ def test_setup_installs_rife_and_uses_only_the_standard_model(tmp_path):
     path = tmp_path / "p" / "machine.json"
     kw = {"profile_path": path, "system": "linux", "env": env, "home": tmp_path, "run": lambda c: 1,
           "run_text": lambda c: " libx265", "doctor": _doctor_ok, "venv_bin": tmp_path / "x",
-          "orc_installer": lambda *a, **k: False, "rife_installer": rife_installer}
+          "orc_installer": lambda *a, **k: False, "rife_installer": rife_installer,
+          "rife_model_installer": lambda *a, **k: False}                # (no real download in a test)
     wiz.run_setup(wiz.Console(ask_fn=lambda q: "n", out=lambda t: None), **kw)
     assert dests == []                                              # declined: nothing downloaded
     lines: list[str] = []
@@ -838,3 +839,81 @@ def test_launcher_check_also_reports_optional_tools_that_were_never_set_up(tmp_p
     path = _profile_with_vspipe(tmp_path, venv_bin)
     problems = wiz.profile_problems(path)
     assert any("RIFE engine" in p for p in problems) and any("7-Zip" in p for p in problems)
+
+
+# ---------------------------------------------------------------- the standard RIFE model is downloaded and enforced
+
+def _model_files(content=b"model"):
+    return {"flownet.param": (hashlib.sha256(content).hexdigest(), len(content)),
+            "flownet.bin": (hashlib.sha256(content).hexdigest(), len(content))}
+
+
+def test_install_model_verifies_both_files_and_never_leaves_half_a_model(tmp_path):
+    got = []
+
+    def good(url, dest):
+        got.append(url)
+        dest.write_bytes(b"model")
+
+    con = _Con()
+    assert rife_inst.install_model(con, engine_dir=tmp_path, env={}, fetch_file=good, files=_model_files())
+    assert (tmp_path / "rife-v4.26" / "flownet.bin").is_file() and not (tmp_path / ".rife-v4.26.new").exists()
+    assert all(rife_inst.MODEL_COMMIT in u and "rife-v4.26" in u for u in got)
+
+    def corrupt(url, dest):
+        dest.write_bytes(b"wrong")
+
+    other = tmp_path / "e2"
+    other.mkdir()
+    con = _Con()
+    assert not rife_inst.install_model(con, engine_dir=other, env={}, fetch_file=corrupt, files=_model_files())
+    assert not (other / "rife-v4.26").exists() and "did not match" in "\n".join(con.lines)
+
+
+def test_pinned_model_hashes_are_the_ones_recorded_for_the_fork_commit():
+    assert len(rife_inst.MODEL_COMMIT) == 40
+    assert all(len(sha) == 64 for sha, _ in rife_inst.MODEL_FILES.values())
+
+
+def test_setup_downloads_the_standard_model_and_replaces_a_nonstandard_one(tmp_path):
+    env = {"PATH": "", "XDG_DATA_HOME": str(tmp_path / "data")}
+    engine = _exe(tmp_path / "data" / "fstk" / "tools" / "rife-ncnn-vulkan" / "rife-ncnn-vulkan")
+    (engine.parent / "rife-v4.6").mkdir()
+    asked = []
+
+    def model_installer(console, *, engine_dir, env):
+        asked.append(engine_dir)
+        (engine_dir / "rife-v4.26").mkdir()
+        return True
+
+    path = tmp_path / "p" / "machine.json"
+    kw = {"profile_path": path, "system": "linux", "env": env, "home": tmp_path, "run": lambda c: 1,
+          "run_text": lambda c: " libx265", "doctor": _doctor_ok, "venv_bin": tmp_path / "x",
+          "orc_installer": lambda *a, **k: False, "rife_model_installer": model_installer}
+    wiz.run_setup(wiz.Console(ask_fn=lambda q: "n", out=lambda t: None), **kw)
+    assert asked == [] and prof_model(path) is None                 # declined: the older 4.6 is not taken instead
+    wiz.run_setup(wiz.Console(ask_fn=lambda q: "", assume_yes=True, out=lambda t: None), **kw)
+    assert asked == [engine.parent] and prof_model(path) == "rife-v4.26"
+    # a profile that still names 4.6 is moved to the standard one on the next run, and reported by the launcher check
+    prof = Profile.load(path)
+    prof.tools["rife_model_dir"] = str(engine.parent / "rife-v4.6")
+    prof.save(path)
+    assert any("standard is rife-v4.26" in p for p in wiz.profile_problems(path))
+    wiz.run_setup(wiz.Console(ask_fn=lambda q: "", assume_yes=True, out=lambda t: None), **kw)
+    assert prof_model(path) == "rife-v4.26"
+
+
+def prof_model(path):
+    value = Profile.load(path).tools.get("rife_model_dir")
+    return Path(value).name if value else None
+
+
+@pytest.fixture(autouse=True)
+def _no_real_downloads(monkeypatch):
+    """Nothing in this file may reach the network: a test that wants a download injects its own fetcher."""
+    def refuse(*a, **k):
+        raise orc_inst.OrcInstallError("network is off in tests")
+
+    for module in (orc_inst, rife_inst):
+        monkeypatch.setattr(module, "fetch_json", refuse)
+        monkeypatch.setattr(module, "download", refuse)

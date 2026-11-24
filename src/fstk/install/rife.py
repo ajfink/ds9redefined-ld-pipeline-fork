@@ -15,8 +15,16 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from fstk.install import providers
-from fstk.install.orc import Asset, Download, Fetch, OrcInstallError, download, fetch_json, verify
+from fstk.install.orc import Asset, Download, Fetch, OrcInstallError, download, fetch_json, sha256_of, verify
 
+#: the standard model in ncnn format, from TNTwise's rife-ncnn-vulkan fork at one fixed commit (files are verified
+#: against these hashes; nothing here follows a moving branch). It is the converted Practical-RIFE 4.26.
+MODEL_COMMIT = "13338e38debe2e400b3eeecf6792312d01a692f9"
+MODEL_URL = "https://raw.githubusercontent.com/TNTwise/rife-ncnn-vulkan/{commit}/models/{model}/{name}"
+MODEL_FILES = {
+    "flownet.param": ("79f16c28903f93f8308f0c4c947f8c7e0c17d99a57b85473e5f298dd578d137b", 67885),
+    "flownet.bin": ("94d58e30b75d7c7609cfa6f3bdad524deddd14f5f75e85c36d2f827ef5c64731", 11360684),
+}
 RELEASES_API = "https://api.github.com/repos/nihui/rife-ncnn-vulkan/releases?per_page=10"
 _ASSET = {"windows": "windows", "macos": "macos", "linux": "ubuntu"}
 FOLDER = "rife-ncnn-vulkan"
@@ -101,3 +109,37 @@ def install_rife(console, *, system: str, env: Mapping[str, str], home: Path, de
     finally:
         if work_dir is None:
             shutil.rmtree(base, ignore_errors=True)
+
+
+def install_model(console, *, engine_dir: Path, env: Mapping[str, str], fetch_file: Download | None = None,
+                  model: str = providers.RIFE_MODEL, files: Mapping[str, tuple[str, int]] | None = None,
+                  commit: str = MODEL_COMMIT) -> bool:
+    """Download the standard RIFE model next to the engine, checking each file's size and SHA-256.
+
+    The folder appears only when both files are complete and verified. Any failure is words, never a half model.
+    """
+    say = console.say
+    files = MODEL_FILES if files is None else files
+    fetch_file = fetch_file or (lambda url, to: download(url, to, env))
+    target = engine_dir / model
+    staging = engine_dir / f".{model}.new"
+    try:
+        shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True)
+        say(f"  Downloading the standard RIFE model {model} (about {sum(v[1] for v in files.values()) / 1_048_576:.0f} MB)...")
+        for name, (sha, size) in files.items():
+            part = staging / name
+            fetch_file(MODEL_URL.format(commit=commit, model=model, name=name), part)
+            if part.stat().st_size != size or sha256_of(part) != sha:
+                raise OrcInstallError(f"{name} did not match the expected size and checksum")
+        shutil.rmtree(target, ignore_errors=True)
+        staging.replace(target)
+        say(f"  {model} installed: {target}")
+        say("  (converted RIFE 4.26 in ncnn format from TNTwise/rife-ncnn-vulkan; if your other machines use a "
+            "different conversion, copy that folder over this one so every machine matches)")
+        return True
+    except (OrcInstallError, OSError) as exc:
+        say(f"  The RIFE model could not be installed automatically: {exc}.")
+        return False
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)

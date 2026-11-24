@@ -47,7 +47,7 @@ Where things live on each computer (never inside the app folder):
 | VapourSynth + plugins | in fstk's own environment (pinned wheels) | same | same |
 | Decode-Orc 2.11.1 | downloaded from its GitHub release: MSI (+ Visual C++ runtime if missing) | DMG → `~/Applications/orc-gui.app` | Flatpak for this user + `orc-cli` wrapper |
 | RIFE engine (rife-ncnn-vulkan) | downloaded from nihui's GitHub release (zip) into fstk's tools folder | same | same (Vulkan driver needed) |
-| RIFE model `rife-v4.26` | copy it next to the engine or into the shared `tools` folder | same | same |
+| RIFE model `rife-v4.26` | downloaded (ncnn files, pinned + verified) next to the engine | same | same |
 
 Setup offers each install and shows the exact command first; nothing is installed without a yes. It looks for
 programs on PATH **and** in the places a double-clicked launcher cannot see — on macOS `/opt/homebrew/bin`,
@@ -63,9 +63,12 @@ even without the executable bit, which a Windows share often drops.
 ## What is never installed for you
 
 * **The RIFE model** is `rife-v4.26` on every platform (it changes the repaired frames, so all machines must match).
-  The public engine download only carries older models (up to `rife-v4.6`), so copy the `rife-v4.26` folder next to the
-  engine (`<tools folder>/rife-ncnn-vulkan`) or into the shared folder's `tools` directory; setup finds it there. If only
-  another version is present, setup says so and asks (default no) before using it.
+  The engine zip only carries models up to 4.6, so setup downloads 4.26 separately: the ncnn files from
+  TNTwise's `rife-ncnn-vulkan` at one fixed commit, each checked against a recorded size and SHA-256, into the folder
+  next to the engine. It is a converted Practical-RIFE 4.26; if your other machines use a different conversion, copy
+  that folder over it so every machine matches. A `rife-v4.26` folder already next to the engine or in the shared
+  `tools` folder is used instead of downloading. A profile that still names another model is moved to the standard one
+  (and the start-time check reports it).
 * **Decode-Orc** is installed for you, but only the *pinned* release (2.11.1 on the owner's machines), because its
   version changes the pixels and the audio. Setup asks first, reads GitHub's release list, downloads the file
   for your system, checks its size and SHA-256, and installs it: Windows runs the (unsigned) MSI, so Windows asks

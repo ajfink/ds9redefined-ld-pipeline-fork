@@ -1085,3 +1085,16 @@ names that no longer exist; required tools never found) and, if any, lists them 
   automatically wherever it is found (next to the engine, shared `tools`); the CP43 "newest version wins" rule is
   removed. If only another model exists, setup says the standard is missing and asks in words (default no, even
   under `--yes`). The public engine zip has no 4.26 (stops at 4.6), so the folder must be copied by the owner.
+
+## CP45 — setup downloads the standard RIFE model (4.26) and enforces it at every start (owner request)
+
+- Owner: the launch should check for the latest version (4.26 for now) and install it when missing. "Latest" is the
+  pinned standard `providers.RIFE_MODEL`; newer upstream models are not adopted automatically (the model changes the
+  output). Source found: TNTwise/rife-ncnn-vulkan `models/rife-v4.26/{flownet.param,flownet.bin}` at commit
+  `13338e3…`, fetched from raw.githubusercontent.com (URL verified 200 from the dev container) and verified by size +
+  SHA-256 (`rife_inst.MODEL_FILES`); staged in `.rife-v4.26.new`, so no half model is ever visible.
+- `_tools`: a configured model that is not the standard is "changed" and re-resolved; `profile_problems` reports it, so
+  the launcher offers setup. **Risk, unverified:** the owner's existing `rife-v4.26` conversion could differ from this
+  one (fp16/param edits); I could not find it on W: to compare hashes. If it differs, the Mac and Windows would repair
+  differently: copy one machine's folder to the others.
+- Tests: autouse fixture forbids real network in `test_install.py` (an older test had started a real download).

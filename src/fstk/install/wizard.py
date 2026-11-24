@@ -103,7 +103,7 @@ def run_setup(console: Console, *, profile_path: str | os.PathLike | None = None
               run: Callable[[list[str]], int] = _run, run_text: Callable[[list[str]], str] = _run_text,
               install: bool = True, check_only: bool = False, venv_bin: Path | None = None,
               volumes=None, doctor: Callable | None = None, orc_installer: Callable | None = None,
-              rife_installer: Callable | None = None) -> SetupResult:
+              rife_installer: Callable | None = None, rife_model_installer: Callable | None = None) -> SetupResult:
     system = system or current_os()
     env = os.environ if env is None else env
     home = Path.home() if home is None else home
@@ -119,7 +119,8 @@ def run_setup(console: Console, *, profile_path: str | os.PathLike | None = None
         return result
     _tools(console, profile, system=system, env=env, home=home, run=run, run_text=run_text,
            install=install and not check_only, venv_bin=venv_bin, result=result,
-           orc_installer=orc_installer or orc_install.install_orc, rife_installer=rife_installer)
+           orc_installer=orc_installer or orc_install.install_orc, rife_installer=rife_installer,
+           rife_model_installer=rife_model_installer)
     _ensure_vspipe(console, profile, venv_bin, run, system, result, check_only=check_only)
     if result.created and not check_only:
         _sources(console, profile, result, system=system)
@@ -214,7 +215,8 @@ def _shared_tool_dirs(profile: Profile) -> list[Path]:
 
 
 def _tools(console: Console, profile: Profile, *, system, env, home, run, run_text, install, venv_bin,
-           result: SetupResult, orc_installer: Callable | None = None, rife_installer: Callable | None = None) -> None:
+           result: SetupResult, orc_installer: Callable | None = None, rife_installer: Callable | None = None,
+           rife_model_installer: Callable | None = None) -> None:
     say = console.say
     found_manager = providers.find_manager(system, env) if install else None
     manager, manager_program = found_manager if found_manager else (None, None)
@@ -224,14 +226,22 @@ def _tools(console: Console, profile: Profile, *, system, env, home, run, run_te
         spec = KNOWN_TOOLS[name]
         label = LABELS[name]
         configured = profile.tools.get(name) or ""
-        if configured and (Path(configured).is_dir() if spec["kind"] == "dir" else Path(configured).is_file()):
+        present = bool(configured) and (Path(configured).is_dir() if spec["kind"] == "dir"
+                                        else Path(configured).is_file())
+        if present and name == "rife_model_dir" and Path(configured).name != providers.RIFE_MODEL:
+            say(f"  changed  {label}: {configured} is not the standard model ({providers.RIFE_MODEL}); looking again")
+        elif present:
             say(f"  ok       {label}: {configured}")
             continue
-        if configured:
+        elif configured:
             say(f"  changed  {label}: {configured} is gone; looking again")
         engine = profile.tools.get("rife_engine")
         found = discover(name, system=system, env=env, home=home, venv_bin=venv_bin, engine=engine,
                          extra_dirs=extra_dirs)
+        if name == "rife_model_dir" and install and profile.tools.get("rife_engine") and not any(
+                Path(f.path).name == providers.RIFE_MODEL for f in found):
+            found = _install_rife_model(console, profile, env, found, rife_model_installer, home, system,
+                                        venv_bin, extra_dirs)
         if not found and install:
             found = _try_install(console, name, system, env, home, venv_bin, manager, run, engine=engine,
                                  profile=profile, program=manager_program, extra_dirs=extra_dirs,
@@ -248,6 +258,18 @@ def _tools(console: Console, profile: Profile, *, system, env, home, run, run_te
         profile.tools[name] = choice
         result.changes.append(f"tools.{name} = {choice}")
         say(f"  found    {label}: {choice}")
+
+
+def _install_rife_model(console: Console, profile: Profile, env, found: list[Found], installer, home, system,
+                        venv_bin, extra_dirs) -> list[Found]:
+    """The standard RIFE model is missing: offer to download it next to the engine, then look again."""
+    engine_dir = Path(profile.tools["rife_engine"]).parent
+    if not console.confirm(f"  The standard RIFE model ({providers.RIFE_MODEL}) is missing. Download it next to "
+                           f"the engine now?"):
+        return found
+    (installer or rife_install.install_model)(console, engine_dir=engine_dir, env=env)
+    return discover("rife_model_dir", system=system, env=env, home=home, venv_bin=venv_bin,
+                    engine=profile.tools["rife_engine"], extra_dirs=extra_dirs)
 
 
 def _try_install(console: Console, name: str, system: str, env, home: Path, venv_bin, manager, run, *, engine,
@@ -450,6 +472,8 @@ def profile_problems(profile_path: str | os.PathLike | None = None) -> list[str]
             ok = Path(configured).is_dir() if spec["kind"] == "dir" else Path(configured).is_file()
             if not ok:
                 problems.append(f"{LABELS[name]} is gone: {configured}")
+            elif name == "rife_model_dir" and Path(configured).name != providers.RIFE_MODEL:
+                problems.append(f"{LABELS[name]} is {Path(configured).name}; the standard is {providers.RIFE_MODEL}")
         elif spec["required"]:
             try:
                 profile.tool(name)
