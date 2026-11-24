@@ -114,6 +114,17 @@
       "pypi": "https://pypi.org/project/vsjetpack/2.2.7/",
       "pypi_url": "https://files.pythonhosted.org/packages/4e/e7/63b370224de373056584873285b07ac1cffe2d6bb72a212255d4a2edfa81/vsjetpack-2.2.7-py3-none-any.whl",
       "platform_tag": "any"
+    },
+    "vapoursynth-mvutensils": {
+      "version": "9",
+      "file": "macos-arm64/vapoursynth_mvutensils-9-py3-none-macosx_15_0_arm64.whl",
+      "sha256": "32cd976eed722f921b705ceee54dd0432dcc61952954ad4f3ff64ecc3c312e1c",
+      "size": 2107615,
+      "license": "GPL-2.0",
+      "upstream": "https://github.com/myrsloik/mvutensils",
+      "pypi": "https://pypi.org/project/vapoursynth-mvutensils/9/",
+      "pypi_url": "https://files.pythonhosted.org/packages/ff/0e/db41e5701a2e25dd6c320be52395ea8828235873dfa78e66788425ef1b82/vapoursynth_mvutensils-9-py3-none-macosx_15_0_arm64.whl",
+      "platform_tag": "macosx_15_0_arm64"
     }
   }
 }

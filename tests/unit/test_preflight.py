@@ -57,3 +57,23 @@ def test_engine_refuses_to_start_a_plan_whose_tool_is_broken(tmp_path, monkeypat
     assert "vspipe" in str(err.value) and "launcher" in str(err.value)
     assert any(e["kind"] == "preflight-failed" for e in events)
     assert not ws.job_dir("pf").joinpath("state.json").exists()          # nothing ran, nothing recorded
+
+
+def test_a_missing_vapoursynth_plugin_stops_the_plan():
+    rows = [("vs plugin mv", "PASS", "loaded"), ("vs plugin mvu", "FAIL", "missing"),
+            ("vs plugin resize2", "WARN", "missing — `repair=qtgmc` will fail; `pp2` still works")]
+    assert preflight.vapoursynth_problems(lambda: rows) == ["VapourSynth vs plugin mvu: missing"]
+
+
+def test_the_pinned_plugin_set_includes_mvutensils_for_qtgmc():
+    import json
+    import tomllib
+    from pathlib import Path
+
+    from fstk.tools.requirements import VS_NAMESPACES
+
+    root = Path(__file__).resolve().parents[2]
+    media = tomllib.loads((root / "pyproject.toml").read_text())["project"]["optional-dependencies"]["media"]
+    lock = json.loads((root / "vendor" / "vapoursynth-plugins" / "LOCK.json").read_text())["packages"]
+    assert any(r.startswith("vapoursynth-mvutensils") for r in media) and "mvu" in VS_NAMESPACES
+    assert lock["vapoursynth-mvutensils"]["version"] == "9"

@@ -86,7 +86,18 @@ def tool_problems(profile, adapters: Iterable[str], *, skip: Iterable[str] = (),
                 continue
             if code != 0:
                 problems.append(f"{name} at {path} does not work (`{name} {' '.join(args)}` exits {code})")
+    if "vapoursynth" in set(adapters) - skipped:
+        problems += vapoursynth_problems()
     return problems
+
+
+def vapoursynth_problems(probe=None) -> list[str]:
+    """VapourSynth plugins the generated scripts load, tested by loading them (Legion 2026-11-23: a new
+    environment lacked `mvu`, and the video-trim step failed after the cadence step had run)."""
+    from fstk.tools import requirements
+
+    rows = (probe or requirements.probe_vapoursynth)()
+    return [f"VapourSynth {label}: {note}" for label, status, note in rows if status == "FAIL"]
 
 
 def describe(problems: list[str]) -> str:

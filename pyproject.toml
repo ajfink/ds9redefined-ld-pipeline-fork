@@ -25,6 +25,7 @@ media = [
     "vapoursynth-bestsource",
     "vapoursynth-tivtc",
     "vapoursynth-mvtools",
+    "vapoursynth-mvutensils",  # namespace `mvu`: vsjetpack 2.2's QTempGaussMC motion search (its `denoise` extra)
     "vapoursynth-znedi3",
     "vapoursynth-eedi3",
     "vapoursynth-resize2",

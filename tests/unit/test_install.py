@@ -322,7 +322,7 @@ def test_every_locked_package_is_declared_by_pyproject(launch):
 
 def test_vendored_macos_wheels_match_their_recorded_hashes(launch):
     lock = launch.lock()
-    assert lock["macos_min_version"] >= 15 and len(lock["packages"]) == 10
+    assert lock["macos_min_version"] >= 15 and len(lock["packages"]) == 11
     for name, info in lock["packages"].items():
         data = (launch.LOCK_FILE.parent / info["file"]).read_bytes()
         assert hashlib.sha256(data).hexdigest() == info["sha256"], name
@@ -337,7 +337,7 @@ def test_vendored_wheels_are_used_only_on_apple_silicon_and_only_when_verified(l
     monkeypatch.setattr(launch, "system", lambda: "macos")
     monkeypatch.setattr(launch.platform, "machine", lambda: "arm64")
     wheels = launch.vendored_wheels()
-    assert wheels and len(wheels) == 10 and all(w.is_file() for w in wheels)
+    assert wheels and len(wheels) == 11 and all(w.is_file() for w in wheels)
     # a tampered copy is refused (PyPI is used instead), never installed
     fake = tmp_path / "vendor" / "vapoursynth-plugins"
     (fake / "macos-arm64").mkdir(parents=True)

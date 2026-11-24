@@ -79,7 +79,8 @@ EXECUTABLES = (
 PINNED = (Requirement("orc", pinned=True), Requirement("rife_model", pinned=True),
           Requirement("x265", pinned=True))
 
-VS_NAMESPACES = ("bs", "tivtc", "mv", "znedi3", "eedi3m", "resize2")   # resize2: default bobber of QTempGaussMC
+# resize2: default bobber of QTempGaussMC; mvu (mvutensils): vsjetpack 2.2's QTempGaussMC motion search
+VS_NAMESPACES = ("bs", "tivtc", "mv", "mvu", "znedi3", "eedi3m", "resize2")
 
 
 def package_version(dist: str) -> str | None:

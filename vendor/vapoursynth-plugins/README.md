@@ -18,6 +18,7 @@ the Windows/Linux builds (TIVTC in particular decides field matching, so it must
 | vapoursynth-bestsource | 23 | frame-exact source filter (`bs`) | https://github.com/vapoursynth/bestsource | MIT |
 | vapoursynth-tivtc | 4 | TFM / TDecimate field matching + IVTC (`tivtc`) | https://github.com/dubhatervapoursynth/vapoursynth-tivtc | GPL-2.0 |
 | vapoursynth-mvtools | 29 | motion analysis (`mv`) | https://github.com/dubhatervapoursynth/vapoursynth-mvtools | GPL-2.0 |
+| vapoursynth-mvutensils | 9 | motion analysis for QTempGaussMC in vsjetpack 2.2 (`mvu`) | https://github.com/myrsloik/mvutensils | GPL-2.0 |
 | vapoursynth-znedi3 | 3.3 | NNEDI3 interpolation | https://github.com/sekrit-twc/znedi3 | GPL-2.0 |
 | vapoursynth-eedi3 | 10.0 | EEDI3 interpolation | https://github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI3 | GPL-2.0+ |
 | vapoursynth-resize2 | 0.5.1 | resizer | https://github.com/Jaded-Encoding-Thaumaturgy/vapoursynth-resize2 | LGPL-2.1 |

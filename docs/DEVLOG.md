@@ -1224,3 +1224,22 @@ names that no longer exist; required tools never found) and, if any, lists them 
   to its outputs) makes the step run again when the job runs (not for `delivery`, whose windows start their own
   reruns); a redone step asks again and is not redone twice. Reviews tab → Reject asks "Redo now / Later".
 - 626 tests pass.
+
+## CP52 — QTGMC's motion plugin (`mvu`, mvutensils) joins the pinned set (Legion bundle 2026-11-24 07:57)
+
+- CP50 worked: after the restart, Run to delivery resumed job …212519 (stack master kept), cadence and DVD alignment
+  passed. Then **video-trim** failed in 1.6 s: `vspipe --info ivtc-probe-….vpy` → vsdenoise `core.mvu.Super` →
+  "No attribute with the name mvu exists. Did you mean: 'mv'?".
+- Cause: vsjetpack 2.2.x (every release, 2.2.0–2.2.7) runs QTempGaussMC's motion search on **mvutensils**
+  (namespace `mvu`, myrsloik), which it only installs through its `denoise` extra. Our `media` extra installed plain
+  `vsjetpack` + `vapoursynth-mvtools` (namespace `mv`, still used by our own interpolation scripts), so the new
+  environment `venvs\6e00de08` built by the launcher had no `mvu`. The Mac's environment has the same list.
+- Fix: `vapoursynth-mvutensils` in the `media` extra, pinned to **9** in `vendor/vapoursynth-plugins/LOCK.json`
+  (vsjetpack 2.2.7 requires `>=6,<10`; 10 is excluded), with the unmodified PyPI macOS arm64 wheel vendored
+  (`macosx_15_0`, sha256 recorded; GPL-2.0). Windows/Linux install 9 from PyPI. The launcher's requirements hash
+  changes, so every machine updates its environment at the next launch.
+- `requirements.VS_NAMESPACES` gains `mvu` (doctor FAIL when missing), and the start-of-run tool check
+  (`preflight.vapoursynth_problems`) now loads the VapourSynth plugins whenever a plan uses VapourSynth, so a missing
+  plugin stops the plan at the start instead of at video-trim.
+- Note: `fstk-crash.log` "Windows fatal exception: code 0x8001010d" at `app.main` is COM's
+  RPC_E_CANTCALLOUT_ININPUTSYNCCALL reported by faulthandler, not a crash (the sessions continued normally).
