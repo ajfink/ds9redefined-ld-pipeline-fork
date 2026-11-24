@@ -28,3 +28,7 @@ episodes/
 *.mov
 *.mp4
 *.ac3
+
+# macOS Finder, and the queue the app wrote before the Mac data folder was moved out of the app folder
+.DS_Store
+/queue.json
