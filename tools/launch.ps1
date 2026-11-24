@@ -46,10 +46,14 @@ function Install-PrivatePython {
     $meta = Invoke-RestMethod 'https://raw.githubusercontent.com/astral-sh/python-build-standalone/latest-release/latest-release.json'
     $tag = $meta.tag
     $prefix = $meta.asset_url_prefix
-    $sums = (Invoke-WebRequest -UseBasicParsing "$prefix/SHA256SUMS").Content -split "`n"
+    $reply = Invoke-WebRequest -UseBasicParsing "$prefix/SHA256SUMS"
+    # GitHub serves release files as application/octet-stream, which Windows PowerShell 5.1 hands back as bytes,
+    # not text: split those bytes as text and no line ever matched ("no Python 3.12 build ...").
+    $text = if ($reply.Content -is [byte[]]) { [Text.Encoding]::UTF8.GetString($reply.Content) } else { [string]$reply.Content }
+    $sums = $text -split "`r?`n"
     $pattern = "cpython-3\.12\.\d+\+$tag-$arch-install_only\.tar\.gz$"
     $line = $sums | Where-Object { $_.Trim() -match $pattern } | Select-Object -First 1
-    if (-not $line) { throw "no Python 3.12 build for $arch in release $tag" }
+    if (-not $line) { throw "no Python 3.12 build for $arch in release $tag (the checksum list had $($sums.Count) lines)" }
     $hash, $file = ($line.Trim() -split '\s+')
     New-Item -ItemType Directory -Force -Path $Machine | Out-Null
     $archive = Join-Path $Machine $file

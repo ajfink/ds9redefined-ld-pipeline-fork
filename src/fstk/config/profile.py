@@ -388,7 +388,11 @@ class Profile:
             p = Path(configured)
             ok = p.is_dir() if spec["kind"] == "dir" else p.is_file()
             if not ok:
-                raise ConfigError(f"tools.{name} points at a missing {spec['kind']}: {p}")
+                elsewhere = next((w for c in spec["path_names"] if (w := shutil.which(c))), None)
+                fix = (f"; {Path(elsewhere).name} is also on PATH at {elsewhere}, so setup can switch to it"
+                       if elsewhere else "")
+                raise ConfigError(f"tools.{name} points at a missing {spec['kind']}: {p} (the file was there when setup "
+                                  f"ran; reinstall it or run `FromStunToKill setup` to find or install it again{fix})")
             return (_own_environment_vspipe(p) or p) if name == "vspipe" else p
         if allow_path_lookup:
             for candidate in spec["path_names"]:

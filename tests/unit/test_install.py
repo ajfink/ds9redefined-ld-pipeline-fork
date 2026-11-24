@@ -372,6 +372,9 @@ def test_each_platform_has_a_launcher_that_reaches_the_core():
     assert "tools\\launch.ps1" in cmd
     ps1 = (ROOT / "tools" / "launch.ps1").read_text(encoding="utf-8")
     assert "fstk_launch.py" in ps1 and "SHA256" in ps1 and "3.12" in ps1
+    # GitHub serves SHA256SUMS as application/octet-stream: Windows PowerShell 5.1 returns bytes, which must be decoded
+    # before the lines are searched (a PC without Python stopped with "no Python 3.12 build for x86_64-pc-windows-msvc").
+    assert "-is [byte[]]" in ps1 and "GetString($reply.Content)" in ps1
     for name in ("FromStunToKill.command", "FromStunToKill.sh"):
         text = (ROOT / name).read_text(encoding="utf-8")
         assert text.startswith("#!/bin/sh") and "tools/launch.sh" in text

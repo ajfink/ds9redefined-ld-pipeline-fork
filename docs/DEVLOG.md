@@ -1005,3 +1005,30 @@ and the 7-hour Orc lossless render (about 3 frames/s). Anomalies and what was do
   the first 1,000 frames of the render log "noise model does not explain the inputs … equal weights" (title/leader frames);
   the manifest stores absolute Windows paths (UNC capture folder, `Z:\` working and DVD folders), which another machine
   must translate; the old `…\fstk\venv` environment is now unused and can be deleted.
+
+## CP38 — Mac: "refresh" on a SPACE FAIL looked like it did nothing
+
+Owner report (DS9:S02E03, delivery plan blocked at stack-render): space was cleared, the refresh icon was pressed, and the
+log repeated the same SPACE FAIL (free=96.5 GiB each time), which looked like no re-measurement. The re-check does measure
+live (`shutil.disk_usage` on the work folder's volume at every press; nothing is cached), so the figure was really unchanged:
+on macOS that call reports only what the system can hand over now (Trash not emptied, purgeable space and local Time Machine
+snapshots do not count, unlike Finder's "available"). The UI gave no way to tell "measured again, same" from "not measured".
+
+- A re-check now says so: `… | measured again at HH:MM:SS: free space is unchanged (96.5 GiB, same as last time)` or
+  `… free space went from A to B GiB`; the previous figure is kept in the step state (`space_checked`) and falls back to
+  the number in the blocking message.
+- On macOS the space-blocked message adds the Trash/purgeable/snapshots explanation and the `df -h "<folder>"` command that
+  shows the number fstk uses.
+- Not changed: the reserve (80 GiB) and the strict free-space figure stay as they are (owner rule: never lowered).
+
+## CP39 — Windows PC without Python: "no Python 3.12 build for x86_64-pc-windows-msvc in release 20261123"
+
+A second Windows PC (no Python installed) accepted the private-Python download and stopped at the release lookup, although
+release 20261123 does contain `cpython-3.12.16+20261123-x86_64-pc-windows-msvc-install_only.tar.gz` (checked against the
+release's SHA256SUMS). GitHub serves SHA256SUMS as `application/octet-stream`, which Windows PowerShell 5.1 returns from
+`Invoke-WebRequest` as a byte array, so splitting it as text never produced a matching line. `tools/launch.ps1` now decodes
+the bytes (UTF-8) before searching, and the error says how many lines the list had. Not run on a PC (no PowerShell here);
+the Mac/Linux launcher uses curl and was never affected.
+
+CP38b: a missing configured tool (the Mac's `~/tools/ffmpeg/ffmpeg` disappeared between 15:59 and 16:06) now reports that the
+file was there when setup ran, to run `FromStunToKill setup`, and any copy found on PATH.

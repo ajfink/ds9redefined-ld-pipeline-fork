@@ -26,12 +26,13 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import re
 import threading
 import time
 import traceback
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -253,6 +254,9 @@ class Engine:
                 continue
             target = splan.space.target or ctx.root(splan.space.root)
             check = self.ledger.check(target, splan.space.planned_gib)
+            check = replace(check, was_free_bytes=self._last_free_bytes(st),
+                                        measured_at=time.strftime("%H:%M:%S"))
+            st["space_checked"] = {"free_bytes": check.free_bytes, "at": utc_now_iso()}
             results[sid] = check
             if check.ok:
                 with self._state_lock:
@@ -267,6 +271,18 @@ class Engine:
                 self._emit("space-rechecked", step=sid, detail=st["issues"][0], ok=False)
         self._save()
         return results
+
+    @staticmethod
+    def _last_free_bytes(st: dict[str, Any]) -> int | None:
+        """Free bytes at the previous measurement: the recheck's own record, else the figure in the blocking message."""
+        last = st.get("space_checked")
+        if isinstance(last, dict) and isinstance(last.get("free_bytes"), int):
+            return last["free_bytes"]
+        for issue in st.get("issues") or []:
+            m = re.search(r"free=([\d.]+) GiB", str(issue))
+            if m:
+                return round(float(m.group(1)) * 2**30)
+        return None
 
     def recheck_space_offline(self) -> dict[str, Any]:
         """The same recheck when no run is active here: edits the saved job state under the job lock."""

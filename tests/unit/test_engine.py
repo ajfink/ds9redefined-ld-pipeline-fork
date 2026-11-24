@@ -340,8 +340,11 @@ def test_recheck_space_unblocks_every_space_blocked_step_when_room_appears(env, 
     res = eng.recheck_space_offline()
     assert set(res) == {"a", "b"} and not any(c.ok for c in res.values())
     assert eng.state["steps"]["a"]["status"] == "blocked"
+    assert "went from 50.0 to 52.0 GiB" in eng.state["steps"]["a"]["issues"][0]        # shows it measured again
+    res = eng.recheck_space_offline()                                                  # nothing freed meanwhile
+    assert "free space is unchanged (52.0 GiB, same as last time)" in res["a"].describe()
     # room appears: both space-blocked steps clear; the gate-blocked one is untouched
-    free["gib"] = 80
+    free["gib"] = 120        # room for both at once (45 + 45 + reserve 10), whatever order the engine launches them in
     events.clear()
     eng2 = Engine(prof, p, actor="t", ledger=ledger, events=events.append)
     res = eng2.recheck_space_offline()

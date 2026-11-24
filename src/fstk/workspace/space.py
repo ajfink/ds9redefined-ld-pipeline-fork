@@ -59,16 +59,31 @@ class SpaceCheck:
     others_bytes: int
     planned_bytes: int
     reserve_bytes: int
+    #: Set by a re-check: free bytes at the previous measurement, and when this one was taken (local HH:MM:SS).
+    was_free_bytes: int | None = None
+    measured_at: str = ""
 
     @property
     def projected_bytes(self) -> int:
         return self.free_bytes - self.others_bytes - self.planned_bytes
 
+    def change_note(self) -> str:
+        """What a re-check found compared with the last measurement ("" for a first measurement)."""
+        if self.was_free_bytes is None:
+            return ""
+        delta = self.free_bytes - self.was_free_bytes
+        when = f"measured again at {self.measured_at}: " if self.measured_at else "measured again: "
+        if abs(delta) < 16 * 2**20:
+            return f"{when}free space is unchanged ({self.free_bytes / GIB:.1f} GiB, same as last time)"
+        return f"{when}free space went from {self.was_free_bytes / GIB:.1f} to {self.free_bytes / GIB:.1f} GiB"
+
     def describe(self) -> str:
-        return (f"SPACE {'PASS' if self.ok else 'FAIL'} | target={self.target} | "
+        text = (f"SPACE {'PASS' if self.ok else 'FAIL'} | target={self.target} | "
                 f"free={self.free_bytes / GIB:.1f} GiB | reserved by others={self.others_bytes / GIB:.1f} GiB | "
                 f"planned={self.planned_bytes / GIB:.1f} GiB | projected={self.projected_bytes / GIB:.1f} GiB | "
                 f"reserve={self.reserve_bytes / GIB:.1f} GiB")
+        note = self.change_note()
+        return f"{text} | {note}" if note else text
 
 
 def _planned_bytes(planned_gib: float) -> int:

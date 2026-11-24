@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import platform
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -189,9 +190,14 @@ def hint_for_space(reserve_gib: float, target: str | os.PathLike, volumes: list[
     """One sentence to add to a 'blocked by disk space' message: where there is room, and how to move there.
     Never raises: it only decorates a message that is already an error."""
     try:
-        return _hint_for_space(reserve_gib, target, volumes)
+        text = _hint_for_space(reserve_gib, target, volumes)
     except Exception:
-        return ""
+        text = ""
+    if sys.platform == "darwin":
+        text += (f" On a Mac only space the system can hand over right now counts: files still in the Trash, "
+                 f"purgeable space and local Time Machine snapshots do not. In Terminal, `df -h \"{target}\"` shows "
+                 f"the number fstk measured.")
+    return text.strip()
 
 
 def _hint_for_space(reserve, target, volumes) -> str:
