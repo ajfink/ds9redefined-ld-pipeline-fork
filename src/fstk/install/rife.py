@@ -1,8 +1,9 @@
 """Download and install the RIFE engine (rife-ncnn-vulkan) when the machine has none.
 
 The engine comes from nihui's release (one zip per system, models included). It is unpacked into fstk's own
-per-machine tools folder, never into the app folder. The model defaults to the most recent versioned folder found
-(``providers.newest_rife_model``: 4.6 in the public zip today; a newer one copied next to the engine wins).
+per-machine tools folder, never into the app folder. The standard model (``providers.RIFE_MODEL``, rife-v4.26) is not in
+the public zip (which stops at 4.6), so it is taken from next to the engine or the shared folder, and another
+version is used only after asking.
 """
 from __future__ import annotations
 

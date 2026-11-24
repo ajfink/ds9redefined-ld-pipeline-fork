@@ -3,12 +3,11 @@
 Tools whose output does not depend on the exact build are installed with the package manager (FFmpeg with
 libx265, 7-Zip). Decode-Orc is *pinned* by the pipeline (its version changes the pixels and the audio): it is
 downloaded from its GitHub release by ``fstk.install.orc`` (the pinned version, after asking), never through a
-package manager. RIFE's engine is downloaded by ``fstk.install.rife``; its model defaults to the most recent version.
+package manager. RIFE's engine is downloaded by ``fstk.install.rife``; its model is the standard ``RIFE_MODEL`` on every platform.
 """
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import stat
 from collections.abc import Callable, Mapping
@@ -21,6 +20,8 @@ ORC_VERSION = "2.11.1"
 #: Flatpak application ids, current first (upstream renamed it from the simoninns one)
 ORC_FLATPAKS = ("io.github.decode_orc.decode-orc", "io.github.simoninns.decode-orc")
 ORC_FLATPAK = ORC_FLATPAKS[0]
+#: the standard model on every platform (owner decision): it decides what a repaired PAD frame looks like
+RIFE_MODEL = "rife-v4.26"
 RIFE_RELEASES = "https://github.com/nihui/rife-ncnn-vulkan/releases"
 FFMPEG_WINDOWS = "https://www.gyan.dev/ffmpeg/builds/"
 
@@ -57,18 +58,6 @@ MANAGER_LOCATIONS: dict[str, tuple[str, ...]] = {
     "pacman": ("/usr/bin/pacman",),
     "winget": (),
 }
-
-
-def rife_model_version(name: str) -> tuple[int, ...] | None:
-    """``rife-v4.6`` -> (4, 6); ``rife-v4.26`` -> (4, 26); ``None`` for folders without a version (rife-HD ...)."""
-    m = re.fullmatch(r"rife-v(\d+(?:\.\d+)*)", name)
-    return tuple(int(x) for x in m.group(1).split(".")) if m else None
-
-
-def newest_rife_model(names: list[str]) -> str | None:
-    """The most recent versioned RIFE model among ``names`` (numerically: 4.26 is newer than 4.6)."""
-    versioned = [(rife_model_version(n), n) for n in names if rife_model_version(n)]
-    return max(versioned)[1] if versioned else None
 
 
 def find_manager(system: str, env: Mapping[str, str] | None = None,
@@ -119,13 +108,13 @@ def guidance(tool: str, system: str) -> str:
                 "so install the same one on every machine.")
     if tool in ("rife_engine", "rife_model_dir"):
         extra = {"macos": " The macOS build runs on Metal through MoltenVK; unpack it to ~/tools/rife-ncnn-vulkan. "
-                          "A newer model folder (rife-v4.26 on the owner's other machines) copied next to it, or "
-                          "into the shared folder's `tools` directory, is preferred automatically.",
+                          "Put the rife-v4.26 folder next to it, or into the shared folder's `tools` directory, "
+                          "which setup also searches.",
                  "linux": " Unpack it to ~/tools/rife-ncnn-vulkan; it needs a working Vulkan driver."}
         return (f"RIFE (rife-ncnn-vulkan) is only needed to repair single-frame PAD blanks. Download it from "
                 f"{RIFE_RELEASES} and unpack it anywhere; keep the model folder next to the program. "
-                "Setup defaults to the most recent model it finds (rife-v4.6 in the public download); "
-                "use the same model on every machine, because it changes the repaired frames."
+                f"The standard model on every machine is {RIFE_MODEL} (it changes the repaired frames); the public "
+                "download only has older ones, so copy that folder next to the engine or into the shared `tools` folder."
                 f"{extra.get(system, '')}")
     if tool in ("ffmpeg", "ffprobe"):
         where = {"windows": f"Install with `winget install Gyan.FFmpeg`, or download a full build from {FFMPEG_WINDOWS}.",

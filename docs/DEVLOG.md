@@ -1078,3 +1078,10 @@ names that no longer exist; required tools never found) and, if any, lists them 
 - Owner: set the most recent RIFE version as the default (4.6 today). `providers.newest_rife_model` compares versions
   numerically (4.26 > 4.6; unversioned folders like rife-HD never win); `_choose` takes it without asking and says so
   when several exist. The `rife-v4.26` pin and the "asked even under --yes" rule are gone.
+
+## CP44 — rife-v4.26 is the standard RIFE model on every platform (owner decision; supersedes CP43)
+
+- Owner: "set 4.26 as the standard across all variants for now". `providers.RIFE_MODEL = "rife-v4.26"` is preferred
+  automatically wherever it is found (next to the engine, shared `tools`); the CP43 "newest version wins" rule is
+  removed. If only another model exists, setup says the standard is missing and asks in words (default no, even
+  under `--yes`). The public engine zip has no 4.26 (stops at 4.6), so the folder must be copied by the owner.

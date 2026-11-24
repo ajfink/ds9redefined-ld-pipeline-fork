@@ -315,14 +315,19 @@ def _choose(console: Console, name: str, found: list[Found], run_text, sibling_o
         same = [f for f in found if sibling_of and Path(f.path).parent == Path(sibling_of).parent]
         return (same or found)[0].path
     if name == "rife_model_dir":
-        # the default is the most recent versioned model (4.26 beats 4.6); a folder with no version never wins
-        best = providers.newest_rife_model([Path(f.path).name for f in found])
-        if best:
-            pick = next(f for f in found if Path(f.path).name == best)
-            if len(found) > 1:
-                console.say(f"  RIFE model: using the most recent, {best}.")
-            return pick.path
-        return found[0].path
+        # one standard model on every platform; another version is never taken without being asked
+        pinned = [f for f in found if Path(f.path).name == providers.RIFE_MODEL]
+        if pinned:
+            return pinned[0].path
+        others = ", ".join(sorted(Path(f.path).name for f in found))
+        console.say(f"  The standard RIFE model ({providers.RIFE_MODEL}) was not found (only {others}); a different "
+                    "model repairs frames differently.")
+        console.say(f"  Copy the {providers.RIFE_MODEL} folder next to the RIFE engine or into the shared folder's "
+                    "`tools` directory, then run setup again.")
+        # asked in words even under --yes
+        if len(found) == 1 and console.ask(f"  Use {Path(found[0].path).name} for now? [y/N]").lower().startswith("y"):
+            return found[0].path
+        return None
     return found[0].path
 
 
