@@ -190,7 +190,7 @@ class Services:
     def resumable_job(self, episode: str | EpisodeId, plan: dict[str, Any]) -> Path | None:
         """The saved plan of an unfinished job with exactly these steps, to resume instead of starting over.
 
-        Legion 2026-11-23: after a failed delivery, Run to delivery made a new job, which re-checked the finished
+        PC-A 2026-11-23: after a failed delivery, Run to delivery made a new job, which re-checked the finished
         stack master (a 48-minute decode-count over the network) and redid every finished step. Resuming keeps them:
         the engine re-verifies their files by fingerprint. Of several candidates the one furthest along wins (then
         the newest); jobs that are finished, or running in another window, are never picked."""
@@ -252,6 +252,37 @@ class Services:
         from fstk.workspace.dvd import record_dvd
 
         return record_dvd(self.workspace(episode).store, actor, file)
+
+    # ---------------------------------------------------------------- DVD opening packs
+    def opening_pack_target(self, episode: str | EpisodeId) -> Path:
+        """Where the Save icon on dvd-probe writes this episode's opening pack (the app's packaged packs)."""
+        from fstk.media import opening_pack as packs
+
+        ep = episode if isinstance(episode, EpisodeId) else EpisodeId.parse(episode)
+        return packs.pack_path(ep.series, ep.code)
+
+    def save_opening_pack(self, episode: str | EpisodeId, *, force: bool = False, cancel=None) -> dict[str, Any]:
+        """Make this episode's DVD opening pack from its DVD (ADR 0006): reuses dvd-alignment's DVD descriptors when
+        they were made from this same file, otherwise decodes the DVD's first two minutes."""
+        import numpy as np
+
+        from fstk.media import opening_pack as packs
+        from fstk.stages.alignment import _reusable
+
+        ctx = self._ctx(episode)
+        m = ctx.manifest
+        if not m.artifact("dvd"):
+            raise FstkError("this episode has no DVD file set")
+        dvd = ctx.artifact_path("dvd", m)
+        if not dvd.is_file():
+            raise FstkError(f"the DVD file is not reachable: {dvd}")
+        reuse = _reusable(ctx, "dvd_descriptors", dvd)
+        desc = np.load(reuse, mmap_mode="r") if reuse else None
+        ep = ctx.episode
+        res = packs.export(ctx.tool("ffmpeg"), dvd, series=ep.series, code=ep.code, title=self.title(ep) or None,
+                           descriptors=desc, out=self.opening_pack_target(ep), force=force, cancel=cancel)
+        res["dvd"] = dvd
+        return res
 
     # ---------------------------------------------------------------- browse
     def episodes(self) -> list[EpisodeId]:

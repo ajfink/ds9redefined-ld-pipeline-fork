@@ -1,6 +1,6 @@
 """Check, before a plan starts, that every tool its steps will use is there and runs.
 
-Legion 2026-11-23: a delivery plan started with a vspipe that already exited 1 (``vspipe --version``), rendered the
+PC-A 2026-11-23: a delivery plan started with a vspipe that already exited 1 (``vspipe --version``), rendered the
 stack master for 7 hours, and then failed at the cadence step because of that vspipe. A step only resolves its tools
 when it starts, so the engine now asks first: which tools do the plan's stages use, does each resolve, and does each
 executable answer its version flag with exit 0. Any problem stops the plan before the first step, with what to do.
@@ -91,7 +91,7 @@ def tool_problems(profile, adapters: Iterable[str], *, skip: Iterable[str] = (),
 
 
 def vapoursynth_problems(probe=None) -> list[str]:
-    """VapourSynth plugins the generated scripts load, tested by loading them (Legion 2026-11-23: a new
+    """VapourSynth plugins the generated scripts load, tested by loading them (PC-A 2026-11-23: a new
     environment lacked `mvu`, and the video-trim step failed after the cadence step had run)."""
     from fstk.tools import requirements
 

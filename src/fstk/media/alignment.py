@@ -52,7 +52,7 @@ MODEL = {"break_frames": 2.5, "break_window_s": 20.0, "knot_s": 30.0, "smoothnes
          "consistency_radius": 8, "consistency_tolerance": 0.02,
          # An "act" at the very start or end whose samples scatter this far (RMS, frames) from its own line is not
          # DVD picture: it is LD-only material (warning cards, "Feature Presentation", logos) whose loose matches
-         # landed on random DVD frames. S02E02 (Flex 2026-11-24): 4.0–40.0 s, RMS 52 frames, offsets +566 → +54,
+         # landed on random DVD frames. S02E02 (PC-B 2026-11-24): 4.0–40.0 s, RMS 52 frames, offsets +566 → +54,
          # against real acts at RMS 0.3–1.0. Only short edge acts qualify; anything longer goes to review.
          "edge_act_max_rms": 5.0, "edge_act_max_s": 180.0}
 

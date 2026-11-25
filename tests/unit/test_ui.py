@@ -461,7 +461,7 @@ def test_reviews_tab_shows_the_stage_pictures_not_a_file_list(services, tmp_path
 
 
 def test_run_again_resumes_the_unfinished_job_furthest_along(services, tmp_path, monkeypatch):
-    """Legion 2026-11-23: Run to delivery after a failure must not start a new job that redoes finished steps."""
+    """PC-A 2026-11-23: Run to delivery after a failure must not start a new job that redoes finished steps."""
     from fstk.core.fsio import atomic_write_json
 
     ws = services.workspace("S01E20")
@@ -490,7 +490,7 @@ def test_run_again_resumes_the_unfinished_job_furthest_along(services, tmp_path,
 
 @pytest.mark.gui
 def test_an_update_while_the_app_is_open_is_noticed(services, qtbot, monkeypatch):
-    """Legion 2026-11-23: files synced under a running app; Folders… then crashed silently on mixed code."""
+    """PC-A 2026-11-23: files synced under a running app; Folders… then crashed silently on mixed code."""
     from fstk.ui import app as app_mod
     from fstk.ui.app import MainWindow
 

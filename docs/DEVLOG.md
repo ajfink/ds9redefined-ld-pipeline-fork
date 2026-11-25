@@ -1,6 +1,6 @@
 # Development log
 
-Newest session first. Format and rules: see `AGENTS.md` → "Logging".
+Newest session first. Format and rules: see `AGENTS.md` → "Logging". PC-A and PC-B are the owner's two Windows PCs.
 
 ---
 
@@ -46,7 +46,7 @@ Owner's order: alignment → DVD audio rate/origin → retime → PAD; only huma
 | P15 | H.264 review-proxy fallback in the A/V check window | **done** (CP15) |
 | P9b | PAD audit/repair port (v38 `audit_pads` / cut-PAD stills) | **done** (CP14; not yet run on Windows VapourSynth/RIFE) |
 
-Validation data on the owner's Legion: `Z:\ld-pipeline-device\{probe,prores,audio}` (S01E20 descriptors,
+Validation data on the owner's PC-A: `Z:\ld-pipeline-device\{probe,prores,audio}` (S01E20 descriptors,
 stack master, EFM WAVs), DVDs in `Z:\Video\DS9S1D5`, captures on `X:\`. Windows-only tools
 (Orc, VapourSynth) cannot run in the Linux device VM: P6 and anything after encode can only be
 validated by the owner running the app.
@@ -205,7 +205,7 @@ validated by the owner running the app.
   ≈ 72 KB/frame, both with margin). It is available as `fstk plan delivery <ep>` and the app's
   **Run to delivery** button. The no-DVD route still needs trims recorded (P6b).
 - **S3-CP10 — v38 episodes import and can continue (P11).** All 13 real device manifests
-  (S01E08–S02E02 on Legion, Flex, Mac) import and round-trip. Fixed: two registry limits real data
+  (S01E08–S02E02 on two PCs and a Mac) import and round-trip. Fixed: two registry limits real data
   breaks (S01E18 `retime.max_gap_vs_black_s` −0.72; S02E02 `cut_pad_images_choice`
   "not-available") and a BOM in the CLI import.
 
@@ -419,7 +419,7 @@ and the two review windows exist. Nothing committed; v38 untouched.
     parse fully and are **rejected** by fstk's log binding when presented as S01E11/S01E13 evidence.
     **Finding 0003 withdrawn**: real reports print both labels with the same value. Parser now prefers
     Part A's `Sections missing` (leading integer). A fresh Orc run could not be done from here: the
-    capture share (X:/W:/`\\LENOVOFLEX\e hdd`) and `Z:\ld-pipeline-device` could not be granted to the
+    capture share (X:/W:/`\\FILESERVER\media`) and `Z:\ld-pipeline-device` could not be granted to the
     session, and the device shell is a Linux VM (Windows `orc-cli.exe` cannot run there).
   - **`dvd-free-audio` stage** (`stages/dvdfree.py`, v38 `audio_timing_diagnostic --promote-dvd-free`):
     requires the recorded no-DVD choice and LD-only tracks; duration rate, ±1-frame PAD endpoint gate
@@ -441,7 +441,7 @@ and the two review windows exist. Nothing committed; v38 untouched.
     an existing device folder without an fstk marker is never written). `workspace/device.py`
     (identity beside the profile, ownership marker), `workspace/portable.py` (path tokens
     `{data_root}` `{media_root}` `{root:x}` `{source:x}` `{volume:x}`; new profile field `volumes`
-    for disks several machines mount, e.g. the Flex's `e hdd`), `workspace/shared.py` (content-addressed
+    for disks several machines mount, e.g. a second PC's `media` disk), `workspace/shared.py` (content-addressed
     snapshots + `status.json`, presence, handoff with media inventory, adopt with hash-verified
     snapshot + fresh journal + source journal kept + media check, fork, reclaim).
   - Engine: refuses to run a handed-off workspace; publishes after every run (best effort, event
@@ -876,7 +876,7 @@ dependencies are checked, installation prompts run, work can begin.
   download path (checksum + unpack). **Not verified (no access to the machines):** the PowerShell launcher, any macOS run,
   installing the vendored wheels on a Mac, Flatpak wrapper, `winget`/`brew` installs, exec bit on SMB shares.
 
-**Repository moved (CP32).** Owner decision: the main git repository is now `W:\FromStunToKill` (= lenovoflex
+**Repository moved (CP32).** Owner decision: the main git repository is now `W:\FromStunToKill` (= PC-B's
 `C:\Swap Folder\FromStunToKill`, shared with the Mac and the folder the launchers run from); `Z:\FromStunToKill` is the
 backup copy. Flow: commit in W:, then `git push backup main` (Z: has `receive.denyCurrentBranch=updateInstead`, so its
 working tree follows). GitHub (`fromstuntokill-app`) is pushed from W: when the owner asks. History is preserved (W: was
@@ -901,7 +901,7 @@ macOS arm64 wheels load on macOS 27. Causes and fixes for the four warnings:
   (`/opt/homebrew/bin/brew`, …) and returns the program, and `install_command(tool, manager, program)` runs the
   manager that was actually found (keeping `sudo` first). A declined or failed install now prints the guidance.
 - `rife_engine` / `rife_model_dir` stay manual **by decision** (the model changes the repaired frames, and the Mac
-  must use the same one as the Legion: `rife-v4.26`). To make that practical, discovery now also searches
+  must use the same one as PC-A: `rife-v4.26`). To make that practical, discovery now also searches
   `<shared_root>/tools` (and `tools/bin`), by file name so a share that dropped the executable bit still works, and
   looks for `rife-v*` model folders there; the macOS guidance names MoltenVK, `~/tools/rife-ncnn-vulkan`, the shared
   folder and the exact model.
@@ -919,7 +919,7 @@ What the bundle showed:
   `tool-versions.json` recorded `vspipe: null`. Reproduced on Linux: the pip VapourSynth needs `vapoursynth config`
   once per environment ("Python executable and library path couldn't be determined"); it records the environment's
   `libvsscript` against its Python library in the user's `~/.config/vapoursynth/vapoursynth.toml` (keyed by path, so
-  several environments coexist). The Legion only worked because its older environment had been configured by hand.
+  several environments coexist). PC-A only worked because its older environment had been configured by hand.
   Fixes: the launcher runs `vapoursynth config` after building an environment and the stamp carries `vsconfig: 1`, so
   every existing environment is re-run once; `fstk setup` re-tests `vspipe --version` and runs the config when it
   fails (`--check` only reports it); **the doctor treated "printed a line and exited 1" as PASS** and now fails vspipe on
@@ -983,7 +983,7 @@ as `sources.dvd_root` (same as Settings → Folders) so later episodes start the
 
 ## CP37 — Windows run (debug bundle `fstk-debug-20261123-134506`): E20 intake done, delivery render under way
 
-What the bundle shows: the E20 intake finished on the Legion (efm-decode 5.5 h, stack-reference 18.5 h = pass 1 11.3 h + pass 2
+What the bundle shows: the E20 intake finished on PC-A (efm-decode 5.5 h, stack-reference 18.5 h = pass 1 11.3 h + pass 2
 7.2 h; reference P6, stack sigma 1.674 vs 1.753 equal-weight, 83,335 frames with 3+ sources; EFM auto-pick M1); the DVD was
 recorded (`Z:\Video\DS9S1D5\…mkv`, probe passed, 65,944 frames, monotonic); the delivery plan started with dvd-probe (passed)
 and the 7-hour Orc lossless render (about 3 frames/s). Anomalies and what was done:
@@ -1182,9 +1182,9 @@ names that no longer exist; required tools never found) and, if any, lists them 
   timeline + blink, delivery marking/auto-advance/close, EFM strips + listen, queued plans.
 - **Unverified on real footage:** cadence close-up choice and the drop-out detector on real EFM decodes.
 
-## CP50 — Legion bundle 2026-11-23 21:29: no more failing 8 hours in; resume instead of redo (and the Mac bundle)
+## CP50 — PC-A bundle 2026-11-23 21:29: no more failing 8 hours in; resume instead of redo (and the Mac bundle)
 
-- **What happened (Legion).** A delivery run started at 13:25 with `vspipe --version` already exiting 1 (the profile
+- **What happened (PC-A).** A delivery run started at 13:25 with `vspipe --version` already exiting 1 (the profile
   named the old `…\fstk\venv` environment). Orc rendered the stack master for 7 h 13 min, the master was
   decode-counted for 48 min over Z:, and the cadence step then failed ("tools.vspipe points at a missing exe").
   After `setup` repaired the profile, Run to delivery made a *new* job, which started the 48-minute recount again.
@@ -1225,7 +1225,7 @@ names that no longer exist; required tools never found) and, if any, lists them 
   reruns); a redone step asks again and is not redone twice. Reviews tab → Reject asks "Redo now / Later".
 - 626 tests pass.
 
-## CP52 — QTGMC's motion plugin (`mvu`, mvutensils) joins the pinned set (Legion bundle 2026-11-24 07:57)
+## CP52 — QTGMC's motion plugin (`mvu`, mvutensils) joins the pinned set (PC-A bundle 2026-11-24 07:57)
 
 - CP50 worked: after the restart, Run to delivery resumed job …212519 (stack master kept), cadence and DVD alignment
   passed. Then **video-trim** failed in 1.6 s: `vspipe --info ivtc-probe-….vpy` → vsdenoise `core.mvu.Super` →
@@ -1280,9 +1280,9 @@ names that no longer exist; required tools never found) and, if any, lists them 
   master without them (needs free space equal to the master) and re-runs everything downstream. Delete the
   `…-with-timecode-pads.mkv` originals once satisfied. v38-delivered episodes keep their invented PAD frames until
   re-run.
-- Next: re-run S02E03 from stack-render on the Legion and confirm the alignment is flat across the old seams.
+- Next: re-run S02E03 from stack-render on PC-A and confirm the alignment is flat across the old seams.
 
-## CP54 — a drive read error is not "not all-zero" (Legion bundle 2026-11-24 13:22)
+## CP54 — a drive read error is not "not all-zero" (PC-A bundle 2026-11-24 13:22)
 
 - First real run of the CP53 migration on S01E20: the packet scan of `Z:\FSTK Working Folder\…\S01E20-stack-master.mkv`
   read the whole file (24.8 s) and 77 PAD frames checked all-zero, then the seek to frame 70,200 hit
@@ -1290,17 +1290,17 @@ names that no longer exist; required tools never found) and, if any, lists them 
   0xC000013A, `frame_at` returned None and the step said the frame was "not all-zero". The master was not touched.
 - `FFmpeg.frame_at` now retries a failed read (3 tries, 2 s/4 s apart, cancellable) and then raises `ToolError`
   with ffmpeg's message; `stack-render` reports "could not read frame N … the drive gave a read error. Nothing was
-  changed; run again". Only a frame that really decoded can fail the all-zero check. Test simulates the Legion's
+  changed; run again". Only a frame that really decoded can fail the all-zero check. Test simulates PC-A's
   failure (retry succeeds; persistent failure reported as a read error, master untouched).
 
-## CP55 — CP53 bug: a master could pass with its PADs still in (Legion bundle 2026-11-24 13:49)
+## CP55 — CP53 bug: a master could pass with its PADs still in (PC-A bundle 2026-11-24 13:49)
 
 - After the CP54 read error, the next run (13:27) passed stack-render in 27 s without touching the master:
   CP53's first attempt had already rewritten `stack-full-ds9-s01e20.orcprj` without its PADs *before* checking the
   master, so the retry found no PADs, compared the master's 83,335 packets with `stack.frames` = 83,335 (the padded
   count) and passed. dvd-alignment and cadence then ran on the padded master; video-trim stopped on zsmooth
   (below). Nothing was lost: the master and its render project `…-lossless.orcprj` (27 KB, with 83 PADs, whose
-  stripped text equals the lossless version of today's project byte for byte — checked on the Legion's files) are
+  stripped text equals the lossless version of today's project byte for byte — checked on PC-A's files) are
   intact.
 - Fix: the render project is the record of what the master holds. `stack-render` reads the PAD positions from it
   (refusing one that is not the current project apart from its PADs), accepts the master with the pad-free count
@@ -1308,24 +1308,24 @@ names that no longer exist; required tools never found) and, if any, lists them 
   `…-lossless-with-timecode-pads.orcprj`; the stack project's original is kept as `…-with-timecode-pads.orcprj`).
 - New `Stage.still_current(step_state)` hook, called by the engine's reconcile for every passed step: StackRender
   answers "the stack master still has Orc's time-code PAD frames" while its render project has them, so the
-  Legion's passed step and everything after it (alignment, cadence) run again by themselves.
-- Tests: the Legion state rebuilt from the S01E20 fixture (stale → migrated → current); a render project for a
+  PC-A's passed step and everything after it (alignment, cadence) run again by themselves.
+- Tests: PC-A state rebuilt from the S01E20 fixture (stale → migrated → current); a render project for a
   different project is refused. Full suite 608 passed.
 - Same bundle, second fault: video-trim stopped at `vspipe --info` because vsrgtools' median blur inside
   QTempGaussMC calls `core.zsmooth.VerticalCleaner` (vsjetpack 2.2.7 lists `vapoursynth-zsmooth>=0.18` in its
-  `deinterlace`/`denoise` extras, which we don't install). Reproduced in a Linux venv with the Legion's exact set
+  `deinterlace`/`denoise` extras, which we don't install). Reproduced in a Linux venv with PC-A's exact set
   (VapourSynth R82, mvutensils 9, vsjetpack 2.2.7): same AttributeError. `vapoursynth-zsmooth` joins the `media`
   extra, pinned **0.20.0** (MIT; unmodified PyPI macOS arm64 wheel vendored, sha256 in LOCK), and `zsmooth` joins
   `VS_NAMESPACES`. With it the generated encode script with `repair=qtgmc` renders 96/96 frames end to end.
 - So the next plugin vsjetpack reaches for cannot surface hours into a run again: the start-of-run check now runs
   the scripts' own QTGMC lines (`cadence_map.QTGMC_LINES`, shared with the generated script) on a small test clip
   and renders frames (`requirements.probe_qtgmc`, ~0.5 s); any failure is a FAIL that stops the plan at the start
-  with the filter's own error. Verified: without zsmooth it reports exactly the Legion's error.
+  with the filter's own error. Verified: without zsmooth it reports exactly PC-A's error.
 - Full suite 609 passed, 1 skipped (the real-QTGMC probe test needs VapourSynth; run by hand in the venv: PASS); the requirements hash changes, so each machine's launcher updates its environment.
 
-## CP56 — a finished PAD migration is recognised; a step's own input rewrite is not "a change" (Flex bundle 2026-11-24 14:30)
+## CP56 — a finished PAD migration is recognised; a step's own input rewrite is not "a change" (PC-B bundle 2026-11-24 14:30)
 
-- S02E02 on the Flex: at 13:46 (CP53/54 code) stack-render removed the 83 PADs (83,229 → 83,146 frames, 6.5 min
+- S02E02 on PC-B: at 13:46 (CP53/54 code) stack-render removed the 83 PADs (83,229 → 83,146 frames, 6.5 min
   stream copy, original kept). Two faults followed:
   1. The step had rewritten its own input (the stack project, stripped) after the engine fingerprinted it, so the
      next run (14:20) called it stale ("input changed") and ran it again — and marked cadence (32 min) stale too.
@@ -1337,12 +1337,12 @@ names that no longer exist; required tools never found) and, if any, lists them 
   position a blank packet → migrate; none blank and `…-with-timecode-pads.mkv` kept → already migrated, render
   project brought up to date; anything else → refused with counts. Expected frames are no longer derived from the
   actual count except in those two proven cases.
-- Tests: the Flex state (already migrated → passes, no second copy), a partly blank master refused, and a step
+- Tests: PC-B state (already migrated → passes, no second copy), a partly blank master refused, and a step
   stripping its own project stays current on the next run (fails without the engine change). Full suite 612 passed.
 
-## CP57 — the frame reader gave vspipe an empty environment; stretch previews retry once (Legion bundle 2026-11-24 15:06)
+## CP57 — the frame reader gave vspipe an empty environment; stretch previews retry once (PC-A bundle 2026-11-24 15:06)
 
-- S01E20 on the Legion now runs through stack, alignment, cadence, video-trim, frame fixes, LD audio, retime and audio
+- S01E20 on PC-A now runs through stack, alignment, cadence, video-trim, frame fixes, LD audio, retime and audio
   quality. Two picture steps failed:
   - **video-quality**: "unsupported or missing y4m header … ''" 0.7 s after start. `VapourSynth.iter_planes` (the
     only direct `Popen` of vspipe) passed `env=self.env()`, which is only *our additions* — on Windows/Linux an empty
@@ -1362,7 +1362,7 @@ names that no longer exist; required tools never found) and, if any, lists them 
 
 - Cause: the launcher starts the app windowless (`pythonw`, DETACHED_PROCESS), so Windows gives every console tool
   the app starts (ffprobe, ffmpeg, vspipe, orc, 7-Zip, taskkill) a console window of its own. A click on one of
-  them stops that tool with 0xC000013A (seen on a vspipe and an ffmpeg in today's Legion bundles).
+  them stops that tool with 0xC000013A (seen on a vspipe and an ffmpeg in today's PC-A bundles).
 - Fix: `process.CREATE_NO_WINDOW` in `_popen_kwargs` (all `run`/`run_pipeline` tools) and `process.hidden()` on every
   direct `subprocess` call (frame reader, retime render, resampler, 7-Zip, DVD subtitle extract, encoder list,
   sleep, wizard probes, smoke, taskkill). Pipes, priorities, pause (psutil suspend) and stop (terminate →
@@ -1414,26 +1414,26 @@ names that no longer exist; required tools never found) and, if any, lists them 
   review's "Video-origin stretches" tab. Same words in that tab's introduction and choice tooltip; cadence-evidence's
   tip says it finds these stretches; stage title says "effects finished on video". Stage reference regenerated.
 
-## CP62 — 16:57 bundles (Legion S01E20, Flex S02E02): resume confirmed; two fixes; one open item
+## CP62 — 16:57 bundles (PC-A S01E20, PC-B S02E02): resume confirmed; two fixes; one open item
 
-- Resume worked on both: the Legion's job ran only stretch-preview (passed, 22 min, no retry needed) and
-  video-quality; the Flex kept stack-render (36 s check, migration recognised) and re-ran cadence (queued stale
+- Resume worked on both: PC-A's job ran only stretch-preview (passed, 22 min, no retry needed) and
+  video-quality; PC-B kept stack-render (36 s check, migration recognised) and re-ran cadence (queued stale
   since 14:20, before CP56/CP60), then DVD alignment, which restarted after the app was closed mid-step.
-- Fix 1: a 35 GB input was fully hashed on every resume when its stage named no scope (cadence's master: Flex
-  1 min 49 s of silence after Run, Legion ~50 s). Inputs ≥ 1 GiB now default to size + head/tail, like large
+- Fix 1: a 35 GB input was fully hashed on every resume when its stage named no scope (cadence's master: PC-B
+  1 min 49 s of silence after Run, PC-A ~50 s). Inputs ≥ 1 GiB now default to size + head/tail, like large
   outputs (`input_scope_for`). Existing records keep their scope until the step next runs.
 - Fix 2: the resume check now tells the Progress tab ("checking the files of finished steps …") instead of silence.
-- Open: video-quality on the Legion scans the S01E20 chain at ~4–5 frames/s (10,560 of 65,392 frames in 50 min;
+- Open: video-quality on PC-A scans the S01E20 chain at ~4–5 frames/s (10,560 of 65,392 frames in 50 min;
   ~3–4 h total), and the final encode runs the same chain again. Measured here on 2 cores with the same density of
   isolated QTGMC repair ranges (1 per ~55 frames; S01E20 has 1,497 ranges, 3,075 frames): the chain runs ~3× slower
-  than without them (16 vs 49 fps), i.e. each isolated repair pays QTGMC's start-up. The Legion is slower still than
+  than without them (16 vs 49 fps), i.e. each isolated repair pays QTGMC's start-up. PC-A is slower still than
   this container, so something machine-side adds to it (not yet measured). Options for the owner: render the
   finished chain once to a lossless intermediate both steps read, and/or batch neighbouring repair ranges.
 - Tests: large-input scope, verifying note. Full suite 638 passed.
 
-## CP63 — the programme start is found positively: the DVD's opening pictures on the LD (Flex bundle 2026-11-24 17:19)
+## CP63 — the programme start is found positively: the DVD's opening pictures on the LD (PC-B bundle 2026-11-24 17:19)
 
-- S02E02 (Flex): the alignment review showed spot checks on the LD's warning cards and "Feature Presentation".
+- S02E02 (PC-B): the alignment review showed spot checks on the LD's warning cards and "Feature Presentation".
   Report: an "act 1" at 4.0–40.0 s whose matches hopped across the DVD (offsets +566 → +54, RMS **52 frames**; real
   acts 0.3–1.0) — the cards each matched some DVD picture loosely. `origin_master_frame` (the head trim's anchor)
   was 4.0 s instead of the real 49.5 s; approving would have started the episode on the warning cards. The owner
@@ -1444,7 +1444,7 @@ names that no longer exist; required tools never found) and, if any, lists them 
   Found: that LD frame is the frame-exact programme origin and every LD sample before it is set aside as LD-only
   (`ld_only_edges` in the report). Not found, or the first act disagrees with it by > 2 frames: NEEDS-REVIEW with the
   reason. Second safety net: a short edge act whose samples scatter > 5 frames RMS from its own line is LD-only.
-- Real data, S01E20 (Legion descriptors): opening found at LD 1514, NCC 0.974 vs runner-up 0.52, 0.5 s; full
+- Real data, S01E20 (PC-A descriptors): opening found at LD 1514, NCC 0.974 vs runner-up 0.52, 0.5 s; full
   alignment unchanged (AUTO-ACCEPTED, offset −1453, consistent with the existing head trim at fade-up 1514).
 - Tests: junk first act reproduced and removed (both rules), DVD-only logo, opening not found → review.
   Full suite 641 passed.
@@ -1460,14 +1460,14 @@ names that no longer exist; required tools never found) and, if any, lists them 
   the run is within the DVD's own first 200 s. Shipped under `src/fstk/data/dvd_openings/DS9/<code>.npz` + `index.json`
   (package data). `fstk openings export|list|check`; export refuses a non-distinctive run unless `--force`.
 - 23 packs made (S01E01 pilot as one DVD title, S01E03–E20, S02E01–E04; 7.3 MB). Runner-up NCC within each DVD
-  ≤ 0.61 (worst S01E09; real LD match ≈ 0.97). Decoded on the Legion's Linux VM ffmpeg 4.4.2; CP63 measured that the
+  ≤ 0.61 (worst S01E09; real LD match ≈ 0.97). Decoded on PC-A's Linux VM ffmpeg 4.4.2; CP63 measured that the
   build does not move the match.
 - `find_opening` improvements found while measuring the 23 DVDs:
   - The run's length adapts: 12 s, or 20/30 s when the run barely changes over half a second (self-NCC at 15 frames
     > 0.95). S01E04 opens on a near-still shot (0.99 at 12 s) → 30 s (0.90). The other 22 pass at 12 s.
   - The runner-up is now the best score outside the peak's own slope (and ≥ 45 frames away). Before, it was often
     just the peak's shoulder at exactly 45 frames (S01E04 0.96, S01E08 0.65), which would have refused good matches.
-- Real data, S01E20 LD master (Legion descriptors): its pack finds LD 1514 (NCC 0.975, next best 0.45) — the same
+- Real data, S01E20 LD master (PC-A descriptors): its pack finds LD 1514 (NCC 0.975, next best 0.45) — the same
   frame as the full DVD. The other 22 packs against the same LD: best 0.32, none found. Full-DVD path unchanged
   (1514, 0.974).
 - `video-trim`, no-DVD route: with a pack for the episode, the head anchor is the pack's match (note in the trim
@@ -1476,3 +1476,21 @@ names that no longer exist; required tools never found) and, if any, lists them 
   damaged pack rejected, packaged packs vs index, slope-not-runner-up, trim no-DVD route with a pack, `openings list`.
 - Not yet measured: packs against LD masters other than S01E20 (none staged here). S01E02 has no pack (the pilot
   is one DVD title; whether an LD's part 2 should use part 1's pack is open).
+
+## CP65 — device names out of the code tree; Save icon for a DVD's opening pack (owner, 2026-11-24)
+
+- **No device names** (owner: after the README, the rest too). Docs, ADRs, code comments, tests and fixtures now say
+  PC-A / PC-B (the owner's two Windows PCs) and generic share, volume, user and device-id examples
+  (`\\FILESERVER\media`, `media-hdd`, `C:\Users\user`, `0A1B2C3D`, `op@pc-a`). The Windows shortcut's link-tracking
+  block no longer names the machine (its machine-ID field reset; the time-based object IDs, which embed the network
+  card's address, zeroed; Windows does not need them to open the shortcut). Earlier commits still hold the old names:
+  history is not rewritten (AGENTS rule 2).
+- **Save icon beside dvd-probe** (Progress tab). Shown once the DVD has been probed and the episode has a DVD. It
+  saves the DVD's opening pack (ADR 0006) to the app's packaged packs, `src/fstk/data/dvd_openings/<series>/<code>.npz`
+  in the folder the app runs from; the tooltip says what a pack is and names that file, and says when a pack is
+  already there (the click then asks before replacing it). It reuses DVD alignment's DVD thumbnails when they were
+  made from the same file, otherwise decodes the DVD's first two minutes on a worker thread (closing the window stops
+  it). A non-distinctive opening is not saved unless the owner confirms. `opening_pack.export` is shared with
+  `fstk openings export`; `Services.opening_pack_target` / `save_opening_pack`.
+- Tests: export reuses or decodes, refuses a repeating opening unless forced, the service writes where the target
+  says, the icon appears only after dvd-probe passes and saves through the worker. Full suite 654 passed.

@@ -138,3 +138,33 @@ def find_start(master_head: np.ndarray, pack: OpeningPack, *, search_s: float = 
         op["offset"] = op["dvd_frame"] - op["master_frame"]
     op["pack"] = {k: pack.meta.get(k) for k in ("series", "code", "title", "opening_dvd_frame", "seconds", "ffmpeg")}
     return op
+
+
+def is_distinct(pack: OpeningPack) -> bool:
+    """The run picks out one place: nothing else in its own DVD's first minutes scores near a real match."""
+    runner = pack.meta["distinctiveness"][str(pack.seconds)]["runner_up_ncc"]
+    return runner is None or runner <= al.OPENING["min_ncc"] - al.OPENING["min_margin"]
+
+
+def export(ff, dvd: Path, *, series: str, code: str, title: str | None = None,
+           descriptors: np.ndarray | None = None, out: Path | None = None, force: bool = False,
+           cancel=None) -> dict[str, Any]:
+    """Make and save a pack from a DVD rip (``fstk openings export`` and the app's Save icon on dvd-probe).
+
+    ``descriptors``: the DVD's descriptors already decoded by dvd-alignment (frame 0 on), used when they reach far
+    enough; otherwise the DVD's first ``EXPORT_S`` seconds are decoded. A run that is not distinct is refused
+    unless ``force``: ``{"written": False, "why": ...}``."""
+    need = round(EXPORT_S * al.FPS)
+    if descriptors is not None and len(descriptors) >= need:
+        desc, decoded = np.asarray(descriptors[:need], dtype=np.uint8), False
+    else:
+        desc, decoded = ff.gray_thumbnails(Path(dvd), al.W, al.H, cancel=cancel, max_frames=need), True
+    pack = make_pack(desc, series=series, code=code, title=title, ffmpeg=ff.version(),
+                     source={"file": Path(dvd).name, "bytes": Path(dvd).stat().st_size})
+    runner = pack.meta["distinctiveness"][str(pack.seconds)]["runner_up_ncc"]
+    if not is_distinct(pack) and not force:
+        return {"written": False, "pack": pack, "decoded": decoded,
+                "why": f"the DVD's opening run also scores {runner} elsewhere in its first minutes, so it would not "
+                       f"pick out one place on the LD"}
+    path = save_pack(pack, out or pack_path(series, code))
+    return {"written": True, "path": path, "pack": pack, "decoded": decoded, "runner_up_ncc": runner}

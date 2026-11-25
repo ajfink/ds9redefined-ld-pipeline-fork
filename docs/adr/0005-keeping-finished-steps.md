@@ -9,9 +9,9 @@ fingerprints still match. Two gaps redid finished work:
 
 1. **New jobs started from nothing.** Run resumed an unfinished job only when its plan matched exactly. Any change —
    an app update adding or removing a step (ADR 0004 removed two), a moved disk estimate, a finished job — made a
-   new job that ran every step again (Legion 2026-11-24 13:20: cadence and DVD alignment redone).
+   new job that ran every step again (PC-A 2026-11-24 13:20: cadence and DVD alignment redone).
 2. **A re-run upstream redid everything after it**, even when it produced exactly the same files and values
-   (Flex 2026-11-24 14:20: stack-render ran again, gave the identical master, and 32 min of cadence ran again).
+   (PC-B 2026-11-24 14:20: stack-render ran again, gave the identical master, and 32 min of cadence ran again).
 
 ## Decision
 1. **Carry-over.** A new `intake-…` or `delivery-…` job takes over, step by step, the finished steps of the earlier

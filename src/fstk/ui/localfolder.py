@@ -34,7 +34,7 @@ def running_elevated() -> bool:
 
 ELEVATED_NOTE = ("This window is running as Administrator, so Windows hides your mapped network drives (X:, Y:, W:) "
                  "from it. Close fstk and start it again from a normal (non-admin) PowerShell, or type the share "
-                 "path instead, e.g. \\\\Lenovoflex\\e hdd.")
+                 "path instead, e.g. \\\\FILESERVER\\media.")
 
 
 class LocalFolderDialog(QDialog):

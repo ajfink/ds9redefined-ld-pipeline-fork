@@ -32,7 +32,7 @@ class _Ctx:
 
 
 class _FlakyVS:
-    """vspipe dies silently on the first try (Legion 2026-11-24 14:53), works on the second."""
+    """vspipe dies silently on the first try (PC-A 2026-11-24 14:53), works on the second."""
 
     def __init__(self, fail_times):
         self.fail_times, self.calls = fail_times, 0

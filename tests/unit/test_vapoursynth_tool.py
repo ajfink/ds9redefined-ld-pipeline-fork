@@ -26,7 +26,7 @@ def _fake_vspipe(tmp_path, body: str):
 
 @pytest.mark.skipif(os.name == "nt", reason="uses a shell-script stand-in for vspipe")
 def test_the_frame_reader_gives_vspipe_the_whole_environment(tmp_path, monkeypatch):
-    """Legion 2026-11-24 14:51: vspipe got an empty environment and video-quality saw no y4m header at all."""
+    """PC-A 2026-11-24 14:51: vspipe got an empty environment and video-quality saw no y4m header at all."""
     monkeypatch.setenv("FSTK_TEST_PARENT_ENV", "yes")
     exe = _fake_vspipe(tmp_path, f"""
 if os.environ.get("FSTK_TEST_PARENT_ENV") != "yes":

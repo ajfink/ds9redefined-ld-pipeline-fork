@@ -293,7 +293,7 @@ class Profile:
     allow_newer_packages: bool = False
     notes: list[str] = field(default_factory=list)
     catalog_path: str = ""  # optional refreshed Archive catalog snapshot (default: bundled)
-    #: Named volumes reachable from several machines (e.g. the capture disk shared from the Flex):
+    #: Named volumes reachable from several machines (e.g. the capture disk shared from PC-B):
     #: the same name on every machine, each with its own mount path (ADR 0002 §3).
     volumes: dict[str, str] = field(default_factory=dict)
     #: Default output settings per group (``video``, ``audio``; see ``fstk.config.output``).

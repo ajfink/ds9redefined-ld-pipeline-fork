@@ -351,7 +351,7 @@ def output_scope_for(path: Path, explicit: dict[str, str]) -> str:
 def input_scope_for(path: Path, explicit: dict[str, str]) -> str:
     """Step inputs: full hashes, except JSON reports (compared by content, time stamps ignored) and files of 1 GiB
     or more, which get size + head/tail like large outputs: a stage that did not name a scope for the 35 GB stack
-    master (cadence) made every resume re-read all of it (Flex 2026-11-24 16:36: 1 min 49 s of silence)."""
+    master (cadence) made every resume re-read all of it (PC-B 2026-11-24 16:36: 1 min 49 s of silence)."""
     if str(path) in explicit:
         return explicit[str(path)]
     if Path(path).suffix.lower() == ".json":

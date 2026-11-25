@@ -137,6 +137,26 @@ class CatalogRefreshWorker(QObject):
             self.failed.emit(str(exc))
 
 
+class CallWorker(QObject):
+    """Runs one service call off the GUI thread (the opening pack's DVD decode takes about a minute)."""
+
+    done = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, call):
+        super().__init__()
+        self.call = call
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            self.done.emit(self.call())
+        except FstkError as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:  # surface anything unexpected instead of dying silently
+            self.failed.emit(f"internal error: {exc!r}")
+
+
 class MainWindow(QMainWindow):
     def __init__(self, services: Services, *, actor: str | None = None):
         super().__init__()
@@ -230,6 +250,8 @@ class MainWindow(QMainWindow):
         self._running_plan: str | None = None
         self.progress_panel = ProgressPanel()
         self.progress_panel.space_refresh.connect(self.recheck_space)
+        self.progress_panel.pack_save.connect(self.save_opening_pack)
+        self.pack_thread: QThread | None = None
         self.progress_panel.set_column_widths(self.services.app_prefs().get("progress_columns"))
         self.progress_panel.columns_resized.connect(self._remember_progress_columns)
         self.status_line = QLabel("")
@@ -421,6 +443,7 @@ class MainWindow(QMainWindow):
                     item.setForeground(Qt.GlobalColor.white)
                     item.setBackground(self._colour(text))
                 self.jobs.setItem(i, j, item)
+        self._update_pack_target(episode)
         self._show_saved_progress(episode)
         self._pending = self.services.pending_reviews(episode)
         self.reviews.clear()
@@ -1019,6 +1042,10 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         """Closing mid-run stops it cleanly: tools are ended, unfinished files removed, state saved."""
+        if getattr(self, "pack_thread", None) is not None:   # an opening pack being made: stop its DVD read
+            self.pack_cancel.set()
+            self.pack_thread.quit()
+            self.pack_thread.wait(10000)
         queue_busy = getattr(self, "queue_runner", None) is not None and self.queue_runner.busy()
         if (self.thread is None or self.worker is None) and not queue_busy:
             if getattr(self, "queue_runner", None) is not None:
@@ -1080,6 +1107,69 @@ class MainWindow(QMainWindow):
             self.services.save_app_prefs({"progress_columns": widths})
         except Exception as exc:  # a preference that cannot be saved must not disturb a run
             LOG.warning("could not remember the progress column widths: %s", exc)
+
+    # ------------------------------------------------------------------ DVD opening pack
+    def _update_pack_target(self, episode: str) -> None:
+        """The Save icon beside dvd-probe: shown only when the episode has a DVD; its tip names the target file."""
+        target = None
+        with contextlib.suppress(FstkError, OSError, ValueError):
+            if self.services.dvd_status(episode).get("state") == "set":
+                target = self.services.opening_pack_target(episode)
+        self.progress_panel.set_pack_target(str(target) if target else None, bool(target and target.is_file()))
+
+    def save_opening_pack(self, force: bool = False) -> None:
+        """Save icon on dvd-probe: write this DVD's opening pack (ADR 0006) where the tooltip says."""
+        if not self.episode or self.pack_thread is not None:
+            return
+        episode = self.episode
+        target = self.services.opening_pack_target(episode)
+        if target.is_file() and not force and QMessageBox.question(
+                self, "Replace the opening pack?",
+                f"An opening pack for {episode} is already saved:\n{target}\n\nReplace it with one made from this "
+                f"episode's DVD?") != QMessageBox.StandardButton.Yes:
+            return
+        LOG.info("action save-opening-pack episode=%s force=%s", episode, force)
+        self.append_log(f"saving the DVD opening pack for {episode} → {target} …")
+        self.pack_thread = QThread(self)
+        import threading
+
+        self.pack_cancel = threading.Event()
+        cancel = self.pack_cancel
+        self.pack_worker = CallWorker(lambda: self.services.save_opening_pack(episode, force=force, cancel=cancel))
+        self.pack_worker.moveToThread(self.pack_thread)
+        self.pack_thread.started.connect(self.pack_worker.run)
+        self.pack_worker.done.connect(lambda res: self._pack_done(episode, res))
+        self.pack_worker.failed.connect(self._pack_failed)
+        self.pack_thread.start()
+
+    def _pack_end(self) -> None:
+        if self.pack_thread:
+            self.pack_thread.quit()
+            self.pack_thread.wait()
+        self.pack_thread = None
+
+    def _pack_done(self, episode: str, res: dict) -> None:
+        self._pack_end()
+        pack = res["pack"]
+        if not res["written"]:
+            self.append_log(f"opening pack for {episode} not saved: {res['why']}")
+            if QMessageBox.question(
+                    self, "Opening pack not distinctive",
+                    f"Not saved: {res['why']}.\n\nWithout the DVD, such a pack could start the episode in the "
+                    f"wrong place. Save it anyway?") == QMessageBox.StandardButton.Yes:
+                self.save_opening_pack(force=True)
+            return
+        how = "decoded from the DVD" if res["decoded"] else "from DVD alignment's thumbnails"
+        msg = (f"Saved the DVD opening pack for {episode} ({how}): {pack.seconds:g} s of opening from DVD frame "
+               f"{pack.opening_dvd_frame}, next best match elsewhere {res['runner_up_ncc']}.\n{res['path']}")
+        self.append_log(msg)
+        self._update_pack_target(episode)
+        QMessageBox.information(self, "Opening pack saved", msg)
+
+    def _pack_failed(self, why: str) -> None:
+        self._pack_end()
+        self.append_log(f"opening pack not saved: {why}")
+        QMessageBox.warning(self, "Opening pack not saved", why)
 
     def recheck_space(self) -> None:
         """Refresh icon: re-measure disk space for every step blocked by it; clear the ones that now fit."""

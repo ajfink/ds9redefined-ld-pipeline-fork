@@ -546,7 +546,7 @@ class Engine:
         m = self.ws.store.load() if invalid else None
         for sid in list(invalid):
             # What the descendants were made from: if the re-run gives exactly this back, they are kept as they are
-            # (Flex 2026-11-24 14:20: a re-run produced the identical master and 32 min of cadence ran again).
+            # (PC-B 2026-11-24 14:20: a re-run produced the identical master and 32 min of cadence ran again).
             prior = _result_of(self.state["steps"][sid], m, self.job, sid)
             for d in _descendants(self.plan, sid):
                 dst = self.state["steps"][d]

@@ -38,7 +38,7 @@ class DeviceIdentity:
 
     @property
     def name(self) -> str:
-        """Shared device folder name, e.g. ``LENOVO-LEGION-5-D02C1DA9``."""
+        """Shared device folder name, e.g. ``PC-A-0A1B2C3D``."""
         return f"{safe_component(self.machine)}-{self.instance_id}"
 
 

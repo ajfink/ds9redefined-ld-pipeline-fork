@@ -6,8 +6,8 @@ the receiving device with its own profile:
     {data_root}, {media_root}           the profile roots
     {root:<name>}                       a media-root override (``roots.stack`` …)
     {source:<name>}                     a source root (``downloads_root``, ``dvd_root`` …)
-    {volume:<name>}                     a named volume in ``profile.volumes`` (e.g. the Flex's
-                                        capture disk: ``\\\\LENOVOFLEX\\e hdd`` here, ``/Volumes/e hdd``
+    {volume:<name>}                     a named volume in ``profile.volumes`` (e.g. PC-B's
+                                        capture disk: ``\\\\FILESERVER\\media`` here, ``/Volumes/media``
                                         on the Mac)
 
 Only string values that *are* a path under one of those prefixes are tokenised (the tail is

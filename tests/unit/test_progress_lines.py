@@ -74,6 +74,6 @@ def test_a_restarted_percentage_is_followed_small_dips_are_not():
     seen = []
     t = iter(range(100))
     lp = LineProgress(lambda f, m: seen.append(round(f, 2)), min_interval=0.0, clock=lambda: next(t))
-    for pct in (41, 5, 65, 10, 15, 12, 60, 100):          # Legion's Orc render, 2026-11-23
+    for pct in (41, 5, 65, 10, 15, 12, 60, 100):          # PC-A's Orc render, 2026-11-23
         lp("stderr", f"Processing: {pct}%")
     assert seen == [0.41, 0.05, 0.65, 0.10, 0.15, 0.15, 0.60, 1.0]

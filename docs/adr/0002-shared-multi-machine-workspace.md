@@ -1,4 +1,4 @@
-# ADR 0002 — Shared multi-machine workspace (Legion, Flex, Mac)
+# ADR 0002 — Shared multi-machine workspace (two Windows PCs and a Mac)
 
 Date: 2026-11-21 · Status: proposed (built while the owner reviews; defaults chosen are listed
 under "Decisions to confirm")
@@ -28,7 +28,7 @@ on one SMB share.
 3. **Portable paths.** Snapshots replace machine paths with tokens: `{data_root}`, `{media_root}`,
    `{root:<name>}` for media-root overrides, `{source:<name>}` for source roots, and
    `{volume:<name>}` for named volumes declared in each profile (`volumes`), e.g.
-   `"flex-e-hdd": "\\\\LENOVOFLEX\\e hdd"` on Windows and `"/Volumes/e hdd"` on the Mac. Whole-path
+   `"media-hdd": "\\\\FILESERVER\\media"` on Windows and `"/Volumes/media"` on the Mac. Whole-path
    string values in the manifest, journal and approvals are tokenised; a receiving device expands
    them with its own profile; tokens it cannot expand are listed. Reports and references travel
    byte for byte so approvals bound to them keep matching (the share is private to the owner's

@@ -80,7 +80,7 @@ def test_convert_v38_windows_profile():
     v38 = json.loads((FIX / "windows-machine.json").read_text())
     new, notes = convert_v38_profile(v38, data_root="C:\\FSTK\\data")
     p = Profile.from_dict(new)
-    assert p.os == "windows" and p.machine == "DEVICE-A" and p.instance_id == "D02C1DA9"
+    assert p.os == "windows" and p.machine == "DEVICE-A" and p.instance_id == "0A1B2C3D"
     assert str(p.media_root) == "Z:\\ld-pipeline-device" and p.limits.min_free_gb == 40
     assert "avisynth_plugin_dir" not in p.tools and p.tools["orc"].endswith("orc-cli.exe")
     assert p.sources["dvd_root"] == "Z:\\Video\\DS9S1D5"
@@ -146,7 +146,7 @@ def test_vspipe_follows_the_running_environment_not_a_stale_one(tmp_path, monkey
 
 
 def test_vspipe_follows_the_running_environment_even_when_the_old_one_was_deleted(tmp_path, monkeypatch):
-    """Legion 2026-11-23: the profile named …\\fstk\\venv\\Scripts\\vspipe.exe; that environment was removed, and the
+    """PC-A 2026-11-23: the profile named …\\fstk\\venv\\Scripts\\vspipe.exe; that environment was removed, and the
     cadence step failed after a 7-hour render instead of using the running environment's vspipe."""
     import shutil
     import sys

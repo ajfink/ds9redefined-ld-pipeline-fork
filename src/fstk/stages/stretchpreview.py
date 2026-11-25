@@ -35,7 +35,7 @@ def memory_note() -> str:
 
 
 def encode_preview(ctx, vs, wrapper: Path, clip: Path, cycle: int) -> None:
-    """x264 review clip of ``wrapper``. Legion 2026-11-24 14:53: vspipe stopped during script evaluation with no
+    """x264 review clip of ``wrapper``. PC-A 2026-11-24 14:53: vspipe stopped during script evaluation with no
     message (exit -1) for one preview while two others of the same scripts worked; so one more try, and the free
     memory at each failure goes into the message, so the cause can be measured rather than guessed."""
     failures = []

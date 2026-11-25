@@ -212,11 +212,9 @@ def cmd_stages(args) -> int:
 def cmd_openings(args) -> int:
     """DVD opening packs: export one from a DVD, list the packaged ones, or check one against a stack master."""
     import json
-    import subprocess
 
     from fstk.media import alignment as al
     from fstk.media import opening_pack as packs
-    from fstk.tools import process
     from fstk.tools.ffmpeg import FFmpeg
 
     if args.sub == "list":
@@ -233,20 +231,13 @@ def cmd_openings(args) -> int:
 
     ep = EpisodeId.parse(args.episode)
     if args.sub == "export":
-        frames = round(packs.EXPORT_S * al.FPS)
-        desc = ff.gray_thumbnails(Path(args.dvd), al.W, al.H, max_frames=frames)
-        version = subprocess.run([str(prof.tool("ffmpeg")), "-version"], capture_output=True, text=True,
-                                 check=False, **process.hidden()).stdout.splitlines()[0]
-        dvd = Path(args.dvd)
-        pack = packs.make_pack(desc, series=ep.series, code=ep.code, title=args.title, ffmpeg=version,
-                               source={"file": dvd.name, "bytes": dvd.stat().st_size})
-        runner = pack.meta["distinctiveness"][str(pack.seconds)]["runner_up_ncc"]
-        if runner is not None and runner > al.OPENING["min_ncc"] - al.OPENING["min_margin"] and not args.force:
-            print(f"not written: the opening run scores {runner} elsewhere in the DVD's first minutes, so it would "
-                  f"not pick out one place on the LD (--force writes it anyway)")
+        res = packs.export(ff, Path(args.dvd), series=ep.series, code=ep.code, title=args.title,
+                           out=Path(args.out) if args.out else None, force=args.force)
+        pack = res["pack"]
+        if not res["written"]:
+            print(f"not written: {res['why']} (--force writes it anyway)")
             return 1
-        out = packs.save_pack(pack, Path(args.out) if args.out else packs.pack_path(ep.series, ep.code))
-        print(f"wrote {out} ({len(pack.descriptors)} frames, opening at DVD frame {pack.opening_dvd_frame}, "
+        print(f"wrote {res['path']} ({len(pack.descriptors)} frames, opening at DVD frame {pack.opening_dvd_frame}, "
               f"{pack.seconds:g} s run)")
         print(json.dumps(pack.meta["distinctiveness"]))
         return 0

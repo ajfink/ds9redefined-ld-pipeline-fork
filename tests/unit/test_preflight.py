@@ -1,4 +1,4 @@
-"""A plan does not start when a tool it needs is set up but missing or broken (Legion 2026-11-23)."""
+"""A plan does not start when a tool it needs is set up but missing or broken (PC-A 2026-11-23)."""
 from __future__ import annotations
 
 import pytest
@@ -77,7 +77,7 @@ def test_the_pinned_plugin_set_includes_mvutensils_for_qtgmc():
     lock = json.loads((root / "vendor" / "vapoursynth-plugins" / "LOCK.json").read_text())["packages"]
     assert any(r.startswith("vapoursynth-mvutensils") for r in media) and "mvu" in VS_NAMESPACES
     assert lock["vapoursynth-mvutensils"]["version"] == "9"
-    # Legion 2026-11-24 13:48: vsrgtools' median blur inside QTempGaussMC needs zsmooth
+    # PC-A 2026-11-24 13:48: vsrgtools' median blur inside QTempGaussMC needs zsmooth
     assert any(r.startswith("vapoursynth-zsmooth") for r in media) and "zsmooth" in VS_NAMESPACES
     assert lock["vapoursynth-zsmooth"]["version"] == "0.20.0"
     wheel = root / "vendor" / "vapoursynth-plugins" / lock["vapoursynth-zsmooth"]["file"]

@@ -158,7 +158,7 @@ def test_the_progress_panel_shows_kept_and_carried_steps_as_done():
 
 # ------------------------------------------------------------------ an upstream re-run with the same result
 def test_when_an_upstream_rerun_gives_the_same_result_later_steps_are_kept(env):
-    """Flex 2026-11-24 14:20: stack-render ran again, gave the identical master, and 32 min of cadence re-ran."""
+    """PC-B 2026-11-24 14:20: stack-render ran again, gave the identical master, and 32 min of cadence re-ran."""
     setup(env)
     events = []
     run(env, chain("j"))
@@ -207,7 +207,7 @@ def test_an_upstream_rerun_that_fails_keeps_later_steps_waiting_then_compares_wh
 
 
 def test_a_large_input_is_checked_by_size_and_ends_not_read_in_full(tmp_path):
-    """Flex 2026-11-24 16:36: cadence's 35 GB master input was fully hashed on every resume (1 min 49 s silent)."""
+    """PC-B 2026-11-24 16:36: cadence's 35 GB master input was fully hashed on every resume (1 min 49 s silent)."""
     from fstk.core.hashing import SCOPE_FULL, SCOPE_HEAD_TAIL, SCOPE_JSON
     from fstk.stages.base import LARGE_OUTPUT_BYTES, input_scope_for
 

@@ -6,7 +6,7 @@
                    "enabled":  true,
                    "release_root":  "Z:\\fromstuntokill-v15-app",
                    "device_name":  "DEVICE-A",
-                   "device_instance_id":  "D02C1DA9"
+                   "device_instance_id":  "0A1B2C3D"
                },
     "tools":  {
                   "ffmpeg":  "C:\\Users\\operator\\AppData\\Local\\Microsoft\\WinGet\\Links\\ffmpeg.exe",

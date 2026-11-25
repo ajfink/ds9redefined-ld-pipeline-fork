@@ -166,24 +166,24 @@ def test_picker_shows_other_devices_and_adopts_a_handoff(tmp_path, qtbot, monkey
 
     shared = tmp_path / "share"
     shared.mkdir()
-    legion = machine(tmp_path, "LENOVO-LEGION-5", shared, tmp_path)
-    mac = machine(tmp_path, "MAC-M5", shared, tmp_path)
+    pc_a = machine(tmp_path, "PC-A", shared, tmp_path)
+    mac = machine(tmp_path, "MAC", shared, tmp_path)
     index = CatalogIndex.load()
     entry = index.find("VOY", 1, 1)
-    lsvc, msvc = Services(legion), Services(mac)
+    lsvc, msvc = Services(pc_a), Services(mac)
     msvc.shared_tree()                                          # the Mac joins the shared folder
-    lsvc.create_from_catalog(entry, actor="andrew@legion")
-    lwin = MainWindow(lsvc, actor="andrew@legion")
+    lsvc.create_from_catalog(entry, actor="op@pc-a")
+    lwin = MainWindow(lsvc, actor="op@pc-a")
     qtbot.addWidget(lwin)
     lwin.select_episode("VOY:S01E01")
     mac_device = msvc.shared_tree().device
     assert lwin.handoff_to(mac_device, "Mac continues with EFM")["to"] == mac_device
     assert "handed off" in lwin.title.text() and not lwin.run_button.isEnabled()
-    dlg = picker_mod.EpisodePicker(msvc, actor="andrew@mac")
+    dlg = picker_mod.EpisodePicker(msvc, actor="op@mac")
     qtbot.addWidget(dlg)
     dlg.search.setText("voyager S01E01")
     item = next(it for it in _items(dlg.tree) if it.text(0) == "S01E01" and it.data(0, picker_mod.ROLE_ENTRY))
-    assert "LENOVO-LEGION-5 (handed-off)" in item.text(6)
+    assert "PC-A (handed-off)" in item.text(6)
     dlg.tree.setCurrentItem(item)
     assert dlg.adopt_btn.isEnabled() and "handed to this device" in dlg.detail.toPlainText()
     monkeypatch.setattr(picker_mod.QMessageBox, "information", lambda *a: None)

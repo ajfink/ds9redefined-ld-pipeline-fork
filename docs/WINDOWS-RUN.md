@@ -3,7 +3,7 @@
 > Installing and starting on a new computer is now `FromStunToKill.cmd` (see `INSTALL.md`); the setup steps below
 > that use `tools\windows\setup-fstk.ps1` are superseded.
 
-The first full fstk run on the Legion. The aim is a finished episode and the A/V review in the app.
+The first full fstk run on PC-A. The aim is a finished episode and the A/V review in the app.
 Several parts have only run on Linux so far, so this run's second job is to show where Windows breaks.
 **If a step fails, stop there, note what the table at the end asks for, and send it back.** Everything
 resumes: running the same plan again reuses every finished step.
@@ -17,7 +17,7 @@ Inputs used (all read-only, never modified):
 | v38 machine profile (tool paths) | `Z:\ld-pipeline\machine.json` |
 | v38 ProRes master + project (smoke check only) | `Z:\ld-pipeline-device\prores`, `...\stack` |
 
-**fstk only reads X: and Z:\Video.** Everything it writes goes under your user folder on the Legion's own
+**fstk only reads X: and Z:\Video.** Everything it writes goes under your user folder on PC-A's own
 disk by default:
 
 | Folder | Holds |
@@ -196,4 +196,4 @@ computer when the queue is done* for overnight runs.
 ## Mapped drives missing in the folder dialog
 Windows gives an Administrator PowerShell a separate session that cannot see mapped network drives (X:, Y:, W:).
 Start `fstk-gui` (and `setup-fstk.ps1` once Python is installed) from a **normal, non-admin** PowerShell. The setup
-script does not need admin. If you must stay elevated, type the share path (`\\Lenovoflex\e hdd`) instead of the drive letter.
+script does not need admin. If you must stay elevated, type the share path (`\\FILESERVER\media`) instead of the drive letter.

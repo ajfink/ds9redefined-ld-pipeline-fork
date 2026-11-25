@@ -269,7 +269,7 @@ def test_a_master_is_not_touched_unless_every_predicted_frame_is_blank(tmp_path)
 
 
 def test_a_read_error_is_reported_as_one_and_retried_never_as_picture_content(tmp_path, monkeypatch):
-    """Legion 2026-11-24: a drive read error at frame 70,200 made ffmpeg stop; the app said the PAD frame was
+    """PC-A 2026-11-24: a drive read error at frame 70,200 made ffmpeg stop; the app said the PAD frame was
     "not all-zero". A failed read is now retried, then reported as a read problem; the master is untouched."""
     from fstk.core.errors import ToolError
     from fstk.stages.stack import StackRender
@@ -282,7 +282,7 @@ def test_a_read_error_is_reported_as_one_and_retried_never_as_picture_content(tm
     index = ff.packet_index(master)
     real_run, calls = process.run, []
 
-    def flaky(args, **kw):                         # the first read of frame 1800 fails like the Legion's did
+    def flaky(args, **kw):                         # the first read of frame 1800 fails like PC-A's did
         if "-ss" in args and float(args[args.index("-ss") + 1]) > 50 and not calls:
             calls.append(1)
             return process.ProcessResult(list(args), 3221225786, 1.2, b"", ["Read error at pos. 14831058996"], None)
@@ -331,8 +331,8 @@ class _PadMasterFF:
         return None
 
 
-def _legion_cp53_state(env):
-    """What CP53 left on the Legion: stack project already stripped, the master and its render project with PADs,
+def _pc_a_cp53_state(env):
+    """What CP53 left on PC-A: stack project already stripped, the master and its render project with PADs,
     stack.frames = the master's padded count, and a passed stack-render."""
     from fstk.tools.orc_project import lossless_render_project, strip_timecode_pads
 
@@ -356,18 +356,18 @@ def _legion_cp53_state(env):
 
 
 def test_a_master_cp53_passed_with_its_pads_is_stale_and_then_migrated(env):
-    """Legion 2026-11-24 13:28: CP53 stripped the stack project before checking the master; the next run saw no
+    """PC-A 2026-11-24 13:28: CP53 stripped the stack project before checking the master; the next run saw no
     PADs and passed the master with all 83 still in it. The render project records what the master holds."""
     from fstk.stages.stack import StackRender
 
-    prof, pads, master = _legion_cp53_state(env)
+    prof, pads, master = _pc_a_cp53_state(env)
     project = prof.root("stack", EP) / "stack-full-ds9-s01e20.orcprj"
     held = {"inputs": [{"path": str(project)}], "outputs": [{"path": str(master)}]}
     assert "still has Orc's time-code PAD frames" in StackRender().still_current(held)
 
     ff = _PadMasterFF(83335, pads.master_positions)
     render = {**RENDER, "after": []}
-    state = run(env, [render], "legion-1", ffmpeg=ff, orc=FakeOrc())
+    state = run(env, [render], "pc-a-1", ffmpeg=ff, orc=FakeOrc())
     assert state["steps"]["render"]["status"] == "passed", state["steps"]["render"].get("issues")
     rep = json.loads((prof.root("reports", EP) / "stack-render.json").read_text())
     assert rep["evidence"]["timecode_pads_removed"]["count"] == 83
@@ -378,10 +378,10 @@ def test_a_master_cp53_passed_with_its_pads_is_stale_and_then_migrated(env):
 
 
 def test_a_render_project_for_another_project_is_refused(env):
-    prof, pads, master = _legion_cp53_state(env)
+    prof, pads, master = _pc_a_cp53_state(env)
     project = prof.root("stack", EP) / "stack-full-ds9-s01e20.orcprj"
     project.write_text(project.read_text().replace("0-83251", "0-83250", 1))
-    state = run(env, [{**RENDER, "after": []}], "legion-2", ffmpeg=_PadMasterFF(83335, pads.master_positions),
+    state = run(env, [{**RENDER, "after": []}], "pc-a-2", ffmpeg=_PadMasterFF(83335, pads.master_positions),
                 orc=FakeOrc())
     assert state["steps"]["render"]["status"] in ("failed", "blocked")
     assert any("not the current" in i for i in state["steps"]["render"]["issues"]), state["steps"]["render"]
@@ -389,17 +389,17 @@ def test_a_render_project_for_another_project_is_refused(env):
 
 
 def test_a_master_an_earlier_run_already_migrated_is_recognised_not_migrated_twice(env):
-    """Flex 2026-11-24 14:23 (S02E02): CP53 removed the 83 PADs at 13:46 but left the render project listing them;
+    """PC-B 2026-11-24 14:23 (S02E02): CP53 removed the 83 PADs at 13:46 but left the render project listing them;
     CP55 then tried to remove them again and stopped ("not blank packets"). Nothing was touched, rightly; now the
     finished migration is recognised and the render project brought up to date."""
     from fstk.stages.stack import StackRender
 
-    prof, pads, master = _legion_cp53_state(env)
+    prof, pads, master = _pc_a_cp53_state(env)
     with env[1].store.transaction(by="t", reason="CP53 migrated") as m:
         m.set("stack.frames", 83335 - 83, by="t", note="measured after the migration")
     (master.parent / "S01E20-stack-master-with-timecode-pads.mkv").write_bytes(b"original")
     ff = _PadMasterFF(83335 - 83, [])                       # no blank packets left anywhere
-    state = run(env, [{**RENDER, "after": []}], "flex-1", ffmpeg=ff, orc=FakeOrc())
+    state = run(env, [{**RENDER, "after": []}], "pc-b-1", ffmpeg=ff, orc=FakeOrc())
     assert state["steps"]["render"]["status"] == "passed", state["steps"]["render"].get("issues")
     rep = json.loads((prof.root("reports", EP) / "stack-render.json").read_text())
     assert rep["evidence"]["timecode_pads_removed"]["method"].startswith("already removed")
@@ -409,7 +409,7 @@ def test_a_master_an_earlier_run_already_migrated_is_recognised_not_migrated_twi
 
 
 def test_some_blank_and_some_not_is_refused(env):
-    prof, pads, master = _legion_cp53_state(env)
+    prof, pads, master = _pc_a_cp53_state(env)
     ff = _PadMasterFF(83335, list(pads.master_positions)[:40])   # only 40 of the 83 positions are blank
     state = run(env, [{**RENDER, "after": []}], "mixed", ffmpeg=ff, orc=FakeOrc())
     assert state["steps"]["render"]["status"] == "failed"
@@ -418,10 +418,10 @@ def test_some_blank_and_some_not_is_refused(env):
 
 
 def test_stripping_its_own_project_does_not_make_the_step_stale(env):
-    """Flex 14:20: the step that stripped the project saw its own write as an input change and ran again."""
+    """PC-B 14:20: the step that stripped the project saw its own write as an input change and ran again."""
     from fstk.tools.orc_project import lossless_render_project
 
-    prof, pads, master = _legion_cp53_state(env)
+    prof, pads, master = _pc_a_cp53_state(env)
     fixture = (Path(__file__).parents[1] / "fixtures" / "orc" / "s01e20-stack-with-timecode-pads.orcprj").read_text()
     project = prof.root("stack", EP) / "stack-full-ds9-s01e20.orcprj"
     project.write_text(fixture)                              # a project from before ADR 0004, PADs and all

@@ -119,7 +119,7 @@ class VapourSynth:
         formats = {"420p10": "yuv420p10le", "422p10": "yuv422p10le", "420": "yuv420p", "422": "yuv422p"}
         with tempfile.TemporaryFile() as err:
             # The child gets this process's environment plus our additions: ``self.env()`` alone is only the
-            # additions, and an empty environment stops vspipe's Python before it writes a byte (Legion
+            # additions, and an empty environment stops vspipe's Python before it writes a byte (PC-A
             # 2026-11-24 14:51: no SYSTEMROOT/PATH on Windows → "missing y4m header ''").
             proc = subprocess.Popen(self.serve(script, first, last), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                     stderr=err, env={**os.environ, **self.env()}, **process._popen_kwargs())

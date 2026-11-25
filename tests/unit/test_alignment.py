@@ -137,7 +137,7 @@ def test_real_s01e20_samples_give_the_act_structure(fixtures):
 
 
 def test_ld_only_cards_that_loosely_match_random_dvd_pictures_are_not_the_programme_start():
-    """Flex 2026-11-24, S02E02: the warning cards and "Feature Presentation" (4–40 s) each matched some DVD
+    """PC-B 2026-11-24, S02E02: the warning cards and "Feature Presentation" (4–40 s) each matched some DVD
     picture loosely, the path hopped across the DVD (offsets +566 → +54, RMS 52 frames), that became "act 1",
     and the programme origin — the head trim — was put at 4.0 s instead of 49.5 s."""
     rng = np.random.default_rng(11)

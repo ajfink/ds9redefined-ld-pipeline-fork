@@ -46,7 +46,8 @@ STEP_HELP: dict[str, tuple[str, str, str]] = {
     "dvd-probe": (
         "Checks the DVD rip: its streams, timestamps, frame count, and a fingerprint of the file.",
         "A verified description of the DVD the alignment and audio steps use.",
-        ""),
+        "Optional: once it is done, the Save icon beside its name saves this DVD's opening pack, so people without the DVD "
+        "can still find the episode's start on the LD."),
     "dvd-alignment": (
         "Matches every LaserDisc picture to its DVD picture, act by act, and checks the match on real pictures.",
         "Which DVD frame each LD frame shows, used for trims, audio timing and DVD frame fixes.",

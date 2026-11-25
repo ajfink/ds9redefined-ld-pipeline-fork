@@ -45,7 +45,7 @@ def intake_plan(episode: str | EpisodeId, *, download: bool, job: str | None = N
     return plan
 
 
-#: Disk estimates from real data (owner's Legion): the S01E20 stack master is 287 KB/frame;
+#: Disk estimates from real data (owner's PC-A): the S01E20 stack master is 287 KB/frame;
 #: delivered v38 episodes are 4.1–4.7 GiB for ~65,200 frames (≈ 72 KB/frame). Margins included.
 MASTER_BYTES_PER_STACK_FRAME = 500_000     # FFV1 10-bit 4:2:2: 415 KB/frame measured on S01E20 (ProRes HQ: 287)
 ENCODE_BYTES_PER_OUTPUT_FRAME = 110_000

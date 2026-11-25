@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -32,6 +32,7 @@ SCALE = 1000
 class ProgressPanel(QWidget):
     space_refresh = Signal()            # the Refresh icon on a step blocked by disk space was clicked
     columns_resized = Signal(dict)      # the person dragged a column edge: {column name: width}, to remember
+    pack_save = Signal()                # the Save icon beside dvd-probe: save this DVD's opening pack
 
     COLUMNS: ClassVar[list[str]] = ["Step", "Status", "Progress", "Time", "", "What it is doing"]
     #: starting widths; every column can be dragged wider or narrower, and the widths are remembered
@@ -78,6 +79,9 @@ class ProgressPanel(QWidget):
         head.sectionResized.connect(self._on_resized)
         self.refresh_buttons: dict[str, QToolButton] = {}
         self.bars: dict[str, QProgressBar] = {}
+        self.save_buttons: dict[str, QToolButton] = {}
+        self.pack_target: str | None = None          # where the opening pack would be written (set by the window)
+        self.pack_exists = False
         lay = QVBoxLayout(self)
         lay.addWidget(self.headline)
         lay.addWidget(self.overall)
@@ -111,6 +115,7 @@ class ProgressPanel(QWidget):
         self.tracker = tracker
         self.bars.clear()
         self.refresh_buttons.clear()
+        self.save_buttons.clear()
         self.table.setRowCount(0)
         if tracker is None:
             self.headline.setText("No run yet")
@@ -127,6 +132,8 @@ class ProgressPanel(QWidget):
             name = QTableWidgetItem(step.id)
             name.setToolTip(tip)
             self.table.setItem(row, 0, name)
+            if step.stage == "dvd-probe":
+                self._add_save_button(row, step.id)
             bar = QProgressBar()
             bar.setRange(0, SCALE)
             bar.setTextVisible(True)
@@ -148,6 +155,44 @@ class ProgressPanel(QWidget):
             self.table.setCellWidget(row, 4, holder)
             self.refresh_buttons[step.id] = btn
         self.refresh()
+
+    # ------------------------------------------------------------------ DVD opening pack
+    def set_pack_target(self, target: str | None, exists: bool = False) -> None:
+        """Where the Save icon writes this episode's opening pack, and whether one is already there."""
+        self.pack_target, self.pack_exists = target, exists
+        for btn in self.save_buttons.values():
+            btn.setToolTip(self.save_tip())
+
+    def save_tip(self) -> str:
+        where = self.pack_target or "the app's packaged packs (src/fstk/data/dvd_openings/<series>/<code>.npz)"
+        return ("Save this DVD's opening pack.\n\n"
+                "Makes the episode's start findable on the LaserDisc for people who don't have this DVD: the first "
+                "seconds of the DVD's picture after its opening black, kept as tiny 48×36 grey thumbnails used only "
+                "for matching (not watchable video, no sound). Without the DVD, the trim step looks for these "
+                "pictures on the LD and starts the episode exactly there.\n\n"
+                "Uses the DVD thumbnails DVD alignment already made when they are from this same file; otherwise "
+                "reads the DVD's first two minutes (about a minute). A pack whose opening is not distinctive is not "
+                "saved.\n\n"
+                f"Saves to:\n{where}" + ("\n(replaces the pack already there; you are asked first)"
+                                          if self.pack_exists else ""))
+
+    def _add_save_button(self, row: int, step_id: str) -> None:
+        btn = QToolButton()
+        btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
+        btn.setAutoRaise(True)
+        btn.setIconSize(QSize(16, 16))
+        btn.setToolTip(self.save_tip())
+        btn.setAccessibleName("Save DVD opening pack")
+        btn.clicked.connect(self.pack_save.emit)
+        btn.setVisible(False)
+        # a see-through holder over the step's name: the name stays drawn by the table, the icon sits at its right
+        holder = QWidget()
+        hl = QHBoxLayout(holder)
+        hl.setContentsMargins(0, 0, 2, 0)
+        hl.addStretch(1)
+        hl.addWidget(btn)
+        self.table.setCellWidget(row, 0, holder)
+        self.save_buttons[step_id] = btn
 
     def refresh(self) -> Snapshot | None:
         if self.tracker is None:
@@ -201,6 +246,8 @@ class ProgressPanel(QWidget):
                                                if "left" in label else ""))
         self.table.setItem(row, 3, when)
         self.refresh_buttons[step.id].setVisible(is_space_block(step.status, step.detail))
+        if step.id in self.save_buttons:               # the DVD has been probed: its opening can be packed
+            self.save_buttons[step.id].setVisible(step.status == "passed" and self.pack_target is not None)
         msg = step.message if step.status == "running" else step.detail
         item = QTableWidgetItem(msg)
         item.setToolTip(msg or self.table.item(row, 0).toolTip())
