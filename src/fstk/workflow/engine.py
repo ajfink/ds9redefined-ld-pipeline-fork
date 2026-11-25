@@ -731,7 +731,8 @@ class Engine:
                           if str(Path(fp["path"])) in rewritten else fp for fp in inputs]
                 st["inputs"] = inputs
             st.update(outputs=outputs, finished_utc=utc_now_iso(), issues=[],
-                      report=str(output.report) if output.report else None)
+                      report=str(output.report) if output.report else None,
+                      result_note="; ".join(output.notes)[:400])
             if stage.review and output.needs_review:
                 # Values from a reviewed stage are committed only once a human approves the
                 # evidence (v38 recorded cadence/trim metrics only after approval).
@@ -744,7 +745,7 @@ class Engine:
                 if ok:
                     self._commit_pending(sid)
                     st["status"] = "passed"
-                    self._emit("step-passed", step=sid)
+                    self._emit("step-passed", step=sid, detail=st["result_note"])
                 else:
                     st["status"] = "awaiting-review"
                     self._emit("step-awaiting-review", step=sid, detail=why)
@@ -755,7 +756,7 @@ class Engine:
                 if stage.review:
                     st["review_detail"] = f"review {stage.review}: not needed (all automatic checks passed)"
                 st["status"] = "passed"
-                self._emit("step-passed", step=sid)
+                self._emit("step-passed", step=sid, detail=st["result_note"])
         except GateError as exc:
             st.update(status="blocked", finished_utc=utc_now_iso(), issues=[str(exc)])
             self._emit("step-blocked", step=sid, issues=[str(exc)])

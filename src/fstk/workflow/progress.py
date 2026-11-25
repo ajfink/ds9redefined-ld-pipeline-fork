@@ -211,7 +211,7 @@ class ProgressTracker:
             # start): showing it as running would make a dead run look alive
             step.status = "interrupted" if (status == RUNNING and not live) else status
             if step.status in SETTLED or step.status == WAITING:
-                step.detail = "; ".join(st.get("issues") or [])
+                step.detail = "; ".join(st.get("issues") or []) or str(st.get("result_note") or "")
 
     def on_event(self, event: Mapping[str, Any]) -> None:
         kind, sid = event.get("kind", ""), event.get("step")
@@ -257,6 +257,8 @@ class ProgressTracker:
             if kind == "step-passed" and step.started is not None:
                 self.timings.record(step.stage, now - step.started)
             step.status, step.fraction, step.finished = "passed", 1.0, now
+            if kind == "step-passed":
+                step.detail = str(event.get("detail") or "")
         elif kind == "step-awaiting-review":
             if step.started is not None:
                 self.timings.record(step.stage, now - step.started)

@@ -1538,3 +1538,14 @@ names that no longer exist; required tools never found) and, if any, lists them 
 - Tests: restart keeps later steps when the result is identical and runs them when it changes; unknown step
   refused; the icon's visibility (passed/failed yes, dependency not met no, hidden during a run), the dialog text
   and buttons, Cancel does nothing, Continue restarts and runs. Suite 662 passed.
+
+## CP68 — a passed step says what it did (owner: "Restart from here" on frame-fixes looked like it did nothing)
+
+- The restart worked: frame-fixes ran again (new report 07:50Z) and video-quality started after it. It took 60 ms
+  because S01E20 has no frame fixes chosen — frame-fixes only applies fixes picked in the final review, so it writes
+  the chain through unchanged. Correction to CP66: frame-fixes borrows DVD frames only for fixes the operator chose
+  with the DVD action (and then refuses, never falls back, if the window is wrong); with none chosen it was never
+  affected by the DVD window bug. Only video-quality needed redoing.
+- A passed step now shows its notes in "What it is doing" (engine `result_note`, event `step-passed` detail,
+  saved in the job state). frame-fixes says "no frame fixes chosen in the final review: the picture is passed on
+  unchanged" or how many it applied. Suite 663 passed.

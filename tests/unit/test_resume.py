@@ -276,3 +276,14 @@ def test_restart_from_an_unknown_step_is_refused(env):
     run(env, chain("j"))
     with pytest.raises(WorkflowError):
         _restart(env, "j", "zz")
+
+
+def test_a_passed_step_shows_what_it_reported(env):
+    from fstk.workflow.progress import ProgressTracker
+
+    setup(env)
+    first = run(env, chain("j"))
+    t = ProgressTracker(chain("j"))
+    t.load_state(first)
+    t.on_event({"kind": "step-passed", "step": "a", "detail": "no frame fixes chosen"})
+    assert t.steps["a"].detail == "no frame fixes chosen" and t.steps["b"].detail == ""

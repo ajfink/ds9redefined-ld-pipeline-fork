@@ -184,6 +184,9 @@ class FrameFixes(Stage):
                                         "episode": str(ctx.episode), "base": d["base"], "script": d["script"],
                                         "payload": payload, "fixes": details})
         out = StepOutput(report=Path(d["report"]))
+        done = sum(1 for x in details if x["status"] == "applied")
+        out.notes.append(f"{done} frame fix(es) applied" if done else
+                         "no frame fixes chosen in the final review: the picture is passed on unchanged")
         out.notes += [f"fix {x['first']}..{x['last']}: grain {x['grain_ratio_vs_neighbour']} of the neighbour's"
                       for x in details if x.get("grain_flag")]
         out.artifacts["manualfix_script"] = {"root": "scripts", "name": Path(d["script"]).name}
