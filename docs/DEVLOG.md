@@ -1549,3 +1549,17 @@ names that no longer exist; required tools never found) and, if any, lists them 
 - A passed step now shows its notes in "What it is doing" (engine `result_note`, event `step-passed` detail,
   saved in the job state). frame-fixes says "no frame fixes chosen in the final review: the picture is passed on
   unchanged" or how many it applied. Suite 663 passed.
+
+## CP69 — retime: small audio edits located by lag (PC-B S02E02 debug bundle 2026-11-25)
+
+- retime failed on S02E02: "1 edit(s) failing" at 31:03.1 (out 1863.1 s). The LD and DVD differ there by one frame
+  (33 ms). `locate_switch` decides where the next line takes over by which line's prediction matches better — but
+  each match searches ±50 ms (`SCAN_SEARCH_S`), so for a step that small both match equally (score difference 0.0,
+  "clear": false) and the switch fell back to a point ~8 s before the real edit. Verification caught it: chunks
+  1860–1870 s were +25 ms against −5 ms everywhere else, back to −6 ms by 1885 s.
+- Now a step no larger than twice the search is located by the measured lag itself (which line predicts it),
+  weighted by correlation; `clear` says whether the split is clean. Larger steps keep the score scan.
+- The owner's "Restart from here" on ld-audio would not have helped (same inputs, same placement); restart from
+  retime after updating.
+- Test: 33 ms, −33 ms and 66 ms steps placed within 0.5 s on synthetic envelopes (the old scan saw 0.0 difference).
+  Suite 666 passed.

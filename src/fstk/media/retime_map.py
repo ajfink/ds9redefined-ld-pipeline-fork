@@ -157,13 +157,45 @@ def _match(ld_env, dvd_env, hop: float, wav_c: float, dvd_c: float) -> float:
     return float(np.max(slide_corr(x, y)))
 
 
+def _lag(ld_env, dvd_env, hop: float, wav_c: float, dvd_c: float, search: float) -> tuple[float, float]:
+    """(DVD lag in seconds from ``dvd_c`` that best matches the LD window at ``wav_c``, its correlation)."""
+    n = round(SCAN_WINDOW_S / hop)
+    a = round((wav_c - SCAN_WINDOW_S / 2) / hop)
+    lo = round((dvd_c - SCAN_WINDOW_S / 2 - search) / hop)
+    x = ld_env[max(a, 0):max(a, 0) + n]
+    y = dvd_env[lo:lo + n + round(2 * search / hop)] if lo >= 0 else np.empty(0)
+    if a < 0 or len(x) < n or len(y) < n + round(2 * search / hop) or np.std(x) < 1e-3:
+        return float("nan"), float("nan")
+    from fstk.media.dvd_audio import _parabolic, slide_corr
+
+    sc = slide_corr(x, y)
+    k = int(np.argmax(sc))
+    return (k + _parabolic(sc, k)) * hop - search, float(sc[k])
+
+
 def locate_switch(a: Line, b: Line, ld_env: np.ndarray, dvd_env: np.ndarray, hop: float) -> tuple[float, dict]:
-    """LD WAV time where line ``b`` takes over from line ``a`` (fine scan between their windows)."""
+    """LD WAV time where line ``b`` takes over from line ``a`` (fine scan between their windows).
+
+    A step no larger than the match's own search (``SCAN_SEARCH_S`` each way) cannot be told apart by "which line
+    matches better": each match slides onto the best lag and both score the same. For those the scan measures the
+    lag itself and asks which line predicts it (S02E02: a one-frame, 33 ms step at 31:03 was placed ~10 s early by
+    the score scan, "clear": false, and the retimed audio sat 30 ms late until the real edit)."""
     lo, hi = a.wav_end - SCAN_WINDOW_S, b.wav_start + SCAN_WINDOW_S
     cs = np.arange(lo, hi + 1e-9, SCAN_STEP_S)
-    za = np.array([_match(ld_env, dvd_env, hop, c, a.dvd(c)) for c in cs])
-    zb = np.array([_match(ld_env, dvd_env, hop, c, b.dvd(c)) for c in cs])
-    z = np.nan_to_num(zb - za)
+    mid = (a.wav_end + b.wav_start) / 2
+    step = b.dvd(mid) - a.dvd(mid)
+    method = "score"
+    if abs(step) <= 2 * SCAN_SEARCH_S:
+        method = "lag"
+        z = np.zeros(len(cs))
+        for i, c in enumerate(cs):
+            lag, corr = _lag(ld_env, dvd_env, hop, c, a.dvd(c), abs(step) + SCAN_SEARCH_S)
+            if np.isfinite(lag) and corr >= MIN_CORR:
+                z[i] = (abs(lag) - abs(lag - step)) / max(abs(step), hop) * corr   # >0: b's lag, <0: a's
+    else:
+        za = np.array([_match(ld_env, dvd_env, hop, c, a.dvd(c)) for c in cs])
+        zb = np.array([_match(ld_env, dvd_env, hop, c, b.dvd(c)) for c in cs])
+        z = np.nan_to_num(zb - za)
     # best split: before it a explains better, after it b does
     cost = [np.sum(np.maximum(z[:k], 0)) + np.sum(np.maximum(-z[k:], 0)) for k in range(len(z) + 1)]
     k = int(np.argmin(cost))
@@ -177,7 +209,12 @@ def locate_switch(a: Line, b: Line, ld_env: np.ndarray, dvd_env: np.ndarray, hop
         k = best[int(np.argmin(qs))]
     w = float(cs[min(k, len(cs) - 1)]) if k < len(cs) else float(hi)
     w = min(max(w, a.wav_end - SCAN_WINDOW_S / 2), b.wav_start + SCAN_WINDOW_S / 2)
-    return w, {"scan_points": len(cs), "clear": bool(np.nanmax(np.abs(z)) > 0.05) if len(z) else False}
+    if method == "lag":
+        total = float(np.sum(np.abs(z)))
+        clear = bool(total > 0 and cost[k] <= 0.2 * total and np.any(z[:k] < 0) and np.any(z[k:] > 0))
+    else:
+        clear = bool(np.nanmax(np.abs(z)) > 0.05) if len(z) else False
+    return w, {"scan_points": len(cs), "clear": clear, "method": method}
 
 
 def build_map(windows: list[dict], *, intercept: float, slope: float, delta_s: float, total_s: float,
