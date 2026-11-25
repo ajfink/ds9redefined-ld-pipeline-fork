@@ -367,9 +367,35 @@ class Services:
         evidence = [Path(p) for p in review.evidence]
         if not evidence:
             raise FstkError("this step produced no evidence files to review")
-        return ws.approvals.record(review=review.review, decision=decision, note=note, actor=actor,
+        path = ws.approvals.record(review=review.review, decision=decision, note=note, actor=actor,
                                    evidence=evidence, manifest=ws.store.load(),
                                    extra={"job": review.job, "step": review.step})
+        self.last_cleanup = None
+        if review.review == "delivery" and decision == "APPROVED":
+            self.last_cleanup = self.clean_leftovers(episode, actor=actor)
+        return path
+
+    def clean_leftovers(self, episode: str | EpisodeId, *, actor: str) -> dict[str, Any]:
+        """Once the final output is approved: delete files of attempts that cannot be used again
+        (``fstk.workspace.leftovers``), and keep a report of what went. Never raises: a refusal is reported."""
+        from fstk.core.fsio import atomic_write_json
+        from fstk.core.timeutil import utc_now_iso, utc_stamp
+        from fstk.workspace.leftovers import remove_leftovers
+
+        ws = self.workspace(episode)
+        try:
+            removed = remove_leftovers(self.profile, ws.episode, ws.store.load())
+        except (FstkError, OSError) as exc:
+            return {"removed": [], "bytes": 0, "error": str(exc)}
+        doc = {"schema": "fstk-leftovers-removed-v1", "created_utc": utc_now_iso(), "episode": ws.episode.canonical,
+               "by": actor, "why": "final output approved",
+               "removed": [{"path": str(x.path), "why": x.why, "bytes": x.bytes} for x in removed],
+               "bytes": sum(x.bytes for x in removed)}
+        if removed:
+            report = self.profile.root("reports", ws.episode) / f"leftovers-removed-{utc_stamp().lower()}.json"
+            atomic_write_json(report, doc)
+            doc["report"] = str(report)
+        return doc
 
     # ---------------------------------------------------------------- EFM capture review
     def _ctx(self, episode: str | EpisodeId, actor: str = "ui"):

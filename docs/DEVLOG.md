@@ -1572,3 +1572,16 @@ names that no longer exist; required tools never found) and, if any, lists them 
 - Now encode sets such a leftover aside as `<name>.previous-attempt.mkv` (replacing an older one) and says so in
   the step's plan summary. On PC-A the file was moved aside by hand the same way.
 - Test: a leftover `.tmp.mkv` is kept as `.previous-attempt.mkv` and the encode passes. Suite 667 passed.
+
+## CP71 — leftover files go once the final output is approved (owner, 2026-11-25)
+
+- Owner: "delete or overwrite mistake files that can't be used again once the final output is approved".
+- `fstk.workspace.leftovers`: when the `delivery` review approves the deliverable (`Services.decide`), these are
+  deleted from the episode's own working folders: `*.previous-attempt.*` (a failed encode's file, CP70), any
+  `*.tmp.*` / `*.tmp` / `*.partial*` a stopped step left, earlier revisions of the encode and the deliverable in the
+  output folder that the manifest no longer names, and the audio a superseded remux encoded for them. Kept: every
+  file the manifest names, reports, captures, the DVD. Nothing is removed while a job of the episode runs, every path
+  must sit inside the episode's folders, and the list (with sizes and why) is saved as
+  `reports/leftovers-removed-<stamp>.json` and written to the log. A rejection removes nothing.
+- Tests: what is listed (and not), named files kept, refusal while a job runs, approval clears and records, rejection
+  does not. Suite 671 passed.

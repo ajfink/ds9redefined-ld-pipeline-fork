@@ -579,6 +579,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Decision not recorded", str(exc))
             return
         self.append_log(f"{decision} recorded: {path}")
+        self._log_cleanup(getattr(self.services, "last_cleanup", None))
         self.show_episode(self.episode)
         name = self.REVIEW_NAMES.get(p.review, p.review)
         if decision == "APPROVED":
@@ -656,10 +657,26 @@ class MainWindow(QMainWindow):
                                   "border-radius: 4px; font-weight: 600;")
         self.banner.setVisible(bool(text))
 
+    def _log_cleanup(self, doc: dict | None) -> None:
+        """After the final output is approved: what was cleared away (files of attempts that cannot be reused)."""
+        if not doc:
+            return
+        if doc.get("error"):
+            self.append_log(f"leftover files were not removed: {doc['error']}")
+            return
+        if not doc["removed"]:
+            self.append_log("final output approved: no leftover files to remove")
+            return
+        self.append_log(f"final output approved: removed {len(doc['removed'])} leftover file(s), "
+                        f"{doc['bytes'] / 2**30:.1f} GiB (list: {doc.get('report')})")
+        for x in doc["removed"]:
+            self.append_log(f"  removed {x['path']} — {x['why']}")
+
     def on_delivery_decided(self, path: str) -> None:
         import json
 
         self.append_log(f"delivery decision recorded: {path}")
+        self._log_cleanup(getattr(self.services, "last_cleanup", None))
         if self.episode:
             self.show_episode(self.episode)
         try:
