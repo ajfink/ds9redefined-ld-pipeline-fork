@@ -1430,3 +1430,23 @@ names that no longer exist; required tools never found) and, if any, lists them 
   this container, so something machine-side adds to it (not yet measured). Options for the owner: render the
   finished chain once to a lossless intermediate both steps read, and/or batch neighbouring repair ranges.
 - Tests: large-input scope, verifying note. Full suite 638 passed.
+
+## CP63 — the programme start is found positively: the DVD's opening pictures on the LD (Flex bundle 2026-11-24 17:19)
+
+- S02E02 (Flex): the alignment review showed spot checks on the LD's warning cards and "Feature Presentation".
+  Report: an "act 1" at 4.0–40.0 s whose matches hopped across the DVD (offsets +566 → +54, RMS **52 frames**; real
+  acts 0.3–1.0) — the cards each matched some DVD picture loosely. `origin_master_frame` (the head trim's anchor)
+  was 4.0 s instead of the real 49.5 s; approving would have started the episode on the warning cards. The owner
+  rejected it (right).
+- Fix (owner's idea, made the primary rule): `alignment.find_opening` slides the DVD's first ~12 s of textured
+  picture, as one sequence, over the first 15 min of the LD; found only with mean NCC ≥ 0.80 and ≥ 0.15 above any
+  place more than 45 frames away. A DVD-only logo is skipped by trying the next stretch after a black gap (up to 4).
+  Found: that LD frame is the frame-exact programme origin and every LD sample before it is set aside as LD-only
+  (`ld_only_edges` in the report). Not found, or the first act disagrees with it by > 2 frames: NEEDS-REVIEW with the
+  reason. Second safety net: a short edge act whose samples scatter > 5 frames RMS from its own line is LD-only.
+- Real data, S01E20 (Legion descriptors): opening found at LD 1514, NCC 0.974 vs runner-up 0.52, 0.5 s; full
+  alignment unchanged (AUTO-ACCEPTED, offset −1453, consistent with the existing head trim at fade-up 1514).
+- Tests: junk first act reproduced and removed (both rules), DVD-only logo, opening not found → review.
+  Full suite 641 passed.
+- Still open for S02E02: a 4.9 s stretch at 19:03.8–19:08.7 where the best DVD picture is 3 frames from the act line
+  (NCC 0.93 vs 0.85). Real, not caused by the lead-in; it keeps the review for the owner to look at with Blink.

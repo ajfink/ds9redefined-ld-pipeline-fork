@@ -134,3 +134,56 @@ def test_real_s01e20_samples_give_the_act_structure(fixtures):
     big = [(round(b["before_s"]), round(b["jump_frames"])) for b in res.breaks if abs(b["jump_frames"]) >= 4]
     assert [t for t, _ in big] == [283, 664, 971, 1455, 1803]
     assert [j for _, j in big] == [5, 6, -4, 15, 15]
+
+
+def test_ld_only_cards_that_loosely_match_random_dvd_pictures_are_not_the_programme_start():
+    """Flex 2026-11-24, S02E02: the warning cards and "Feature Presentation" (4–40 s) each matched some DVD
+    picture loosely, the path hopped across the DVD (offsets +566 → +54, RMS 52 frames), that became "act 1",
+    and the programme origin — the head trim — was put at 4.0 s instead of 49.5 s."""
+    rng = np.random.default_rng(11)
+    prog = programme(rng)
+    dvd = np.vstack([black(30), prog])
+    cards = []
+    for k in range(8):           # 8 still cards of 50 frames, each loosely like some unrelated DVD picture nearby
+        src = dvd[50 * k + int(rng.integers(40, 160))].astype(float)
+        card = 0.6 * (src - 128) + rng.normal(0, 6, (50, al.FEATURES))
+        cards.append(np.clip(128 + card, 0, 255).astype(np.uint8))
+    lead = np.vstack(cards)
+    ld = np.vstack([lead, black(20), prog, black(40)])
+    start = len(lead) + 20
+    raw = al.align(ld, dvd, params=PARAMS)
+    al.fit_acts(raw)
+    assert raw.acts and raw.acts[0].start_frame < len(lead), "the test must reproduce the junk first act"
+    assert raw.acts[0].residual_rms > al.MODEL["edge_act_max_rms"]
+    res = al.measure(ld, dvd, params=PARAMS)
+    # the DVD's opening pictures, found as one run on the LD, fix the programme start to the frame
+    assert res.opening["found"] and res.opening["dvd_frame"] == 30, res.opening
+    assert res.origin_master_frame == start, (res.origin_master_frame, start)
+    assert res.ld_only and res.ld_only[0]["where"] == "start" and res.ld_only[0]["end_s"] <= start / al.FPS
+    assert np.allclose(res.acts[0].values, 30 - start, atol=0.6) and res.acts[0].start_frame >= start
+    assert not any("search edge" in r or "opening" in r for r in res.reasons), res.reasons
+    # without the opening search the edge rule alone still keeps the junk out of the programme
+    raw2 = al.align(ld, dvd, params=PARAMS)
+    al.fit_acts(raw2)
+    al.drop_unmatched_edges(raw2)
+    assert abs(raw2.origin_master_frame - start) <= PARAMS["step"]
+
+
+def test_a_dvd_that_opens_with_its_own_logo_is_still_found_after_the_black_gap():
+    rng = np.random.default_rng(3)
+    prog = programme(rng)
+    logo = scene(90, np.random.default_rng(42))                  # DVD-only logo, then black, then the programme
+    dvd = np.vstack([black(10), logo, black(25), prog])
+    lead = scene(300, np.random.default_rng(77))                  # LD-only front matter
+    ld = np.vstack([lead, black(30), prog, black(40)])
+    op = al.find_opening(ld, dvd)
+    assert op["found"] and op["dvd_frame"] == 125 and op["master_frame"] == 330, op
+    assert len(op["tried"]) == 2 and not op["tried"][0]["ncc"] >= al.OPENING["min_ncc"]
+
+
+def test_an_opening_that_cannot_be_found_sends_the_alignment_to_review(episode):
+    ld, dvd, info = episode
+    other = programme(np.random.default_rng(1234))
+    res = al.measure(other[:len(ld)], dvd, params=PARAMS)           # a different episode's LD
+    assert not res.opening["found"] and res.decision == "NEEDS-REVIEW"
+    assert any("opening pictures were not found" in r for r in res.reasons)

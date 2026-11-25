@@ -49,7 +49,19 @@ DEFAULTS = {
 #: act the offset is a continuous piecewise-linear curve with knots every ``knot_s`` (speed
 #: wander), fitted robustly with a second-difference penalty of weight ``smoothness``.
 MODEL = {"break_frames": 2.5, "break_window_s": 20.0, "knot_s": 30.0, "smoothness": 4.0,
-         "consistency_radius": 8, "consistency_tolerance": 0.02}
+         "consistency_radius": 8, "consistency_tolerance": 0.02,
+         # An "act" at the very start or end whose samples scatter this far (RMS, frames) from its own line is not
+         # DVD picture: it is LD-only material (warning cards, "Feature Presentation", logos) whose loose matches
+         # landed on random DVD frames. S02E02 (Flex 2026-11-24): 4.0–40.0 s, RMS 52 frames, offsets +566 → +54,
+         # against real acts at RMS 0.3–1.0. Only short edge acts qualify; anything longer goes to review.
+         "edge_act_max_rms": 5.0, "edge_act_max_s": 180.0}
+
+#: Programme opening (owner suggestion 2026-11-24): the DVD's first seconds of picture are searched for, as one
+#: sequence, near the start of the LD. Where they are found clearly is the programme start; everything on the LD
+#: before it is LD-only (warning cards, "Feature Presentation", logos — whatever they look like). A DVD that opens
+#: with its own logo is handled by trying the next stretch of picture after a black gap.
+OPENING = {"seconds": 12.0, "stride": 3, "search_s": 900.0, "dvd_search_s": 90.0, "tries": 4,
+           "min_ncc": 0.80, "min_margin": 0.15, "exclude_frames": 45, "min_textured": 0.5}
 
 #: Automatic-acceptance thresholds. Calibrated on S01E20, whose v38 alignment the owner approved
 #: visually: overall 0.993, worst act 0.99 after break refinement, longest inconsistent span 2.4 s.
@@ -183,6 +195,8 @@ class AlignmentResult:
     reverse_agreement: float | None = None
     decision: str = ""
     reasons: list[str] = field(default_factory=list)
+    ld_only: list[dict[str, Any]] = field(default_factory=list)   # edge material set aside as having no DVD match
+    opening: dict[str, Any] = field(default_factory=dict)         # where the DVD's opening pictures are on the LD
 
     @property
     def evidenced(self) -> np.ndarray:
@@ -191,6 +205,8 @@ class AlignmentResult:
 
     @property
     def origin_master_frame(self) -> int | None:
+        if self.opening.get("found"):
+            return int(self.opening["master_frame"])   # frame-exact, positively identified
         hit = np.flatnonzero(self.evidenced)
         return int(self.idxs[hit[0]]) if len(hit) else None
 
@@ -211,7 +227,8 @@ class AlignmentResult:
                 "acts": acts, "breaks": self.breaks,
                 "common_slope_ppm": None if self.common_slope is None else round(self.common_slope * 1e6, 1),
                 "consistency": self.consistency, "reverse_agreement": self.reverse_agreement,
-                "decision": self.decision, "reasons": self.reasons, "acceptance_thresholds": ACCEPT}
+                "decision": self.decision, "reasons": self.reasons, "acceptance_thresholds": ACCEPT,
+                "ld_only_edges": self.ld_only, "opening": self.opening}
 
 
 def _subframe(em: np.ndarray, path: np.ndarray, offs: np.ndarray) -> np.ndarray:
@@ -395,6 +412,95 @@ def fit_acts(res: AlignmentResult) -> None:
                            "jump_frames": round(float(jump), 2)})
 
 
+def find_opening(master: np.ndarray, dvd: np.ndarray, *, flat_std: float = DEFAULTS["flat_std"]) -> dict[str, Any]:
+    """Where the DVD's opening pictures are on the LD (see ``OPENING``): a whole run of textured DVD frames is slid
+    along the start of the LD and must match there clearly, not just frame by frame somewhere."""
+    o = OPENING
+    length = round(o["seconds"] * FPS)
+    dvd_lim = min(len(dvd), int(o["dvd_search_s"] * FPS) + length)
+    dflat = flat_rows(np.asarray(dvd[:dvd_lim]), flat_std)
+    span = min(len(master), int(o["search_s"] * FPS) + length)
+    if span <= length or dvd_lim <= length:
+        return {"found": False, "why": "too short to search"}
+    mnorm = normalize_rows(np.asarray(master[:span]))
+    tried: list[dict[str, Any]] = []
+    start = 0
+    for _ in range(o["tries"]):
+        textured = np.flatnonzero(~dflat[start:dvd_lim - length])
+        if not len(textured):
+            break
+        d0 = start + int(textured[0])
+        cols = d0 + np.arange(0, length, o["stride"])
+        keep = ~dflat[cols]
+        if keep.mean() < o["min_textured"]:
+            start = d0 + length
+            continue
+        cols = cols[keep]
+        dnorm = normalize_rows(np.asarray(dvd[cols]))
+        corr = mnorm @ dnorm.T                                   # LD frame × opening frame
+        npos = span - length
+        score = np.zeros(npos, np.float64)
+        for j, c in enumerate(cols - d0):
+            score += corr[c:c + npos, j]
+        score /= len(cols)
+        best = int(np.argmax(score))
+        others = np.concatenate((score[:max(0, best - o["exclude_frames"])], score[best + o["exclude_frames"]:]))
+        runner = float(others.max()) if others.size else -1.0
+        attempt = {"dvd_frame": d0, "master_frame": best, "ncc": round(float(score[best]), 3),
+                   "runner_up_ncc": round(runner, 3), "frames_compared": len(cols)}
+        tried.append(attempt)
+        if score[best] >= o["min_ncc"] and score[best] - runner >= o["min_margin"]:
+            return {"found": True, **attempt, "offset": d0 - best, "tried": tried}
+        # not found: maybe a DVD-only logo or card; try the next stretch of picture after a black gap
+        gap = np.flatnonzero(dflat[d0:dvd_lim])
+        if not len(gap):
+            break
+        start = d0 + int(gap[0])
+    return {"found": False, "tried": tried,
+            "why": "the DVD's opening pictures were not found clearly near the start of the LD"}
+
+
+def apply_opening(res: AlignmentResult, opening: dict[str, Any]) -> None:
+    """Everything on the LD before the identified opening is LD-only: its samples become unmatched."""
+    res.opening = opening
+    if not opening.get("found"):
+        return
+    cut = int(opening["master_frame"]) - res.params["step"] // 2
+    sel = res.idxs < cut
+    if (res.matched & sel).any():
+        res.ld_only.append({"where": "start", "start_s": round(float(res.idxs[sel][0]) / FPS, 2),
+                            "end_s": round(cut / FPS, 2), "samples": int((res.matched & sel).sum()),
+                            "why": "before the DVD's opening pictures: LD-only material (warnings, titles, logos)"})
+    res.matched[sel] = False
+    res.offsets[sel] = np.iinfo(np.int32).min
+    res.sub[sel] = np.nan
+    res.ncc[sel] = np.nan
+    fit_acts(res)
+
+
+def drop_unmatched_edges(res: AlignmentResult) -> None:
+    """Set aside a first or last act that is not DVD picture (see ``MODEL["edge_act_max_rms"]``): its samples
+    become unmatched, the acts are fitted again, and the programme origin moves to the first real act."""
+    sentinel = np.iinfo(np.int32).min
+    while res.acts:
+        hit = next(((a, w) for a, w in ((res.acts[0], "start"), (res.acts[-1], "end"))
+                    if a.residual_rms > MODEL["edge_act_max_rms"] and a.seconds <= MODEL["edge_act_max_s"]), None)
+        if hit is None:
+            return
+        act, where = hit
+        sel = (res.idxs >= act.start_frame) & (res.idxs <= act.end_frame)
+        res.matched[sel] = False
+        res.offsets[sel] = sentinel
+        res.sub[sel] = np.nan
+        res.ncc[sel] = np.nan
+        res.ld_only.append({"where": where, "start_s": round(act.start_frame / FPS, 2),
+                            "end_s": round(act.end_frame / FPS, 2), "residual_rms_frames": round(act.residual_rms, 1),
+                            "samples": int(sel.sum()),
+                            "why": "its matches scatter across the DVD instead of following one line: LD-only "
+                                   "material (warnings, titles, logos), not programme"})
+        fit_acts(res)
+
+
 def consistency_check(master: np.ndarray, dvd: np.ndarray, res: AlignmentResult) -> None:
     """Every textured master frame of every act: does the act line pick (±1) its best DVD match?
 
@@ -462,6 +568,15 @@ def decide(res: AlignmentResult) -> None:
     acts = res.acts
     if not acts:
         reasons.append("no DVD picture matched")
+    op = res.opening
+    if not op.get("found"):
+        reasons.append(op.get("why") or "the DVD's opening pictures were not looked for")
+    elif acts:
+        first = acts[0]
+        line = first.offset(float(op["master_frame"])) if first.start_frame <= op["master_frame"] + p["step"] else None
+        if line is None or abs(line - op["offset"]) > 2.0:
+            reasons.append(f"the DVD's opening is at LD {op['master_frame'] / FPS:.1f}s, but the first act does not "
+                           "start there with the same offset")
     ev = res.evidenced
     edge = ev & ((res.offsets == p["min_offset"]) | (res.offsets == p["max_offset"]))
     if edge.any():
@@ -510,6 +625,10 @@ def measure(master: np.ndarray, dvd: np.ndarray, *, params: dict[str, Any] | Non
     """Forward path → act model → frame-by-frame consistency → reverse check → decision."""
     fwd = align(master, dvd, params=params, progress=progress)
     fit_acts(fwd)
+    if progress:
+        progress(0.55, "finding the DVD's opening pictures on the LD")
+    apply_opening(fwd, find_opening(master, dvd, flat_std=fwd.params["flat_std"]))
+    drop_unmatched_edges(fwd)
     if progress:
         progress(0.6, "checking every frame against the act lines")
     consistency_check(master, dvd, fwd)
