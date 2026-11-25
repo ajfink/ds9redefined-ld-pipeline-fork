@@ -55,20 +55,20 @@ It stops for one human review, the A/V check (several 15 s chunks, or rerun with
 early/late"). Steps whose evidence is already current are reused. New runtime dependency:
 `pip install soxr`.
 
-## Several machines (Legion, Flex, Mac)
+## Several machines (e.g. two Windows PCs and a Mac)
 Each machine keeps its own profile, state and media. To see each other's episodes and pass an
 episode from one machine to another, give every profile the same shared folder (not the v38
 release tree) and, for disks several machines mount, the same volume names:
 ```json
 "shared_root": "W:\\fstk-shared",
-"volumes": {"flex-e-hdd": "\\\\LENOVOFLEX\\e hdd"}
+"volumes": {"media-hdd": "\\\\FILESERVER\\media"}
 ```
-(on the Mac: `"shared_root": "/Volumes/fstk-shared"`, `"volumes": {"flex-e-hdd": "/Volumes/e hdd"}`).
+(on the Mac: `"shared_root": "/Volumes/fstk-shared"`, `"volumes": {"media-hdd": "/Volumes/media"}`).
 ```
 fstk share device                                  # this machine's folder in the share
 fstk share status [DS9:S01E20]                     # which machines hold which episodes
-fstk share handoff DS9:S01E20 --to MAC-M5-1A2B3C4D --note "EFM done; next: alignment"
-fstk share adopt DS9:S01E20 --from LENOVO-LEGION-5-D02C1DA9    # on the Mac
+fstk share handoff DS9:S01E20 --to MAC-1A2B3C4D --note "EFM done; next: alignment"
+fstk share adopt DS9:S01E20 --from PC-1-0A1B2C3D    # on the Mac
 fstk share reclaim DS9:S01E20                      # undo a handoff not yet adopted
 ```
 The app shows the same in the episode picker ("Other devices", "Adopt from other device") and
