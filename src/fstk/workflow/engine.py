@@ -524,7 +524,9 @@ class Engine:
             plan_copy = self.ws.job_dir(self.job) / "plan.json"
             if not plan_copy.exists():
                 atomic_write_json(plan_copy, self.plan)
+            self._emit("verifying", detail="checking the files of finished steps before carrying on")
             self._reconcile()
+            self._emit("verified")
             self._save()
             self._schedule()
             self._save()

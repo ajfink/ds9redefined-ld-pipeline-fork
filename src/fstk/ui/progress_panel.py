@@ -163,6 +163,8 @@ class ProgressPanel(QWidget):
             parts.append("time left: not known yet (needs timings from earlier runs)")
         if snap.paused:
             parts.append("PAUSED: tools are frozen and resume exactly where they stopped")
+        if self.tracker.note:
+            parts.append(self.tracker.note)
         self.detail.setText("   ·   ".join(parts))
         for row, step in enumerate(snap.steps):
             self._row(row, step, snap)

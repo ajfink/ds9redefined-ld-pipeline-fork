@@ -1413,3 +1413,20 @@ names that no longer exist; required tools never found) and, if any, lists them 
   even motion, half computer-made, can warp effects and soften grain), and that the choice is made in the final
   review's "Video-origin stretches" tab. Same words in that tab's introduction and choice tooltip; cadence-evidence's
   tip says it finds these stretches; stage title says "effects finished on video". Stage reference regenerated.
+
+## CP62 — 16:57 bundles (Legion S01E20, Flex S02E02): resume confirmed; two fixes; one open item
+
+- Resume worked on both: the Legion's job ran only stretch-preview (passed, 22 min, no retry needed) and
+  video-quality; the Flex kept stack-render (36 s check, migration recognised) and re-ran cadence (queued stale
+  since 14:20, before CP56/CP60), then DVD alignment, which restarted after the app was closed mid-step.
+- Fix 1: a 35 GB input was fully hashed on every resume when its stage named no scope (cadence's master: Flex
+  1 min 49 s of silence after Run, Legion ~50 s). Inputs ≥ 1 GiB now default to size + head/tail, like large
+  outputs (`input_scope_for`). Existing records keep their scope until the step next runs.
+- Fix 2: the resume check now tells the Progress tab ("checking the files of finished steps …") instead of silence.
+- Open: video-quality on the Legion scans the S01E20 chain at ~4–5 frames/s (10,560 of 65,392 frames in 50 min;
+  ~3–4 h total), and the final encode runs the same chain again. Measured here on 2 cores with the same density of
+  isolated QTGMC repair ranges (1 per ~55 frames; S01E20 has 1,497 ranges, 3,075 frames): the chain runs ~3× slower
+  than without them (16 vs 49 fps), i.e. each isolated repair pays QTGMC's start-up. The Legion is slower still than
+  this container, so something machine-side adds to it (not yet measured). Options for the owner: render the
+  finished chain once to a lossless intermediate both steps read, and/or batch neighbouring repair ranges.
+- Tests: large-input scope, verifying note. Full suite 638 passed.

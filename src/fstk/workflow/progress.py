@@ -186,6 +186,7 @@ class ProgressTracker:
     plan: Mapping[str, Any]
     timings: Timings = field(default_factory=lambda: Timings(None))
     clock: Callable[[], float] = time.monotonic
+    note: str = ""                               # what the run is doing between steps (e.g. resume checks)
 
     def __post_init__(self) -> None:
         self.steps: dict[str, StepProgress] = {}
@@ -225,6 +226,9 @@ class ProgressTracker:
                     if s.status == RUNNING and s.started is not None:
                         s.started += gap
                 self.paused_at = None
+            return
+        if kind in ("verifying", "verified"):          # resume check of finished steps (can take a minute)
+            self.note = str(event.get("detail", "")) if kind == "verifying" else ""
             return
         if kind == "steps-carried-over":                 # finished in an earlier job and still valid: not redone
             for carried in event.get("steps") or []:

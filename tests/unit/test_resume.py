@@ -204,3 +204,30 @@ def test_an_upstream_rerun_that_fails_keeps_later_steps_waiting_then_compares_wh
     fixed = run(env, chain("j"))                                         # next session: m runs, same result
     assert fixed["steps"]["a"]["status"] == fixed["steps"]["b"]["status"] == "passed"
     assert (runs("a.txt"), runs("b.txt")) == (1, 1)
+
+
+def test_a_large_input_is_checked_by_size_and_ends_not_read_in_full(tmp_path):
+    """Flex 2026-11-24 16:36: cadence's 35 GB master input was fully hashed on every resume (1 min 49 s silent)."""
+    from fstk.core.hashing import SCOPE_FULL, SCOPE_HEAD_TAIL, SCOPE_JSON
+    from fstk.stages.base import LARGE_OUTPUT_BYTES, input_scope_for
+
+    big = tmp_path / "master.mkv"
+    with big.open("wb") as f:                                            # sparse: no real 1 GiB written
+        f.truncate(LARGE_OUTPUT_BYTES)
+    small = tmp_path / "small.flac"
+    small.write_bytes(b"x")
+    (tmp_path / "r.json").write_text("{}")
+    assert input_scope_for(big, {}) == SCOPE_HEAD_TAIL
+    assert input_scope_for(small, {}) == SCOPE_FULL
+    assert input_scope_for(tmp_path / "r.json", {}) == SCOPE_JSON
+    assert input_scope_for(big, {str(big): SCOPE_FULL}) == SCOPE_FULL   # a stage can still ask for a full hash
+
+
+def test_the_progress_panel_says_when_the_run_is_checking_finished_steps():
+    from fstk.workflow.progress import ProgressTracker
+
+    t = ProgressTracker({"steps": [{"id": "m", "stage": "t-measure"}]})
+    t.on_event({"kind": "verifying", "detail": "checking the files of finished steps before carrying on"})
+    assert "checking" in t.note
+    t.on_event({"kind": "verified"})
+    assert t.note == ""
