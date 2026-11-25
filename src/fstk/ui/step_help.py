@@ -38,9 +38,10 @@ STEP_HELP: dict[str, tuple[str, str, str]] = {
         "The stack master that every picture step reads.",
         ""),
     "cadence-evidence": (
-        "Measures the film cadence (which fields belong to which film frame) across the whole episode and finds "
-        "the stretches that need repair.",
-        "The cadence map and the repair ranges for video-trim.",
+        "Measures the film cadence (which fields belong to which film frame) across the whole episode, finds the "
+        "stretches that need repair, and finds the visual-effects stretches that were finished on video rather "
+        "than film (see “Preview video-origin stretches”).",
+        "The cadence map, the repair ranges and the list of video-origin stretches for video-trim.",
         "Stops for your review only when the measurements fall outside what earlier episodes showed."),
     "dvd-probe": (
         "Checks the DVD rip: its streams, timestamps, frame count, and a fingerprint of the file.",
@@ -71,10 +72,18 @@ STEP_HELP: dict[str, tuple[str, str, str]] = {
         "The retimed 5.1 track and subtitles.",
         ""),
     "stretch-preview": (
-        "For each stretch shot on video rather than film, renders a short side-by-side clip: nearest real frames "
-        "(the default) against motion-interpolated frames.",
-        "Preview clips for the final review; nothing here is delivered.",
-        ""),
+        "<b>Why:</b> DS9's scenes were shot on film (24 pictures a second), but most of its visual effects (space "
+        "shots, phasers, transporter beams, composites) and some titles were finished on video, which has a new "
+        "picture 60 times a second. For film the app recovers the original 24 pictures exactly. A video stretch has "
+        "no hidden film pictures to recover, so delivering it at the same 24 a second as the rest means choosing "
+        "which moments to show. Simply dropping every fifth picture would make motion visibly hitch."
+        "<br><br><b>What:</b> for each such stretch this makes a short side-by-side clip of the two ways to do it. "
+        "Left, <i>nearest real frames</i> (the default): every picture is a real captured one, and motion is very "
+        "slightly uneven. Right, <i>interpolated</i>: perfectly even motion, but half the pictures are made by the "
+        "computer, which can warp beams, explosions and starfields and softens grain.",
+        "Preview clips only; nothing here is delivered.",
+        "None in this step. In the final review (tab “Video-origin stretches”) you watch each clip and choose "
+        "for each stretch; the default needs no action."),
     "frame-fixes": (
         "Applies the frame fixes you chose in the final review (interpolate, patch a region, or borrow from the "
         "DVD). With none chosen it records the chain unchanged.",

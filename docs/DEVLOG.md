@@ -1402,3 +1402,14 @@ names that no longer exist; required tools never found) and, if any, lists them 
   opt-out stages, same-result and different-result upstream re-runs, upstream failing then passing). One existing
   test now asserts the new behaviour (a second delivery job keeps the first's finished step).
 - Full suite 636 passed, 1 skipped.
+
+## CP61 — the video-origin stretches explained (owner, 2026-11-24)
+
+- Owner: the stretch-preview tooltip "doesn't explain the Why and What well" (it is about the effects/CGI shots and
+  how they relate to the film scenes). Rewritten around both: DS9's scenes are film (24 pictures/s, recovered
+  exactly), most visual effects and some titles were finished on video (a new picture 60 times a second, no film
+  pictures to recover), so delivering them at 24/s means choosing moments; plain decimation would hitch. Then the
+  two choices with their trade-offs (nearest real frames: real pictures, very slightly uneven motion; interpolated:
+  even motion, half computer-made, can warp effects and soften grain), and that the choice is made in the final
+  review's "Video-origin stretches" tab. Same words in that tab's introduction and choice tooltip; cadence-evidence's
+  tip says it finds these stretches; stage title says "effects finished on video". Stage reference regenerated.

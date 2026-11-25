@@ -84,7 +84,7 @@ def output_window(seg: hybrid.Segment, head_trim: int, frames: int) -> tuple[int
 @register
 class StretchPreview(Stage):
     id = "stretch-preview"
-    title = "Preview video-origin stretches (nearest vs interpolated)"
+    title = "Preview video-origin stretches: effects finished on video (nearest vs interpolated)"
     description = ("Renders one side-by-side clip per video-origin stretch for the final review: nearest real frames "
                    "(default) against motion-compensated interpolation. Review-only clips; nothing delivered.")
     requires = (ArtifactExists("hybrid_plan"), ArtifactExists("stack_master"), ArtifactExists("di_map"),

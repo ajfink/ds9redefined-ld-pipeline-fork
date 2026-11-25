@@ -836,9 +836,14 @@ class DeliveryReview(QDialog):
         w = QWidget()
         lay = QVBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0)
-        intro = QLabel("These stretches were shot on video, not film. By default they are delivered from the nearest "
-                       "real frames. Press Preview to watch one (left: nearest real frames, right: interpolated), "
-                       "choose for each, then re-encode.")
+        intro = QLabel("These stretches were finished on video, not film: mostly visual effects (space shots, phasers, "
+                       "transporter beams, composites) and some titles. Video has a new picture 60 times a second "
+                       "and no hidden film pictures to recover, so delivering them at the film's 24 a second means "
+                       "choosing which moments to show. <b>Nearest real frames</b> (the default) shows only real "
+                       "captured pictures, with very slightly uneven motion. <b>Interpolated</b> gives perfectly even "
+                       "motion, but half its pictures are made by the computer and can warp effects or soften grain. "
+                       "Press Preview to compare them side by side (left: nearest, right: interpolated), choose for "
+                       "each stretch, then re-encode.")
         intro.setWordWrap(True)
         lay.addWidget(intro)
         self.stretch_box = QWidget()
@@ -878,8 +883,9 @@ class DeliveryReview(QDialog):
             play.setEnabled(bool(r.get("preview")))
             play.clicked.connect(lambda _c=False, i=i: self.play_stretch(i))
             box = QComboBox()
-            box.setToolTip("Nearest real frames: every output frame is a real captured frame (default). "
-                           "Interpolated: smoother, evenly spaced motion made by the interpolator.")
+            box.setToolTip("Nearest real frames (default): every picture is a real captured one; motion is very slightly "
+                           "uneven. Interpolated: perfectly even motion, but half the pictures are computer-made and "
+                           "can warp beams, explosions or starfields and soften grain.")
             box.addItem("Nearest real frames (default)", "nearest")
             box.addItem("Interpolated (even motion)", "interpolate")
             box.setCurrentIndex(0 if r["treatment"] == "nearest" else 1)

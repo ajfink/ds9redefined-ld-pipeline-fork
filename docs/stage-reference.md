@@ -206,7 +206,7 @@ Orc --process with artifact evidence validation; no human review (owner decision
 - writes: stack.frames
 - artifacts: stack_master
 
-## `stretch-preview` — Preview video-origin stretches (nearest vs interpolated)
+## `stretch-preview` — Preview video-origin stretches: effects finished on video (nearest vs interpolated)
 
 Renders one side-by-side clip per video-origin stretch for the final review: nearest real frames (default) against motion-compensated interpolation. Review-only clips; nothing delivered.
 
