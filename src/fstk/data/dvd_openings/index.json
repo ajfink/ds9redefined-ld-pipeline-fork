@@ -1,0 +1,191 @@
+{
+ "schema": "fstk-dvd-opening-index-v1",
+ "series": {
+  "DS9": [
+   {
+    "code": "S01E01",
+    "title": "Emissary",
+    "disc": "DS9S1D1",
+    "opening_dvd_frame": 59,
+    "seconds": 12.012,
+    "runner_up_ncc": 0.565
+   },
+   {
+    "code": "S01E03",
+    "title": "Past Prologue",
+    "disc": "DS9S1D1",
+    "opening_dvd_frame": 64,
+    "seconds": 12.012,
+    "runner_up_ncc": 0.164
+   },
+   {
+    "code": "S01E04",
+    "title": "A Man Alone",
+    "disc": "DS9S1D1",
+    "opening_dvd_frame": 61,
+    "seconds": 29.997,
+    "runner_up_ncc": 0.456
+   },
+   {
+    "code": "S01E05",
+    "title": "Babel",
+    "disc": "DS9S1D2",
+    "opening_dvd_frame": 35,
+    "seconds": 12.012,
+    "runner_up_ncc": 0.115
+   },
+   {
+    "code": "S01E06",
+    "title": "Captive Pursuit",
+    "disc": "DS9S1D2",
+    "opening_dvd_frame": 33,
+    "seconds": 12.012,
+    "runner_up_ncc": 0.2
+   },
+   {
+    "code": "S01E07",
+    "title": "Q-Less",
+    "disc": "DS9S1D2",
+    "opening_dvd_frame": 31,
+    "seconds": 12.012,
+    "runner_up_ncc": 0.339
+   },
+   {
+    "code": "S01E08",
+    "title": "Dax",
+    "disc": "DS9S1D2",
+    "opening_dvd_frame": 34,
+    "seconds": 12.012,
+    "runner_up_ncc": 0.218
+   },
+   {
+    "code": "S01E09",
+    "title": "The Passenger",
+    "disc": "DS9S1D3",
+    "opening_dvd_frame": 84,
+    "seconds": 12.012,
+    "runner_up_ncc": 0.611
+   },
+   {
+    "code": "S01E10",
+    "title": "Move Along Home",
+    "disc": "DS9S1D3",
+    "opening_dvd_frame": 59,
+    "seconds": 12.012,
+    "runner_up_ncc": 0.149
+   },
+   {
+    "code": "S01E11",
+    "title": "The Nagus",
+    "disc": "DS9S1D3",
+    "opening_dvd_frame": 41,
+    "seconds": 12.012,
+    "runner_up_ncc": 0.146
+   },
+   {
+    "code": "S01E12",
+    "title": "Vortex",
+    "disc": "DS9S1D3",
+    "opening_dvd_frame": 32,
+    "seconds": 12.012,
+    "runner_up_ncc": 0.13
+   },
+   {
+    "code": "S01E13",
+    "title": "Battle Lines",
+    "disc": "DS9S1D4",
+    "opening_dvd_frame": 33,
+    "seconds": 12.012,
+    "runner_up_ncc": 0.299
+   },
+   {
+    "code": "S01E14",
+    "title": "The Storyteller",
+    "disc": "DS9S1D4",
+    "opening_dvd_frame": 37,
+    "seconds": 12.012,
+    "runner_up_ncc": 0.151
+   },
+   {
+    "code": "S01E15",
+    "title": "Progress",
+    "disc": "DS9S1D4",
+    "opening_dvd_frame": 31,
+    "seconds": 12.012,
+    "runner_up_ncc": 0.166
+   },
+   {
+    "code": "S01E16",
+    "title": "If Wishes Were Horses",
+    "disc": "DS9S1D4",
+    "opening_dvd_frame": 33,
+    "seconds": 12.012,
+    "runner_up_ncc": 0.186
+   },
+   {
+    "code": "S01E17",
+    "title": "The Forsaken",
+    "disc": "DS9S1D5",
+    "opening_dvd_frame": 68,
+    "seconds": 12.012,
+    "runner_up_ncc": 0.154
+   },
+   {
+    "code": "S01E18",
+    "title": "Dramatis Personae",
+    "disc": "DS9S1D5",
+    "opening_dvd_frame": 61,
+    "seconds": 12.012,
+    "runner_up_ncc": 0.222
+   },
+   {
+    "code": "S01E19",
+    "title": "Duet",
+    "disc": "DS9S1D5",
+    "opening_dvd_frame": 60,
+    "seconds": 12.012,
+    "runner_up_ncc": 0.151
+   },
+   {
+    "code": "S01E20",
+    "title": "In The Hands of the Prophets",
+    "disc": "DS9S1D5",
+    "opening_dvd_frame": 61,
+    "seconds": 12.012,
+    "runner_up_ncc": 0.439
+   },
+   {
+    "code": "S02E01",
+    "title": "The Homecoming",
+    "disc": "DS9S2D1",
+    "opening_dvd_frame": 63,
+    "seconds": 12.012,
+    "runner_up_ncc": 0.107
+   },
+   {
+    "code": "S02E02",
+    "title": "The Circle",
+    "disc": "DS9S2D1",
+    "opening_dvd_frame": 61,
+    "seconds": 12.012,
+    "runner_up_ncc": 0.299
+   },
+   {
+    "code": "S02E03",
+    "title": "The Siege",
+    "disc": "DS9S2D1",
+    "opening_dvd_frame": 61,
+    "seconds": 12.012,
+    "runner_up_ncc": 0.251
+   },
+   {
+    "code": "S02E04",
+    "title": "Invasive Procedures",
+    "disc": "DS9S2D1",
+    "opening_dvd_frame": 114,
+    "seconds": 12.012,
+    "runner_up_ncc": 0.216
+   }
+  ]
+ }
+}

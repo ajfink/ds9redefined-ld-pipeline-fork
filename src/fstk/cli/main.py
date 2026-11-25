@@ -209,6 +209,57 @@ def cmd_stages(args) -> int:
     return 0
 
 
+def cmd_openings(args) -> int:
+    """DVD opening packs: export one from a DVD, list the packaged ones, or check one against a stack master."""
+    import json
+    import subprocess
+
+    from fstk.media import alignment as al
+    from fstk.media import opening_pack as packs
+    from fstk.tools import process
+    from fstk.tools.ffmpeg import FFmpeg
+
+    if args.sub == "list":
+        rows = []
+        for path in sorted(packs.PACK_ROOT.glob("*/*.npz")):
+            meta = packs.load_pack(path).meta
+            rows.append({k: meta.get(k) for k in ("series", "code", "title", "opening_dvd_frame", "seconds", "frames")})
+        _print(args, rows, "\n".join(f"{r['series']} {r['code']}  opening at DVD frame {r['opening_dvd_frame']:>4}  "
+                                     f"({r['seconds']:g} s)  {r['title'] or ''}" for r in rows) or "no packs")
+        return 0
+    prof = _profile(args)
+    ff = FFmpeg(prof.tool("ffmpeg"), prof.tool("ffprobe"))
+    from fstk.core.identity import EpisodeId
+
+    ep = EpisodeId.parse(args.episode)
+    if args.sub == "export":
+        frames = round(packs.EXPORT_S * al.FPS)
+        desc = ff.gray_thumbnails(Path(args.dvd), al.W, al.H, max_frames=frames)
+        version = subprocess.run([str(prof.tool("ffmpeg")), "-version"], capture_output=True, text=True,
+                                 check=False, **process.hidden()).stdout.splitlines()[0]
+        dvd = Path(args.dvd)
+        pack = packs.make_pack(desc, series=ep.series, code=ep.code, title=args.title, ffmpeg=version,
+                               source={"file": dvd.name, "bytes": dvd.stat().st_size})
+        runner = pack.meta["distinctiveness"][str(pack.seconds)]["runner_up_ncc"]
+        if runner is not None and runner > al.OPENING["min_ncc"] - al.OPENING["min_margin"] and not args.force:
+            print(f"not written: the opening run scores {runner} elsewhere in the DVD's first minutes, so it would "
+                  f"not pick out one place on the LD (--force writes it anyway)")
+            return 1
+        out = packs.save_pack(pack, Path(args.out) if args.out else packs.pack_path(ep.series, ep.code))
+        print(f"wrote {out} ({len(pack.descriptors)} frames, opening at DVD frame {pack.opening_dvd_frame}, "
+              f"{pack.seconds:g} s run)")
+        print(json.dumps(pack.meta["distinctiveness"]))
+        return 0
+    pack = packs.find_pack(ep.series, ep.code)
+    if pack is None:
+        print(f"no opening pack for {ep}")
+        return 1
+    head = ff.gray_thumbnails(Path(args.master), al.W, al.H, max_frames=round(300 * al.FPS))
+    op = packs.find_start(head, pack)
+    print(json.dumps(op, indent=1, default=str))
+    return 0 if op.get("found") else 1
+
+
 def cmd_docs_stages(args) -> int:
     import fstk.stages  # noqa: F401
     from fstk.stages.base import REGISTRY
@@ -653,6 +704,19 @@ def build_parser() -> argparse.ArgumentParser:
     sm.add_argument("--repair", default="qtgmc", choices=["qtgmc", "pp2", "none"], help="combed-frame repair for the trim stage (pp2 when the QTGMC plugins are missing)")
     sm.set_defaults(func=lambda a: __import__("fstk.smoke", fromlist=["smoke_main"]).smoke_main(a))
     sub.add_parser("stages", help="list registered stages").set_defaults(func=cmd_stages)
+    op = sub.add_parser("openings", help="DVD opening packs (programme start without the DVD)")
+    ops = op.add_subparsers(dest="sub", required=True)
+    oe = ops.add_parser("export", help="make an opening pack from a DVD rip")
+    oe.add_argument("episode")
+    oe.add_argument("--dvd", required=True)
+    oe.add_argument("--title")
+    oe.add_argument("--out", help="pack file (default: the app's packaged packs)")
+    oe.add_argument("--force", action="store_true", help="write the pack even if its opening is not distinctive")
+    ops.add_parser("list", help="list the packaged opening packs")
+    oc = ops.add_parser("check", help="find an episode's pack opening on a stack master")
+    oc.add_argument("episode")
+    oc.add_argument("--master", required=True)
+    op.set_defaults(func=cmd_openings)
     docs = sub.add_parser("docs").add_subparsers(dest="sub", required=True)
     ds = docs.add_parser("stages", help="write the generated stage reference")
     ds.add_argument("--out", default="docs/stage-reference.md")

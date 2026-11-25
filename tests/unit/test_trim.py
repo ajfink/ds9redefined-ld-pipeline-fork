@@ -159,7 +159,7 @@ class FakeFF:
         return desc
 
 
-def test_stage_no_dvd_route(tmp_path):
+def _no_dvd_run(tmp_path, ff):
     prof = Profile.from_dict({"schema": SCHEMA, "machine": "T", "os": "linux", "data_root": str(tmp_path / "d"),
                               "media_root": str(tmp_path / "m")})
     probe_dir, master_dir = prof.root("probe", EP), prof.root("prores", EP)
@@ -178,8 +178,44 @@ def test_stage_no_dvd_route(tmp_path):
     ws.store.create(m, by="t", reason="setup")
     plan = {"schema": PLAN_SCHEMA, "episode": str(EP), "job": "trim",
             "steps": [{"id": "trim", "stage": "video-trim", "params": {}, "after": []}]}
-    st = Engine(prof, plan, actor="op", tool_overrides={"vapoursynth": FakeVS(), "ffmpeg": FakeFF()}).run()
+    st = Engine(prof, plan, actor="op", tool_overrides={"vapoursynth": FakeVS(), "ffmpeg": ff}).run()
     assert st["steps"]["trim"]["status"] == "passed", st["steps"]["trim"].get("issues")
-    m = ws.store.load()
+    return ws.store.load(), st
+
+
+def test_stage_no_dvd_route(tmp_path, monkeypatch):
+    from fstk.media import opening_pack
+
+    monkeypatch.setattr(opening_pack, "PACK_ROOT", tmp_path / "no-packs")
+    m, _ = _no_dvd_run(tmp_path, FakeFF())
     assert master_of(m.get("video.head_trim")) >= 1511 > master_of(m.get("video.head_trim") - 1)
     assert m.get("video.tail_trim") == 0
+
+
+class PackFF:
+    """The master: LD-only cards (300–1200), black, then the programme from 1400; the DVD's opening pack holds the
+    programme's first pictures, so the start is 1400 even though the fade-up rule would say otherwise."""
+
+    def __init__(self):
+        rng = np.random.default_rng(5)
+        self.desc = np.full((STACK, 1728), 16, np.uint8)
+        self.desc[300:1200] = rng.integers(0, 255, (900, 1728))
+        self.desc[1400:8700] = rng.integers(0, 255, (7300, 1728))
+
+    def gray_thumbnails(self, path, w, h, *, cancel=None, max_frames=None):
+        return self.desc[:max_frames].copy()
+
+
+def test_stage_no_dvd_route_uses_the_dvd_opening_pack(tmp_path, monkeypatch):
+    from fstk.media import alignment as al
+    from fstk.media import opening_pack
+
+    ff = PackFF()
+    dvd = np.vstack((np.full((50, 1728), 16, np.uint8), ff.desc[1400:1400 + round(opening_pack.EXPORT_S * al.FPS)]))
+    pack = opening_pack.make_pack(dvd, series=EP.series, code=EP.code, source={}, ffmpeg="x")
+    monkeypatch.setattr(opening_pack, "PACK_ROOT", tmp_path / "packs")
+    opening_pack.save_pack(pack, opening_pack.pack_path(EP.series, EP.code))
+    m, st = _no_dvd_run(tmp_path, ff)
+    assert master_of(m.get("video.head_trim")) >= 1398 > master_of(m.get("video.head_trim") - 1)   # two black frames before
+    report = next((tmp_path / "d").rglob("video-trim-*.json")).read_text(encoding="utf-8")
+    assert "DVD opening pack DS9 S01E20: LD frame 1400 matches DVD frame 50" in report

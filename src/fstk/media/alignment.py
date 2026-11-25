@@ -60,8 +60,14 @@ MODEL = {"break_frames": 2.5, "break_window_s": 20.0, "knot_s": 30.0, "smoothnes
 #: sequence, near the start of the LD. Where they are found clearly is the programme start; everything on the LD
 #: before it is LD-only (warning cards, "Feature Presentation", logos — whatever they look like). A DVD that opens
 #: with its own logo is handled by trying the next stretch of picture after a black gap.
-OPENING = {"seconds": 12.0, "stride": 3, "search_s": 900.0, "dvd_search_s": 90.0, "tries": 4,
-           "min_ncc": 0.80, "min_margin": 0.15, "exclude_frames": 45, "min_textured": 0.5}
+OPENING = {"lengths": (12.0, 20.0, 30.0), "stride": 3, "search_s": 900.0, "dvd_search_s": 90.0, "tries": 4,
+           "min_ncc": 0.80, "min_margin": 0.15, "exclude_frames": 45, "min_textured": 0.5,
+           "sharp_shift": 15, "max_self_ncc": 0.95}
+#: ``lengths``: the opening run is the shortest of these whose pictures change enough to pin it down — the run
+#: compared with itself half a second (``sharp_shift`` frames) later scores at most ``max_self_ncc``. Measured on
+#: 23 DS9 DVD openings: 22 pass at 12 s (worst 0.91); S01E04 opens on a near-still shot (0.99 at 12 s, 0.96 at 20 s,
+#: 0.90 at 30 s) and needs 30 s. The runner-up is the best score outside the peak's own slope (the run sliding off
+#: itself still matches well when its first shot is long) and at least ``exclude_frames`` away.
 
 #: Automatic-acceptance thresholds. Calibrated on S01E20, whose v38 alignment the owner approved
 #: visually: overall 0.993, worst act 0.99 after break refinement, longest inconsistent span 2.4 s.
@@ -412,42 +418,93 @@ def fit_acts(res: AlignmentResult) -> None:
                            "jump_frames": round(float(jump), 2)})
 
 
-def find_opening(master: np.ndarray, dvd: np.ndarray, *, flat_std: float = DEFAULTS["flat_std"]) -> dict[str, Any]:
+def _run_score(mnorm: np.ndarray, dvd: np.ndarray, cols: np.ndarray, d0: int, length: int) -> np.ndarray:
+    """Mean NCC of the DVD frames ``cols`` (a run starting at ``d0``) placed at every start position on ``mnorm``."""
+    dnorm = normalize_rows(np.asarray(dvd[cols]))
+    corr = mnorm @ dnorm.T
+    npos = len(mnorm) - length
+    score = np.zeros(npos, np.float64)
+    for j, c in enumerate(cols - d0):
+        score += corr[c:c + npos, j]
+    return score / len(cols)
+
+
+def opening_length(dvd: np.ndarray, d0: int, dflat: np.ndarray, o: dict[str, Any] = OPENING) -> tuple[int, float]:
+    """Frames in the opening run starting at ``d0``, and its self-score half a second on (see ``OPENING``)."""
+    shift = o["sharp_shift"]
+    best: tuple[int, float] = (round(o["lengths"][0] * FPS), 1.0)
+    for secs in o["lengths"]:
+        length = round(secs * FPS)
+        if d0 + length + shift > len(dvd):
+            break
+        cols = d0 + np.arange(0, length, o["stride"])
+        cols = cols[~dflat[cols]]
+        if len(cols) < 3:
+            break
+        a = normalize_rows(np.asarray(dvd[cols]))
+        b = normalize_rows(np.asarray(dvd[cols + shift]))
+        self_ncc = float((a * b).sum(axis=1).mean())
+        best = (length, self_ncc)
+        if self_ncc <= o["max_self_ncc"]:
+            break
+    return best
+
+
+def outside_peak(score: np.ndarray, best: int, exclude: int) -> np.ndarray:
+    lo = best
+    while lo > 0 and score[lo - 1] <= score[lo]:
+        lo -= 1
+    hi = best
+    while hi < len(score) - 1 and score[hi + 1] <= score[hi]:
+        hi += 1
+    lo, hi = min(lo, best - exclude), max(hi, best + exclude)
+    return np.concatenate((score[:max(0, lo)], score[hi + 1:]))
+
+
+def find_opening(master: np.ndarray, dvd: np.ndarray, *, flat_std: float = DEFAULTS["flat_std"],
+                 search_s: float | None = None, seconds: float | None = None) -> dict[str, Any]:
     """Where the DVD's opening pictures are on the LD (see ``OPENING``): a whole run of textured DVD frames is slid
-    along the start of the LD and must match there clearly, not just frame by frame somewhere."""
-    o = OPENING
-    length = round(o["seconds"] * FPS)
-    dvd_lim = min(len(dvd), int(o["dvd_search_s"] * FPS) + length)
+    along the start of the LD and must match there clearly, not just frame by frame somewhere. ``dvd`` may be just
+    the DVD's first seconds (an opening pack, ``fstk.media.opening_pack``); ``seconds`` fixes the run's length
+    (a pack records the length chosen when it was made)."""
+    o = OPENING if search_s is None else {**OPENING, "search_s": search_s}
+    longest = round((seconds or max(o["lengths"])) * FPS)
+    dvd_lim = min(len(dvd), int(o["dvd_search_s"] * FPS) + longest + o["sharp_shift"])
     dflat = flat_rows(np.asarray(dvd[:dvd_lim]), flat_std)
-    span = min(len(master), int(o["search_s"] * FPS) + length)
-    if span <= length or dvd_lim <= length:
+    shortest = round((seconds or min(o["lengths"])) * FPS)
+    span = min(len(master), int(o["search_s"] * FPS) + longest)
+    if span <= shortest or dvd_lim <= shortest:
         return {"found": False, "why": "too short to search"}
     mnorm = normalize_rows(np.asarray(master[:span]))
     tried: list[dict[str, Any]] = []
     start = 0
     for _ in range(o["tries"]):
-        textured = np.flatnonzero(~dflat[start:dvd_lim - length])
+        textured = np.flatnonzero(~dflat[start:max(start, dvd_lim - shortest)])
         if not len(textured):
             break
         d0 = start + int(textured[0])
+        if seconds is not None:
+            length, self_ncc = round(seconds * FPS), None
+        else:
+            length, self_ncc = opening_length(dvd[:dvd_lim], d0, dflat, o)
+        length = min(length, dvd_lim - d0)
+        if span <= length:
+            break
         cols = d0 + np.arange(0, length, o["stride"])
         keep = ~dflat[cols]
         if keep.mean() < o["min_textured"]:
             start = d0 + length
             continue
         cols = cols[keep]
-        dnorm = normalize_rows(np.asarray(dvd[cols]))
-        corr = mnorm @ dnorm.T                                   # LD frame × opening frame
-        npos = span - length
-        score = np.zeros(npos, np.float64)
-        for j, c in enumerate(cols - d0):
-            score += corr[c:c + npos, j]
-        score /= len(cols)
+        score = _run_score(mnorm, dvd, cols, d0, length)
         best = int(np.argmax(score))
-        others = np.concatenate((score[:max(0, best - o["exclude_frames"])], score[best + o["exclude_frames"]:]))
+        others = outside_peak(score, best, o["exclude_frames"])
         runner = float(others.max()) if others.size else -1.0
         attempt = {"dvd_frame": d0, "master_frame": best, "ncc": round(float(score[best]), 3),
-                   "runner_up_ncc": round(runner, 3), "frames_compared": len(cols)}
+                   "runner_up_ncc": round(runner, 3), "frames_compared": len(cols),
+                   "seconds": round(length / FPS, 1)}
+        if self_ncc is not None:
+            attempt["self_ncc_half_s"] = round(self_ncc, 3)
         tried.append(attempt)
         if score[best] >= o["min_ncc"] and score[best] - runner >= o["min_margin"]:
             return {"found": True, **attempt, "offset": d0 - best, "tried": tried}

@@ -29,6 +29,7 @@ from fstk.media.trim import decide, no_dvd_programme_start, tail_ld_only_start
 
 from .base import ArtifactExists, Custom, Stage, StepOutput, StepPlan, ValueSet, register
 
+PACK_SEARCH_S = 240.0         # no DVD, opening pack: where on the LD the programme may start
 HEAD_PROBE_MARGIN = 600       # output frames beyond the expected head trim point
 TAIL_PROBE = 3000             # output frames probed at the tail
 
@@ -109,15 +110,32 @@ class VideoTrim(Stage):
             step = int((rec.get("params") or {}).get("step", 15))
             tail_cut = tail_ld_only_start(samples, int(rec["acts"][-1]["end_frame"]), step)
             return int(rec["origin_master_frame"]), flat, tail_cut, []
-        ctx.report(0.02, "reading the first two minutes of the master (no DVD: fade-up rule)")
+        from fstk.media import opening_pack as packs
+
+        pack = packs.find_pack(ctx.episode.series, ctx.episode.code)
+        seconds = PACK_SEARCH_S + 30 if pack else 120
+        ctx.report(0.02, f"reading the first {seconds / 60:.1f} minutes of the master (no DVD)")
         head = ctx.tool("ffmpeg").gray_thumbnails(Path(d["master"]), al.W, al.H, cancel=ctx.cancel,
-                                                  max_frames=int(120 * al.FPS))
+                                                  max_frames=int(seconds * al.FPS))
         flat = al.flat_rows(head, al.DEFAULTS["flat_std"])
+        pack_note: list[str] = []
+        if pack is not None:
+            # the DVD's opening pictures from the packaged pack: the programme start is identified, not estimated
+            op = packs.find_start(head, pack, search_s=PACK_SEARCH_S)
+            if op.get("found"):
+                return int(op["master_frame"]), flat, None, [
+                    f"programme start from the DVD opening pack {pack.meta['series']} {pack.meta['code']}: LD frame "
+                    f"{op['master_frame']} matches DVD frame {op['dvd_frame']} (NCC {op['ncc']}, next best "
+                    f"{op['runner_up_ncc']})"]
+            best = max(op.get("tried") or [{}], key=lambda t: t.get("ncc", -1))
+            pack_note = [f"the DVD opening pack for {ctx.episode.code} did not match this LD clearly (best NCC "
+                         f"{best.get('ncc')} at LD frame {best.get('master_frame')}, next best "
+                         f"{best.get('runner_up_ncc')}); the fade-up rule was used"]
         try:
-            start, notes = no_dvd_programme_start(flat)
+            start, notes = no_dvd_programme_start(flat[:int(120 * al.FPS)])
         except ValueError as exc:
             raise GateError(f"no-DVD programme start: {exc}") from None
-        return start, flat, None, notes
+        return start, flat, None, [*pack_note, *notes]
 
     def run(self, ctx, plan):
         d, m = plan.data, ctx.manifest

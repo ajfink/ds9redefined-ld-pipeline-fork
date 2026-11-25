@@ -46,7 +46,7 @@ fstk-gui = "fstk.ui.app:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-fstk = ["templates/*", "templates/*.gz", "py.typed"]
+fstk = ["templates/*", "templates/*.gz", "py.typed", "data/dvd_openings/*.json", "data/dvd_openings/*/*.npz"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1450,3 +1450,29 @@ names that no longer exist; required tools never found) and, if any, lists them 
   Full suite 641 passed.
 - Still open for S02E02: a 4.9 s stretch at 19:03.8–19:08.7 where the best DVD picture is 3 frames from the act line
   (NCC 0.93 vs 0.85). Real, not caused by the lead-in; it keeps the review for the owner to look at with Blink.
+
+## CP64 — DVD opening packs: the programme start without the DVD (ADR 0006)
+
+- Owner: package the first frames of the DVD releases so people without the DVDs still get the DVD start → LD
+  post-title-card alignment; build the feature and package the episodes on hand (`Z:\Video\DS9S1D1`…`DS9S2D1`).
+- `fstk.media.opening_pack`: a pack is the DVD's opening run as alignment descriptors (48×36 grey, 30000/1001 grid,
+  no viewable pictures), the DVD frame where it starts, the run's length, the ffmpeg that made it, and how distinct
+  the run is within the DVD's own first 200 s. Shipped under `src/fstk/data/dvd_openings/DS9/<code>.npz` + `index.json`
+  (package data). `fstk openings export|list|check`; export refuses a non-distinctive run unless `--force`.
+- 23 packs made (S01E01 pilot as one DVD title, S01E03–E20, S02E01–E04; 7.3 MB). Runner-up NCC within each DVD
+  ≤ 0.61 (worst S01E09; real LD match ≈ 0.97). Decoded on the Legion's Linux VM ffmpeg 4.4.2; CP63 measured that the
+  build does not move the match.
+- `find_opening` improvements found while measuring the 23 DVDs:
+  - The run's length adapts: 12 s, or 20/30 s when the run barely changes over half a second (self-NCC at 15 frames
+    > 0.95). S01E04 opens on a near-still shot (0.99 at 12 s) → 30 s (0.90). The other 22 pass at 12 s.
+  - The runner-up is now the best score outside the peak's own slope (and ≥ 45 frames away). Before, it was often
+    just the peak's shoulder at exactly 45 frames (S01E04 0.96, S01E08 0.65), which would have refused good matches.
+- Real data, S01E20 LD master (Legion descriptors): its pack finds LD 1514 (NCC 0.975, next best 0.45) — the same
+  frame as the full DVD. The other 22 packs against the same LD: best 0.32, none found. Full-DVD path unchanged
+  (1514, 0.974).
+- `video-trim`, no-DVD route: with a pack for the episode, the head anchor is the pack's match (note in the trim
+  report); if it does not match clearly, the fade-up rule as before, with the best score in the note.
+- Tests: pack round trip, long run for a still opening, found behind LD-only cards, other episode's pack not found,
+  damaged pack rejected, packaged packs vs index, slope-not-runner-up, trim no-DVD route with a pack, `openings list`.
+- Not yet measured: packs against LD masters other than S01E20 (none staged here). S01E02 has no pack (the pilot
+  is one DVD title; whether an LD's part 2 should use part 1's pack is open).

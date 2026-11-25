@@ -40,3 +40,10 @@ def test_doctor_without_profile(capsys):
     rc = main(["--json", "doctor", "--no-profile"])
     report = json.loads(capsys.readouterr().out)
     assert any(c["name"] == "python" for c in report["checks"]) and rc in (0, 1)
+
+
+def test_openings_list_shows_the_packaged_packs(capsys):
+    assert main(["openings", "list"]) == 0
+    out = capsys.readouterr().out
+    assert "DS9 S01E20  opening at DVD frame   61  (12.012 s)  In The Hands of the Prophets" in out
+    assert "DS9 S01E04" in out and "(29.997 s)" in out
