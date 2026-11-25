@@ -1620,3 +1620,22 @@ names that no longer exist; required tools never found) and, if any, lists them 
   estimated from the 520 KB/frame figure, measured after the first one; default off; delete or keep after approval).
 - Owner follow-up: a hardware encode may be the only delivered copy — a global and per-episode setting (spec §8;
   default "also make an x265 copy afterwards"); the grain-retention check warns and never blocks delivery.
+
+## CP74 — QC checks follow fstk's own pipeline (S01E20 on PC-A, first fstk-built delivery through QC)
+
+- Owner's debug bundle 2026-11-25 11:00: S01E20's QC failed absolute A/V, between-track sync and stream inventory,
+  while every hash, the frame count, subtitles and retime gaps passed. All three gates still expected v38 data:
+  - **absolute A/V**: needed `retime.breaks` LD blacks, which only v38's retime wrote. With none recorded it now
+    cuts the offset model at the measured DVD alignment breaks (`video.dvd_alignment.breaks`, the same master time
+    as `align_npy`; `qc.sync.alignment_cuts`), and says which cuts it used. v38 manifests keep their LD blacks.
+  - **between-track sync**: with no breaks it saw one segment, so one window ("at least 2 are needed"). It now keeps
+    its windows away from the retime map's switches and LD fill pieces (`retime_switch_gaps`); S01E20 gets 6.
+  - **stream inventory**: the raster was fixed at 768x484, but video-quality cropped 10+4 px (754x484) — the expected
+    raster is now the stack raster less `quality.crop` (`expected_raster`). The LD track was required to be 44.1 kHz,
+    but audio-quality finishes it at 48 kHz 24-bit — 44.1 or 48 kHz accepted. Container duration 2727.412 vs
+    2727.391 came from the AAC compatibility track ending on a whole AAC frame: durations are now checked per stream
+    (picture and lossless audio ±2 ms; a lossy track may run up to 50 ms long, never short).
+- Checked against the bundle's own numbers: inventory PASS, 9 offset-model windows, 6 between-track windows. Tests in
+  `test_qc_gates.py`. Suite 683 passed.
+- To finish S01E20: update and restart the app, then *Restart from here* on qc.
+

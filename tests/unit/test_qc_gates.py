@@ -120,3 +120,72 @@ def test_av_prescreen_is_confident_only_for_a_tight_fit_under_every_chunk():
     assert not gap["confident"] and "no fit window" in gap["reason"]
     none = av_prescreen(None, chunks)
     assert not none["available"] and not none["confident"]                       # no DVD → full manual check
+
+
+def test_inventory_follows_the_recorded_crop_and_the_finished_ld_rate():
+    """S01E20 (PC-A, CP74): the picture was cropped to 754x484 and the LD track finished at 48 kHz; both are
+    what the pipeline records, not faults."""
+    from fstk.qc.gates import expected_raster
+
+    assert expected_raster(None) == (768, 484)
+    assert expected_raster({"left": 10, "right": 4, "top": 0, "bottom": 0}) == (754, 484)
+    cropped = [dict(GOOD[0], width=754), dict(GOOD[1], sample_rate="48000", bits_per_raw_sample="24")]
+    assert stream_inventory(cropped, {"duration": "100"}, ["ld"], 100.0, "420", raster=(754, 484)).status == "PASS"
+    g = stream_inventory(cropped, {"duration": "100"}, ["ld"], 100.0, "420")          # uncropped expectation
+    assert g.status == "FAIL" and "raster=754x484" in g.detail
+    odd = [GOOD[0], dict(GOOD[1], sample_rate="32000")]
+    g = stream_inventory(odd, {"duration": "100"}, ["ld"], 100.0, "420")
+    assert g.status == "FAIL" and "32000Hz" in g.detail
+
+
+def test_a_lossy_track_may_end_on_a_whole_codec_frame_but_never_short():
+    def tagged(s, secs):
+        return dict(s, tags={**s.get("tags", {}), "DURATION": f"00:01:{secs:06.3f}"})
+
+    layout = [{"role": "ld", "codec_name": "flac", "channels": 2, "default": True,
+               "title": "LD 2.0 (original Dolby Surround)"},
+              {"role": "compat", "codec_name": "aac", "channels": 2, "default": False, "title": "compat"}]
+    aac = stream("audio", codec_name="aac", channels=2, disposition={"default": 0},
+                 tags={"language": "eng", "title": "compat"})
+    base = [tagged(GOOD[0], 40.0), tagged(GOOD[1], 40.001)]
+    ok = stream_inventory([*base, tagged(aac, 40.021)], {"duration": "100.021"}, ["ld"], 100.0, "420",
+                          audio_layout=layout)
+    assert ok.status == "PASS", ok.detail
+    short = stream_inventory([*base, tagged(aac, 39.9)], {"duration": "100.001"}, ["ld"], 100.0, "420",
+                             audio_layout=layout)
+    assert short.status == "FAIL" and "aac track duration" in short.detail
+    long_flac = stream_inventory([base[0], tagged(GOOD[1], 40.021), tagged(aac, 40.021)], {"duration": "100.021"},
+                                 ["ld"], 100.0, "420", audio_layout=layout)
+    assert long_flac.status == "FAIL" and "audio flac duration" in long_flac.detail
+
+
+def test_av_cuts_come_from_the_alignment_breaks_when_no_ld_blacks_are_recorded():
+    from fstk.qc.sync import alignment_cuts, fit_windows
+
+    assert alignment_cuts(None) is None
+    assert alignment_cuts({"breaks": []}) == []
+    cuts = alignment_cuts({"breaks": [{"after_s": 280.28, "before_s": 280.781}, {"after_s": 224.725, "before_s": 225.225}]})
+    assert cuts == [(224.725, 225.225), (280.28, 280.781)]
+    wins, _ = fit_windows(cuts, 600.0, require_cuts=False)
+    assert [round(a) for a, _ in wins] == [0, 227, 283]
+    assert fit_windows([], 600.0, require_cuts=False)[0] == [(0.0, 600.0)]
+    with pytest.raises(ArtifactError):
+        fit_windows([], 600.0)                                   # v38 manifests must still have their blacks
+    with pytest.raises(ArtifactError):
+        alignment_cuts({"breaks": [{"after_s": 5.0, "before_s": 4.0}]})
+
+
+def test_between_track_windows_keep_away_from_retime_switches():
+    from fstk.qc.sync import retime_switch_gaps, sync_sample_points
+
+    rmap = {"schema": "fstk-retime-map-v1",
+            "switches": [{"out_s": 600.0}, {"out_s": 1200.0}],
+            "pieces": [{"source": "dvd", "out_start_s": 0.0, "out_end_s": 600.0},
+                       {"source": "ld", "out_start_s": 600.0, "out_end_s": 600.1},
+                       {"source": "dvd", "out_start_s": 600.1, "out_end_s": 1800.0}]}
+    gaps = retime_switch_gaps(rmap)
+    assert gaps == [(598.0, 602.0), (1198.0, 1202.0)]           # the fill piece merges into its switch's span
+    pts = sync_sample_points(gaps, 1800.0)
+    assert len(pts) == 3 and all(not (g0 - 30 < p < g1 + 30) for p in pts for g0, g1 in gaps)
+    with pytest.raises(ArtifactError):
+        retime_switch_gaps({"schema": "other"})

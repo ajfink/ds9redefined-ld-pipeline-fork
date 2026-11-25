@@ -80,6 +80,44 @@ def break_gaps(breaks: list[dict], delta_s: float, *, extra: list[dict] = (), ta
     return sorted(out)
 
 
+#: how far either side of a retime switch the between-track windows stay away (output seconds)
+SWITCH_CLEAR_S = 2.0
+
+
+def alignment_cuts(alignment: dict | None) -> list[tuple[float, float]] | None:
+    """Where the measured DVD alignment path jumps, as master-time spans ``(after_s, before_s)``.
+
+    These come from ``video.dvd_alignment.breaks`` (the dvd-alignment step), in the same master time as
+    ``align_npy``, so the offset model is never fitted across a jump. ``None`` when no alignment was recorded.
+    """
+    if not isinstance(alignment, dict) or "breaks" not in alignment:
+        return None
+    cuts = []
+    for b in alignment.get("breaks") or []:
+        a, z = float(b["after_s"]), float(b["before_s"])
+        if not (math.isfinite(a) and math.isfinite(z)) or z <= a:
+            raise ArtifactError(f"invalid DVD alignment break {b!r}")
+        cuts.append((a, z))
+    return sorted(cuts)
+
+
+def retime_switch_gaps(retime_map: dict, clear_s: float = SWITCH_CLEAR_S) -> list[tuple[float, float]]:
+    """Output-time spans where the retimed 5.1 changes source (``fstk-retime-map-v1``): each switch
+    ±``clear_s`` and each LD fill piece. Between-track windows are kept out of them."""
+    if retime_map.get("schema") != "fstk-retime-map-v1":
+        raise ArtifactError(f"retime map schema {retime_map.get('schema')!r} is not fstk-retime-map-v1")
+    gaps = [(float(sw["out_s"]) - clear_s, float(sw["out_s"]) + clear_s) for sw in retime_map.get("switches") or []]
+    gaps += [(float(p["out_start_s"]), float(p["out_end_s"])) for p in retime_map.get("pieces") or []
+             if p.get("source") != "dvd"]
+    merged: list[tuple[float, float]] = []
+    for g0, g1 in sorted(gaps):
+        if merged and g0 <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], g1))
+        else:
+            merged.append((g0, g1))
+    return merged
+
+
 def sync_sample_points(gaps: list[tuple[float, float]], duration_s: float) -> list[float]:
     """Midpoints of content segments long enough for a 60 s window, away from act breaks (v38)."""
     segs, cursor = [], 0.0
@@ -239,10 +277,13 @@ def split_at_cuts(start_s: float, blacks_out: list[tuple[float, float]], window_
 
 
 def fit_windows(blacks_master: list[tuple[float, float]], end_s: float,
-                tail: tuple[float, float] | None = None) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
-    """Content windows (master time) between fades, pulled back by EDGE_CLEAR_S; short ones dropped."""
+                tail: tuple[float, float] | None = None, *, require_cuts: bool = True,
+                ) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
+    """Content windows (master time) between fades, pulled back by EDGE_CLEAR_S; short ones dropped.
+
+    ``require_cuts=False`` when the cuts are the measured alignment breaks, which may truly be none."""
     blacks = sorted([*blacks_master, *([tuple(tail)] if tail else [])])
-    if not blacks:
+    if not blacks and require_cuts:
         raise ArtifactError("manifest has no retime.breaks ld_black entries")
     if tail:
         end_s = min(end_s, float(tail[0]))

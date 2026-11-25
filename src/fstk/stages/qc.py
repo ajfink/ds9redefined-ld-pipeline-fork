@@ -44,6 +44,7 @@ from fstk.qc.gates import (
     av_check_chunks,
     av_prescreen,
     black_review_intervals,
+    expected_raster,
     render_markdown,
     retime_gap_status,
     retime_review_intervals,
@@ -59,10 +60,12 @@ from fstk.qc.sync import (
     SYNC_WIN,
     OffsetModel,
     absolute_av,
+    alignment_cuts,
     between_track_sync,
     break_gaps,
     fit_windows,
     more_sync_points,
+    retime_switch_gaps,
     sync_sample_points,
 )
 from fstk.qc.sync import FPS as AV_FPS
@@ -167,21 +170,34 @@ class QcReport(Stage):
             tail = m.get("retime.end_black_ld")
             blacks_master = [(float(b["ld_black"][0]), float(b["ld_black"][1]))
                              for b in [*breaks, *music] if b.get("ld_black")]
+            cuts_from = "recorded LD blacks"
+            if not blacks_master and not tail:
+                # fstk's own retime (retime map) records no LD blacks: cut the offset model where the measured
+                # DVD alignment path jumps instead
+                cuts = alignment_cuts(m.get("video.dvd_alignment"))
+                if cuts is None:
+                    return Gate(name, "ERROR", "neither retime.breaks LD blacks nor video.dvd_alignment breaks "
+                                               "are recorded; the offset model cannot be cut at the act breaks")
+                blacks_master, cuts_from = cuts, f"{len(cuts)} DVD alignment break(s)"
             windows, _short = fit_windows(blacks_master, int(m.require("stack.frames")) / AV_FPS,
-                                          tuple(tail) if tail else None)
+                                          tuple(tail) if tail else None,
+                                          require_cuts=cuts_from == "recorded LD blacks")
             model = OffsetModel(np.load(ctx.artifact_path("align_npy", m)), windows)
             ff = ctx.tool("ffmpeg")
             ld_audio = ff.pcm(deliverable, "0:a:0", AV_SR, cancel=ctx.cancel)
             dvd_audio = ff.pcm(ctx.artifact_path("dvd", m), m.get("qc.dvd_audio_map") or "0:a:1", AV_SR,
                                cancel=ctx.cancel)
+            blacks_out = sorted([(a - delta, z - delta) for a, z in blacks_master]
+                                + ([(float(tail[0]) - delta, float(tail[1]) - delta)] if tail else []))
             result = absolute_av(ld_audio=ld_audio, dvd_audio=dvd_audio, delta_s=delta, offset=model,
-                                 blacks_out=break_gaps(breaks, delta, extra=music, tail=tail))
+                                 blacks_out=blacks_out)
         except FstkError as exc:
             return Gate(name, "ERROR", str(exc))
         measured["av"] = result
         detail = (f"constant {result['constant_ms']:+.1f} ms, slope {result['slope_ppm']:+.1f} ppm, "
                   f"rms {result['rms_ms']:.1f} ms over {len(result['rows'])} windows "
-                  f"(gates ±100 ms, ±30 ppm, ≤40 ms)")
+                  f"(gates ±100 ms, ±30 ppm, ≤40 ms); cut at {cuts_from}")
+        result["cuts_from"] = cuts_from
         if not result["pass"]:
             for r in result["rows"]:
                 review.append({"id": f"absolute-av-{len(review) + 1:03d}", "gate": name, "start_s": r["out_time_s"],
@@ -223,6 +239,11 @@ class QcReport(Stage):
         try:
             delta = float(m.require("video.delta_s"))
             gaps = break_gaps(m.get("retime.breaks") or [], delta)
+            gaps_from = "recorded breaks"
+            if not gaps and m.artifact("retime_map"):
+                # fstk's own retime: keep the windows away from where the 5.1 changes source
+                gaps = retime_switch_gaps(read_json(ctx.artifact_path("retime_map", m)))
+                gaps_from = f"{len(gaps)} retime switch(es)"
             points = sync_sample_points(gaps, float(m.require("video.duration_s")))
             ff = ctx.tool("ffmpeg")
             def grab(sel, t):
@@ -248,7 +269,8 @@ class QcReport(Stage):
         sv = result["slope"]
         sigma = f" ±{sv['stderr_ppm']:.1f}" if sv["stderr_ppm"] is not None else ""
         detail = (f"lag {result['constant_ms']:+.1f} ms + {result['slope_ppm']:+.1f}{sigma} ppm·t, rms {result['rms_ms']:.1f} ms "
-                  f"over {len(result['rows'])} windows (gates ≤40 ms, ±30 ppm; constant offset is expected)"
+                  f"over {len(result['rows'])} windows away from {gaps_from} "
+                  f"(gates ≤40 ms, ±30 ppm; constant offset is expected)"
                   + ("; measured again with more windows because the first fit was marginal" if "remeasured" in result else "")
                   + (f"; MARGINAL: {sv['headroom_ppm']:.1f} ppm of headroom" if sv["verdict"] == "marginal" else ""))
         if not result["pass"]:
@@ -361,7 +383,8 @@ class QcReport(Stage):
         encoding = m.get("deliverable.video_encoding") or None
         inventory = stream_inventory(raw, info.format, tracks, duration,
                                      (encoding or {}).get("chroma") or m.get("mode.chroma_output"),
-                                     video_expected=encoding, audio_layout=layout)
+                                     video_expected=encoding, audio_layout=layout,
+                                     raster=expected_raster(m.get("quality.crop")))
         gates.append(inventory)
         audio_count = sum(1 for s in raw if s.get("codec_type") == "audio")
         ctx.report(0.7, "audio seekability")

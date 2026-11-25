@@ -20,6 +20,13 @@ BLIP_MAX_S = 0.10          # one frame is 0.042 s; a little encoder slack
 SEEK_WINDOW_S = 5.0
 SEEK_TOLERANCE_S = 0.15
 DURATION_TOLERANCE_S = 0.002
+#: a lossy audio track ends on a whole codec frame (AAC: 1024 samples, 21 ms at 48 kHz) plus the encoder's
+#: priming, so it may run this much past the picture; it may never be shorter
+LOSSY_TAIL_S = 0.050
+LOSSLESS_AUDIO = ("flac", "alac", "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le")
+#: the stack master's raster; the finished picture is this minus the recorded ``quality.crop``
+STACK_RASTER = (768, 484)
+LD_RATES = ("44100", "48000")    # 44.1 kHz: v38 and the synced LD track; 48 kHz: audio-quality's finished track
 
 STATUSES = ("PASS", "WARN", "FAIL", "ERROR", "SKIP")
 NOT_PORTED = "not ported to fstk yet; this gate is unverified"
@@ -108,11 +115,35 @@ def single_black_frames(events: list[tuple[float, float, float]]) -> list[dict]:
 
 
 # --------------------------------------------------------------------------- stream inventory
+def expected_raster(crop: dict | None) -> tuple[int, int]:
+    """The delivered picture size: the stack raster less the crop video-quality recorded (none: uncropped)."""
+    c = crop or {}
+    w, h = STACK_RASTER
+    return (w - int(c.get("left") or 0) - int(c.get("right") or 0),
+            h - int(c.get("top") or 0) - int(c.get("bottom") or 0))
+
+
+def stream_seconds(s: dict) -> float | None:
+    """A stream's own duration: ffprobe's ``duration``, else Matroska's ``DURATION`` tag (hh:mm:ss.fff)."""
+    if s.get("duration") not in (None, "", "N/A"):
+        return float(s["duration"])
+    tag = (s.get("tags") or {}).get("DURATION")
+    if not tag:
+        return None
+    h, mi, sec = tag.split(":")
+    return int(h) * 3600 + int(mi) * 60 + float(sec)
+
+
 def stream_inventory(streams: list[dict], fmt: dict, tracks: list[str], duration_s: float,
                      chroma: str | None = None, *, video_expected: dict | None = None,
-                     audio_layout: list[dict] | None = None) -> Gate:
+                     audio_layout: list[dict] | None = None, raster: tuple[int, int] = STACK_RASTER) -> Gate:
     """``video_expected``/``audio_layout`` are what the encode and remux recorded from the output settings;
-    without them (v38-era and older deliverables) the original x265 + FLAC expectations apply."""
+    without them (v38-era and older deliverables) the original x265 + FLAC expectations apply. ``raster`` is
+    the finished picture size (``expected_raster``).
+
+    Durations: the picture and every lossless audio track must match ``duration_s`` within
+    ``DURATION_TOLERANCE_S``; a lossy track may run up to ``LOSSY_TAIL_S`` longer (whole codec frames), and the
+    container (the longest stream) likewise."""
     vid = [s for s in streams if s.get("codec_type") == "video"]
     aud = [s for s in streams if s.get("codec_type") == "audio"]
     sub = [s for s in streams if s.get("codec_type") == "subtitle"]
@@ -141,7 +172,7 @@ def stream_inventory(streams: list[dict], fmt: dict, tracks: list[str], duration
             problems.append(f"pix_fmt={v.get('pix_fmt')}")
         if v.get("r_frame_rate") not in ("24000/1001", "23.976"):
             problems.append(f"rate={v.get('r_frame_rate')}")
-        if (v.get("width"), v.get("height")) != (768, 484):
+        if (v.get("width"), v.get("height")) != tuple(raster):
             problems.append(f"raster={v.get('width')}x{v.get('height')}")
         if disp(v).get("default") != 1:
             problems.append("video not default")
@@ -157,10 +188,12 @@ def stream_inventory(streams: list[dict], fmt: dict, tracks: list[str], duration
         for a, t in zip(aud, layout, strict=True):
             role = {"ld": "LD", "51": "5.1", "compat": "compatibility"}.get(t["role"], t["role"])
             if t["role"] == "ld" and t["codec_name"] == "flac":
-                if (a.get("codec_name") != "flac" or a.get("channels") != 2 or str(a.get("sample_rate")) != "44100"
+                if (a.get("codec_name") != "flac" or a.get("channels") != 2 or str(a.get("sample_rate")) not in LD_RATES
                         or str(a.get("bits_per_raw_sample")) not in ("16", "24")):
-                    # 24-bit since the exact-ratio resampler (fstk.media.resample); 16-bit for v38-built tracks
-                    problems.append("LD track is not 44.1 kHz 16/24-bit FLAC stereo")
+                    # 24-bit since the exact-ratio resampler (fstk.media.resample); 16-bit for v38-built tracks;
+                    # 48 kHz once audio-quality has finished the track
+                    problems.append(f"LD track is not 44.1/48 kHz 16/24-bit FLAC stereo ({a.get('codec_name')} "
+                                    f"{a.get('channels')}ch/{a.get('sample_rate')}Hz/{a.get('bits_per_raw_sample')}bit)")
             elif t["role"] == "51" and t["codec_name"] == "flac" and not audio_layout:
                 if (a.get("codec_name") != "flac" or a.get("channels") != 6 or str(a.get("sample_rate")) != "48000"
                         or str(a.get("bits_per_raw_sample")) != "24"):
@@ -188,14 +221,25 @@ def stream_inventory(streams: list[dict], fmt: dict, tracks: list[str], duration
         if tags(s0).get("title") != "English SDH (retimed)":
             problems.append("subtitle title is missing or unexpected")
     dur = float(fmt.get("duration") or 0.0)
-    if abs(dur - duration_s) > DURATION_TOLERANCE_S:
+    lossy = False
+    for s in [*vid, *aud]:
+        sd = stream_seconds(s)
+        if s.get("codec_type") == "audio" and s.get("codec_name") not in LOSSLESS_AUDIO:
+            lossy = True
+            if sd is not None and not (-DURATION_TOLERANCE_S <= sd - duration_s <= LOSSY_TAIL_S):
+                problems.append(f"{s.get('codec_name')} track duration {sd:.3f} s is outside manifest {duration_s:.3f} s "
+                                f"(-{DURATION_TOLERANCE_S * 1000:.0f}/+{LOSSY_TAIL_S * 1000:.0f} ms)")
+        elif sd is not None and abs(sd - duration_s) > DURATION_TOLERANCE_S:
+            problems.append(f"{s.get('codec_type')} {s.get('codec_name')} duration {sd:.3f} s != manifest {duration_s:.3f} s")
+    over = dur - duration_s
+    if not (abs(over) <= DURATION_TOLERANCE_S or (lossy and 0 < over <= LOSSY_TAIL_S)):
         problems.append(f"container duration {dur} != manifest {duration_s}")
     summary = {"video": len(vid), "audio": len(aud), "subtitle": len(sub), "duration_s": dur,
                "size_bytes": int(fmt.get("size") or 0)}
     if problems:
         return Gate("stream inventory", "FAIL", "; ".join(problems), summary)
     return Gate("stream inventory", "PASS",
-                f"1 video {(video_expected or {}).get('codec_name', 'hevc')} 768x484 23.976, {len(aud)} audio "
+                f"1 video {(video_expected or {}).get('codec_name', 'hevc')} {raster[0]}x{raster[1]} 23.976, {len(aud)} audio "
                 f"(LD default), {len(sub)} subtitle, "
                 f"{dur:.6f}s, {fmt.get('size')} bytes", summary)
 
