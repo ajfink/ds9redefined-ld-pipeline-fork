@@ -226,6 +226,13 @@ class ProgressTracker:
                         s.started += gap
                 self.paused_at = None
             return
+        if kind == "steps-carried-over":                 # finished in an earlier job and still valid: not redone
+            for carried in event.get("steps") or []:
+                s = self.steps.get(carried)
+                if s is not None:
+                    s.status, s.fraction = "passed", 1.0
+                    s.detail = f"kept from job {event.get('donor', '')}"
+            return
         step = self.steps.get(sid) if sid else None
         if step is None:
             return
@@ -239,6 +246,9 @@ class ProgressTracker:
                 step.status, step.started = RUNNING, step.started or now
             step.fraction = None if frac is None else min(max(float(frac), 0.0), 1.0)
             step.message = event.get("message", "") or step.message
+        elif kind == "step-kept":                        # an upstream re-run gave the same result: not redone
+            step.status, step.fraction = "passed", 1.0
+            step.detail = str(event.get("detail", ""))
         elif kind in ("step-passed", "review-satisfied"):
             if kind == "step-passed" and step.started is not None:
                 self.timings.record(step.stage, now - step.started)

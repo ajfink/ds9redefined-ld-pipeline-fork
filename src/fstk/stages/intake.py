@@ -47,6 +47,7 @@ def _folder_present(ctx, manifest):
 @register
 class ArchiveDownload(Stage):
     id = "archive-download"
+    carry_over = False      # always planned again: it resumes and re-checks partial downloads
     title = "Download captures from the Internet Archive"
     description = "Live metadata, space gate, resumable size+MD5-verified download of TBC/JSON/EFM files."
     requires = (Custom("archive-item", _has_archive_item),)

@@ -1385,3 +1385,20 @@ names that no longer exist; required tools never found) and, if any, lists them 
   0.8 s after the dragging stops; odd values are ignored on restore).
 - Tests: every real stage has help (and the retired PAD/RIFE steps none); rows, bars, status and headers carry their
   tips; columns are interactive; a drag is reported and restored; the setting is validated. Full suite 623 passed.
+
+## CP60 — finished steps are kept across restarts, new jobs and unchanged re-runs (ADR 0005)
+
+- Owner: "make sure stages completed are being saved / aren't being rerun when the app is restarted / a session
+  resumes." Checked every bundle's history: saved state and same-job resume were sound (a failed or interrupted
+  step re-runs alone), but two gaps redid finished work — a new job (any plan difference, e.g. after an update) ran
+  everything again, and a re-run that produced the identical result still re-ran everything after it.
+- Engine: carry-over into new `intake-`/`delivery-` jobs with per-step proof (fingerprints, upstream, stage check,
+  review binding, committed values and artifacts still its own); `Stage.carry_over=False` for archive-download and
+  efm-decode (they retry their own gaps). Early cut-off: descendants of a stale step hold their result and are kept
+  when the upstream re-run gives the same files and values (`step-kept`). Steps record `committed_artifacts`.
+  Progress tab shows carried and kept steps as done.
+- Tests: `tests/unit/test_resume.py` (13 scenarios counting real step runs: failure, app closed mid-step, finished
+  job, new job with added step and moved estimates, changed source, replaced value, changed params, redo plans,
+  opt-out stages, same-result and different-result upstream re-runs, upstream failing then passing). One existing
+  test now asserts the new behaviour (a second delivery job keeps the first's finished step).
+- Full suite 636 passed, 1 skipped.

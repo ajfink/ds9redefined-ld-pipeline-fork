@@ -353,6 +353,7 @@ class Engine:
                  "steps": {s["id"]: {"status": "pending", "stage": s["stage"]} for s in self.plan["steps"]}}
         if not self.state_path.exists():
             self.state = fresh
+            self._carry_over()
             return
         old = read_json(self.state_path)
         if old.get("schema") != STATE_SCHEMA or old.get("plan_digest") != digest:
@@ -362,6 +363,103 @@ class Engine:
         for st in self.state["steps"].values():
             if st.get("status") == "running":
                 st["status"] = "interrupted"
+
+    # ---------------------------------------------------------------- carry-over from earlier jobs
+    #: plan params that are estimates, not instructions: they may differ between two runs of the same step
+    VOLATILE_PARAMS = frozenset({"planned_gib", "estimate_basis"})
+
+    def _carry_over(self) -> None:
+        """A new job keeps the finished steps of the most useful earlier job of this episode.
+
+        Before, a job was only resumed when its plan matched exactly; any change to the plan (an app update adding
+        or removing a step, a moved estimate) made a new job that redid everything finished. Now each step is
+        taken over on its own merits, and only when nothing it depends on has changed: same stage and params, its
+        upstream steps taken over too, its input and output fingerprints still matching, its review (if any)
+        still approved for those outputs, and every manifest value it committed still the one it committed. A
+        step that fails any check simply runs."""
+        kind = next((k for k in CARRY_OVER_KINDS if self.job.startswith(k + "-")), None)
+        if kind is None:          # plans made to redo something (re-encode, A/V round, redo) always run
+            return
+        best: tuple[int, str, dict[str, dict]] | None = None
+        plans_dir = self.ws.job_dir(self.job).parent
+        if not plans_dir.is_dir():
+            return
+        for donor_dir in sorted(plans_dir.iterdir()):
+            donor = donor_dir.name
+            if (donor == self.job or not donor.startswith(kind + "-") or not (donor_dir / "state.json").is_file()
+                    or not (donor_dir / "plan.json").is_file()):
+                continue
+            try:
+                taken = self._adoptable(donor, read_json(donor_dir / "plan.json"), read_json(donor_dir / "state.json"))
+            except Exception as exc:  # an unreadable old job is skipped, never trusted
+                self._emit("carry-over-skipped", donor=donor, reason=f"{exc.__class__.__name__}: {exc}")
+                continue
+            if taken and (best is None or (len(taken), donor) > best[:2]):
+                best = (len(taken), donor, taken)
+        if best is None:
+            return
+        _, donor, taken = best
+        for sid, st in taken.items():
+            self.state["steps"][sid] = {**st, "status": "passed", "carried_from": donor}
+        self._emit("steps-carried-over", donor=donor, steps=sorted(taken))
+
+    def _adoptable(self, donor: str, donor_plan: dict, donor_state: dict) -> dict[str, dict]:
+        def same(a: dict, b: dict) -> bool:
+            pa = {k: v for k, v in (a.get("params") or {}).items() if k not in self.VOLATILE_PARAMS}
+            pb = {k: v for k, v in (b.get("params") or {}).items() if k not in self.VOLATILE_PARAMS}
+            return a["stage"] == b["stage"] and pa == pb
+
+        theirs = {s["id"]: s for s in donor_plan.get("steps", [])}
+        m = self.ws.store.load()
+        taken: dict[str, dict] = {}
+        changed = True
+        while changed:                                   # upstream first, until nothing more can be taken
+            changed = False
+            for s in self.plan["steps"]:
+                sid = s["id"]
+                st = (donor_state.get("steps") or {}).get(sid) or {}
+                if sid in taken or sid not in theirs or st.get("status") != "passed" or not same(s, theirs[sid]):
+                    continue
+                if not all(dep in taken for dep in s.get("after", [])):
+                    continue
+                if not st.get("outputs") and not st.get("inputs"):
+                    continue                             # nothing to prove it by
+                if not all(Fingerprint.from_dict(fp).matches(trust_mtime=False)
+                           for fp in [*st.get("inputs", []), *st.get("outputs", [])]):
+                    continue
+                stage = get_stage(s["stage"])
+                if not stage.carry_over or stage.still_current(st):
+                    continue
+                if stage.review:
+                    outputs = [Path(fp["path"]) for fp in st.get("outputs", [])]
+                    if not self.ws.approvals.status(stage.review, manifest=m, expected_evidence=outputs).satisfied:
+                        continue
+                keys = st["committed"] if "committed" in st else [k for k in stage.writes if m.is_set(k)]
+                if not all(_committed_by(m, k, donor, sid) for k in keys):
+                    continue
+                arts = st.get("committed_artifacts")
+                if arts is None:
+                    # a step finished before CP60 recorded its artifacts: each one the manifest names for this
+                    # stage must be one of the files the step's own output fingerprints cover
+                    own = {str(Path(fp["path"])) for fp in st.get("outputs", [])}
+                    if any(self._artifact_path(_artifact_of(m, key)) not in own
+                           for key in stage.writes_artifacts if _artifact_of(m, key)):
+                        continue
+                elif any(_artifact_of(m, key) != spec for key, spec in arts.items()):
+                    continue                             # another job registered a newer file since
+                taken[sid] = st
+                changed = True
+        return taken
+
+    def _artifact_path(self, spec: dict | None) -> str | None:
+        if not spec:
+            return None
+        if spec.get("path"):
+            return str(Path(spec["path"]))
+        try:
+            return str(self.profile.root(spec["root"], self.episode) / spec["name"])
+        except Exception:
+            return None
 
     def _step(self, sid: str) -> dict[str, Any]:
         return next(s for s in self.plan["steps"] if s["id"] == sid)
@@ -443,10 +541,19 @@ class Engine:
                     invalid.add(s["id"])
                     st.update(status="stale", stale_reason=why)
                     self._emit("step-stale", step=s["id"], reason=why)
+        m = self.ws.store.load() if invalid else None
         for sid in list(invalid):
+            # What the descendants were made from: if the re-run gives exactly this back, they are kept as they are
+            # (Flex 2026-11-24 14:20: a re-run produced the identical master and 32 min of cadence ran again).
+            prior = _result_of(self.state["steps"][sid], m, self.job, sid)
             for d in _descendants(self.plan, sid):
-                if self.state["steps"][d]["status"] in ("passed", "awaiting-review"):
-                    self.state["steps"][d].update(status="stale", stale_reason=f"upstream {sid} changed")
+                dst = self.state["steps"][d]
+                if dst["status"] == "passed":
+                    held = dst.get("held") or {k: dst[k] for k in _HELD_KEYS if k in dst}
+                    held.setdefault("upstream", {})[sid] = held.get("upstream", {}).get(sid, prior)
+                    dst["held"] = held
+                if dst["status"] in ("passed", "awaiting-review"):
+                    dst.update(status="stale", stale_reason=f"upstream {sid} changed")
         for st in self.state["steps"].values():
             if st["status"] in ("failed", "cancelled", "interrupted", "stale", "blocked", "awaiting-review"):
                 st["previous_status"] = st["status"]
@@ -476,9 +583,47 @@ class Engine:
                 if self.state["steps"][dep]["status"] != "passed":
                     deps_ok = False
                     break
+            if deps_ok and st.get("held"):
+                why = self._keep_reason(s["id"])
+                held = st.pop("held")
+                if why is None:
+                    st.update({k: v for k, v in held.items() if k != "upstream"}, status="passed",
+                              kept_utc=utc_now_iso(), stale_reason=None)
+                    self._emit("step-kept", step=s["id"],
+                               detail="kept: the steps it depends on re-ran and gave exactly the same result")
+                    continue
+                st["not_kept"] = why
             if deps_ok:
                 ready.append(s["id"])
         return ready
+
+    def _keep_reason(self, sid: str) -> str | None:
+        """None when a step that was made stale only because an upstream step re-ran can keep its result: every
+        such upstream step gave back exactly the files and manifest values it had, and the step's own files,
+        review and checks still hold. Otherwise why not (the step then runs)."""
+        st = self.state["steps"][sid]
+        held = st["held"]
+        m = self.ws.store.load()
+        for up, before in (held.get("upstream") or {}).items():
+            ust = self.state["steps"].get(up) or {}
+            if ust.get("status") != "passed":
+                return f"{up} has not passed"
+            if _result_of(ust, m, self.job, up) != before:
+                return f"{up} gave a different result"
+        for fp in [*held.get("inputs", []), *held.get("outputs", [])]:
+            if not Fingerprint.from_dict(fp).matches(trust_mtime=False):
+                return f"changed: {fp['path']}"
+        stage = get_stage(self._step(sid)["stage"])
+        why = stage.still_current(held)
+        if why:
+            return why
+        if stage.review:
+            outputs = [Path(fp["path"]) for fp in held.get("outputs", [])]
+            if not self.ws.approvals.status(stage.review, manifest=m, expected_evidence=outputs).satisfied:
+                return "its review no longer matches"
+        if not all(m.is_set(k) for k in held.get("committed", [])):
+            return "a value it committed is gone"
+        return None
 
     def _schedule(self) -> None:
         limits = {r: self.profile.limits.resources.get(r, 1) for r in RESOURCES}
@@ -509,6 +654,8 @@ class Engine:
                         self._waiting_heavy.discard(sid)
                         if res:
                             busy[res] += 1
+                        for gone in ("carried_from", "kept_utc", "not_kept"):   # this run makes its own result
+                            self.state["steps"][sid].pop(gone, None)
                         self.state["steps"][sid].update(status="running", started_utc=utc_now_iso())
                         self._save()
                         self._emit("step-start", step=sid)
@@ -602,6 +749,7 @@ class Engine:
             else:
                 self._commit(stage, sid, plan, output, inputs, outputs)
                 st["committed"] = [m.key for m in output.measurements]
+                st["committed_artifacts"] = dict(output.artifacts)
                 if stage.review:
                     st["review_detail"] = f"review {stage.review}: not needed (all automatic checks passed)"
                 st["status"] = "passed"
@@ -644,6 +792,7 @@ class Engine:
             if pending.get("sources_update"):
                 m.set_sources({**m.doc["sources"], **pending["sources_update"]})
         st["committed"] = [x["key"] for x in pending["measurements"]]
+        st["committed_artifacts"] = dict(pending.get("artifacts") or {})
 
     def _commit(self, stage, sid: str, plan: StepPlan, output: StepOutput,
                 inputs: list[dict], outputs: list[dict]) -> None:
@@ -658,6 +807,39 @@ class Engine:
                 m.set_artifact(key, **spec)
             if output.sources_update:
                 m.set_sources({**m.doc["sources"], **output.sources_update})
+
+
+_HELD_KEYS = ("inputs", "outputs", "committed", "committed_artifacts", "report", "finished_utc", "review_detail")
+#: the standard plans (workflow/plans.py); a new one keeps still-valid finished steps of an earlier one of its kind
+CARRY_OVER_KINDS = ("intake", "delivery")
+
+
+def _artifact_of(m, key: str) -> dict | None:
+    try:
+        return dict(m.artifact(key))
+    except Exception:
+        return None
+
+
+def _result_of(st: dict, m, job: str, sid: str) -> dict:
+    """A step's result as later steps see it: its output files (content, not time stamps) and the manifest values
+    it committed. A value that is no longer this step's own (another job wrote it since) never compares equal:
+    what the later steps read is then unknown, so they run."""
+    files = sorted((fp.get("path"), fp.get("sha256"), fp.get("size_bytes"), fp.get("scope"))
+                   for fp in st.get("outputs", []))
+    owner = st.get("carried_from") or job
+    values = {k: (m.get(k) if m is not None and _committed_by(m, k, owner, sid) else f"<not {sid}'s own: {k}>")
+              for k in st.get("committed", [])}
+    return {"files": [list(f) for f in files], "values": json.loads(json.dumps(values, default=str))}
+
+
+def _committed_by(m, key: str, job: str, sid: str) -> bool:
+    """The manifest's current value of ``key`` is the one step ``sid`` of ``job`` committed."""
+    entry = m.doc.get("values", {}).get(key)
+    if not entry:
+        return False
+    return any(e.get("kind") == "step" and e.get("job") == job and e.get("step") == sid
+               for e in entry.get("evidence") or [])
 
 
 def _approval_evidence(engine: Engine, sid: str) -> list[dict]:

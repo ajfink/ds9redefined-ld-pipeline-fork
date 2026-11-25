@@ -308,6 +308,11 @@ class Stage:
     def verify(self, ctx: StageContext, plan: StepPlan, output: StepOutput) -> list[str]:
         return []
 
+    #: A new intake/delivery job may keep this stage's finished result from an earlier job (CP60). False for stages
+    #: that fill in their own gaps whenever they are planned (retry failed downloads/decodes, redo a changed file):
+    #: they are planned again, which is cheap because they skip what is already done.
+    carry_over: bool = True
+
     def still_current(self, step_state: dict) -> str | None:
         """Why a passed step must run again although none of its recorded files changed (None: it is current).
 

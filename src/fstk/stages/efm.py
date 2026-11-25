@@ -248,6 +248,7 @@ def _rel(path: Path, root: Path) -> str:
 @register
 class EfmDecode(Stage):
     id = "efm-decode"
+    carry_over = False      # always planned again: it retries failed captures and re-decodes a changed WAV
     title = "Decode EFM audio (Orc EFMSink)"
     description = ("Per-capture Orc/EFMSink decode with log path-binding, PCM format and report checks; "
                    "records verified provenance and quality metrics.")

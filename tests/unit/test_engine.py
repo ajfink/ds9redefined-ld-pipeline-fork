@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 from collections import namedtuple
@@ -421,18 +422,21 @@ def test_a_rewrite_with_only_new_time_stamps_keeps_later_steps_and_their_approva
     """Mac 2026-11-23: a second job rewrote the shared reports (same data, new created_utc); resuming the first job
     after Approve then threw away the approved alignment and asked for the review again, forever."""
     prof, ws, _src, _ = env
-    first = plan("first", step("p", "t-json-report"), step("r", "t-review", after=["p"]))
+    first = plan("delivery-first", step("p", "t-json-report"), step("r", "t-review", after=["p"]))
     state = run(env, first)
     assert state["steps"]["r"]["status"] == "awaiting-review"
     assert state["steps"]["p"]["outputs"][0]["scope"] == "json-content"
     ws.approvals.record(review="t-evidence", decision="APPROVED", note="ok", actor="op",
                         evidence=[Path(fp["path"]) for fp in state["steps"]["r"]["outputs"]], manifest=ws.store.load())
     time.sleep(0.01)
-    run(env, plan("second", step("p", "t-json-report")))                # same data, new time stamps
-    assert CALLS["json"] == 2
+    second = run(env, plan("delivery-second", step("p", "t-json-report")))   # CP60: kept, not redone
+    assert second["steps"]["p"]["carried_from"] == "delivery-first" and CALLS["json"] == 1
+    report = Path(state["steps"]["p"]["outputs"][0]["path"])            # another job's rewrite: new time stamps
+    report.write_text(report.read_text().replace(json.loads(report.read_text())["created_utc"],
+                                                 "2026-11-24T00:00:00+00:00"))
     state = run(env, first)
     assert state["steps"]["p"]["status"] == "passed" and state["steps"]["r"]["status"] == "passed"
-    assert CALLS["json"] == 2 and CALLS["review"] == 1                   # nothing re-ran
+    assert CALLS["json"] == 1 and CALLS["review"] == 1                   # nothing re-ran
 
 
 def test_a_real_change_in_a_json_report_still_invalidates(env):
