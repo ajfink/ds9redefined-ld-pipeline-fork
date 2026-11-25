@@ -7,10 +7,12 @@ message).
 """
 from __future__ import annotations
 
+from collections.abc import Callable
+from pathlib import Path
 from typing import ClassVar
 
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QGuiApplication
+from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -57,6 +59,7 @@ class ProgressPanel(QWidget):
     pause_clicked = Signal()
     cancel_clicked = Signal()
     run_chosen = Signal(str)            # the run picker: show this job's steps
+    reveal_file = Signal(str)           # the Finished file row's "show in folder" link: this path
 
     COLUMNS: ClassVar[list[str]] = ["Step", "Status", "Progress", "Time", "", "What it is doing"]
     #: starting widths; every column can be dragged wider or narrower, and the widths are remembered
@@ -133,6 +136,12 @@ class ProgressPanel(QWidget):
         self.restart_buttons: dict[str, QToolButton] = {}
         self.allow_restart = True                    # off while a job runs in this window
         self.pack_target: str | None = None          # where the opening pack would be written (set by the window)
+        #: the episode's final output file (set by the window); the "Finished file" row after a delivery's steps
+        self.final_file_source: Callable[[], Path | None] | None = None
+        self.final_path: Path | None = None
+        self.final_exists = False
+        self.final_row: int | None = None
+        self.final_link: QLabel | None = None
         self.pack_exists = False
         self.running = False
 
@@ -210,6 +219,7 @@ class ProgressPanel(QWidget):
         self.save_buttons.clear()
         self.restart_buttons.clear()
         self.table.setRowCount(0)
+        self.final_row, self.final_link = None, None
         if tracker is None:
             self.headline.setText("No run yet")
             self.overall.setValue(0)
@@ -269,7 +279,71 @@ class ProgressPanel(QWidget):
             self.table.setCellWidget(row, 4, holder)
             self.refresh_buttons[step.id] = btn
             self.restart_buttons[step.id] = again
+        if any(step.stage == "remux" for step in tracker.steps.values()):   # a run that makes the final file
+            self._add_final_row()
+        self.update_final_file()
+
+    # ------------------------------------------------------------------ the "Finished file" row
+    FINAL_TIP = ("The finished file this run delivers: the encode with every audio and subtitle track. Click its "
+                 "name to play it, or \"show in folder\" to open the folder it is in.")
+
+    def _add_final_row(self) -> None:
+        row = self.table.rowCount()
+        self.table.setRowCount(row + 1)
+        name = QTableWidgetItem("Finished file")
+        name.setToolTip(self.FINAL_TIP)
+        f = name.font()
+        f.setBold(True)
+        name.setFont(f)
+        self.table.setItem(row, 0, name)
+        link = QLabel()
+        link.setTextFormat(Qt.TextFormat.RichText)
+        link.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        link.setContentsMargins(4, 0, 4, 0)
+        link.linkActivated.connect(self._final_link_clicked)
+        self.table.setCellWidget(row, 5, link)
+        self.final_row, self.final_link = row, link
+
+    def update_final_file(self) -> None:
+        """Look the final file up again (the window calls this when a step passes and when a run ends)."""
+        self.final_path = None
+        if self.final_row is not None and self.final_file_source is not None:
+            try:
+                self.final_path = self.final_file_source()
+            except Exception:                               # a manifest being written: try again next time
+                self.final_path = None
+        self.final_exists = bool(self.final_path and self.final_path.is_file())
         self.refresh()
+
+    def _final_link_clicked(self, href: str) -> None:
+        if self.final_path is None:
+            return
+        if href == "folder":
+            self.reveal_file.emit(str(self.final_path))
+        else:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.final_path)))
+
+    def _final_row_refresh(self, snap: Snapshot) -> None:
+        if self.final_row is None or self.final_link is None:
+            return
+        if self.final_exists and snap.state == "finished":
+            text, tone, tip = DONE_MARK + "ready", "passed", "Every step is done and the delivery was approved."
+        elif self.final_exists:
+            text, tone, tip = "made", "running", "The file is made; QC and your approval come next."
+        else:
+            text, tone, tip = "not made yet", "pending", "The file is made by the Remux step."
+        status = QTableWidgetItem(text)
+        status.setToolTip(tip)
+        if tone != "pending":
+            status.setForeground(status_colour(tone))
+        self.table.setItem(self.final_row, 1, status)
+        if self.final_exists:
+            p = self.final_path
+            self.final_link.setText(f'<a href="file">{p.name}</a> &nbsp;·&nbsp; <a href="folder">show in folder</a>')
+            self.final_link.setToolTip(f"{p}\n\n{self.FINAL_TIP}")
+        else:
+            self.final_link.setText("")
+            self.final_link.setToolTip(self.FINAL_TIP)
 
     # ------------------------------------------------------------------ row actions
     def can_restart(self, step_id: str, status: str) -> bool:
@@ -398,6 +472,7 @@ class ProgressPanel(QWidget):
         self.detail.setVisible(bool(parts))
         for row, step in enumerate(snap.steps):
             self._row(row, step, snap)
+        self._final_row_refresh(snap)
         return snap
 
     def _row(self, row: int, step: StepProgress, snap: Snapshot) -> None:

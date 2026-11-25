@@ -443,6 +443,29 @@ class Services:
             self.last_cleanup = self.clean_leftovers(episode, actor=actor)
         return path
 
+    def final_file(self, episode: str | EpisodeId) -> Path | None:
+        """The episode's final output (the remux's deliverable), or None before it is made."""
+        ctx = self._ctx(episode)
+        m = ctx.manifest
+        key = m.get("deliverable.key") or "padfixed"
+        if not m.artifact(key):
+            return None
+        try:
+            return ctx.artifact_path(key, m)
+        except FstkError:
+            return None
+
+    def final_output_approved(self, episode: str | EpisodeId) -> bool:
+        """The newest job is a delivery (or re-encode) whose every step passed, the approval included."""
+        return self.episode_status(episode)[0] == "delivered"
+
+    def leftovers(self, episode: str | EpisodeId) -> list:
+        """What ``clean_leftovers`` would delete now (``fstk.workspace.leftovers.Leftover``)."""
+        from fstk.workspace.leftovers import find_leftovers
+
+        ws = self.workspace(episode)
+        return find_leftovers(self.profile, ws.episode, ws.store.load())
+
     def clean_leftovers(self, episode: str | EpisodeId, *, actor: str) -> dict[str, Any]:
         """Once the final output is approved: delete files of attempts that cannot be used again
         (``fstk.workspace.leftovers``), and keep a report of what went. Never raises: a refusal is reported."""

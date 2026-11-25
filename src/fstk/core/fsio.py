@@ -190,6 +190,17 @@ class LockInfo:
         """``True``/``False`` for a lock owned by this host; ``None`` when unknowable."""
         if self.pid is None or self.host != socket.gethostname():
             return None
+        if self.ptime is None and self.started_utc:
+            # a lock from before ptime was recorded: its owner had started by the time it took the lock, so a
+            # process with that pid that started later is another one that reused the pid (PC-A, 2026-11-25)
+            try:
+                from datetime import datetime
+
+                taken = datetime.fromisoformat(self.started_utc.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                taken = None
+            if taken is not None:
+                return pid_alive(self.pid, started_by=taken)
         return pid_alive(self.pid, self.ptime)
 
 
@@ -208,9 +219,11 @@ def process_start_time(pid: int | None = None) -> float | None:
         return None
 
 
-def pid_alive(pid: int, started: float | None = None) -> bool:
+def pid_alive(pid: int, started: float | None = None, *, started_by: float | None = None) -> bool:
     """Is ``pid`` a running process, and (when ``started`` is given) the same one that started then?
 
+    ``started_by``: the process must have started no later than this (epoch seconds, plus
+    ``PID_START_TOLERANCE_S``); used for old locks that recorded when they were taken but not the owner's start.
     A process we cannot inspect (an elevated one, seen from a normal window) counts as alive: it exists.
     """
     if pid <= 0:
@@ -224,7 +237,10 @@ def pid_alive(pid: int, started: float | None = None) -> bool:
             proc = psutil.Process(pid)
             if proc.status() == psutil.STATUS_ZOMBIE:
                 return False
-            return started is None or abs(proc.create_time() - started) <= PID_START_TOLERANCE_S
+            created = proc.create_time()
+            if started_by is not None and created > started_by + PID_START_TOLERANCE_S:
+                return False
+            return started is None or abs(created - started) <= PID_START_TOLERANCE_S
         except psutil.NoSuchProcess:
             return False
         except psutil.AccessDenied:

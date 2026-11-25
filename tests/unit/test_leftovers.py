@@ -89,3 +89,26 @@ def test_approving_the_delivery_clears_them_and_keeps_a_list(env, tmp_path):
     from pathlib import Path
 
     assert json.loads(Path(doc["report"]).read_text())["why"] == "final output approved"
+
+
+def test_a_stale_old_style_lock_does_not_block_the_cleanup(env):
+    """A lock written before ptime existed, whose pid now belongs to a process that started later (PC-A)."""
+    import os
+    import socket
+
+    prof, ws, files = env
+    lock = prof.episode_state_dir(EP) / "plans" / "intake-old" / ".job.lock"
+    lock.parent.mkdir(parents=True)
+    lock.write_text(f"pid={os.getpid()} host={socket.gethostname()} started_utc=2020-01-01T00:00:00+00:00 purpose=t\n")
+    removed = remove_leftovers(prof, EP, ws.store.load())
+    assert removed and not files["attempt"].exists()
+
+
+def test_leftovers_can_be_removed_again_from_the_episode_menu(env, monkeypatch):
+    prof, ws, files = env
+    svc = Services(prof)
+    assert {x.path for x in svc.leftovers(EP)} == {x.path for x in find_leftovers(prof, EP, ws.store.load())}
+    monkeypatch.setattr(Services, "episode_status", lambda self, e: ("3 of 9 steps", "quiet"))
+    assert not svc.final_output_approved(EP)
+    monkeypatch.setattr(Services, "episode_status", lambda self, e: ("delivered", "good"))
+    assert svc.final_output_approved(EP)

@@ -200,6 +200,26 @@ def test_locks_record_the_start_time(tmp_path):
             pass
 
 
+def test_an_old_lock_without_ptime_is_stale_when_its_pid_was_reused(tmp_path):
+    """PC-A, 2026-11-25: a two-day-old intake lock (written before ptime) named a pid Windows had given to another
+    process, so the leftover cleanup thought S01E20 was still being worked on."""
+    from datetime import UTC, datetime, timedelta
+
+    started = process_start_time()
+    host, me = socket.gethostname(), os.getpid()
+
+    def lock(when):
+        p = tmp_path / f"{when.timestamp():.0f}.lock"
+        p.write_text(f"pid={me} host={host} started_utc={when.isoformat()} purpose=t\n")
+        return read_lock(p)
+
+    before = datetime.fromtimestamp(started, UTC) - timedelta(hours=1)    # taken before this process existed
+    after = datetime.fromtimestamp(started, UTC) + timedelta(seconds=5)   # taken by this process
+    assert lock(before).local_process_alive is False
+    assert lock(after).local_process_alive is True
+    assert pid_alive(me, started_by=started + 1) and not pid_alive(me, started_by=started - 60)
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="posix zombie handling")
 def test_a_finished_child_is_not_alive():
     import subprocess

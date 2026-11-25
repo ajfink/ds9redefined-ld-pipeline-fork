@@ -30,7 +30,7 @@ import time
 from pathlib import Path
 from typing import ClassVar
 
-from PySide6.QtCore import QObject, QProcess, Qt, QThread, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import QDir, QObject, QProcess, Qt, QThread, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -332,6 +332,8 @@ class MainWindow(QMainWindow):
         self._queued_plans: list[str] = []
         self._running_plan: str | None = None
         self.progress_panel = ProgressPanel()
+        self.progress_panel.final_file_source = lambda: self.services.final_file(self.episode) if self.episode else None
+        self.progress_panel.reveal_file.connect(lambda p: self.reveal_file(Path(p)))
         self.progress_panel.space_refresh.connect(self.recheck_space)
         self.progress_panel.pack_save.connect(self.save_opening_pack)
         self.progress_panel.restart_from.connect(self.restart_step)
@@ -458,6 +460,10 @@ class MainWindow(QMainWindow):
                                  "back for corrections.")
         self.handoff_button = A("Hand off to another machine…", self.ask_handoff,
                                 "Freeze this episode here and hand it to another machine (shared workspace)")
+        self.leftovers_action = A("Remove leftover files…", self.open_leftovers,
+                                  "After the final output is approved: delete files of failed or replaced attempts "
+                                  "that cannot be used again (it lists them first). Done for you on approval; use this "
+                                  "when that was skipped.")
         self.remove_button = A("Remove episode…", self.open_remove,
                                "Remove the selected episode (and, if you choose, its files)")
         self.intake_button = A("Run intake", self.run_intake,
@@ -493,7 +499,7 @@ class MainWindow(QMainWindow):
         m.addAction(quit_action)
         m = bar.addMenu("&Episode")
         for a in (self.pick_button, None, self.dvd_button, self.efm_button, self.delivery_button, None,
-                  self.handoff_button, self.remove_button):
+                  self.leftovers_action, self.handoff_button, self.remove_button):
             m.addSeparator() if a is None else m.addAction(a)
         m = bar.addMenu("&Run")
         for a in (self.intake_button, self.deliver_button, None, self.pause_action, self.cancel_action, None,
@@ -609,7 +615,7 @@ class MainWindow(QMainWindow):
             self.episodes.setCurrentItem(item)
         menu = QMenu(self)
         for a in (self.pick_button, None, self.dvd_button, self.efm_button, self.delivery_button, None,
-                  self.handoff_button, self.remove_button):
+                  self.leftovers_action, self.handoff_button, self.remove_button):
             menu.addSeparator() if a is None else menu.addAction(a)
         menu.exec(self.episodes.viewport().mapToGlobal(pos))
 
@@ -1036,6 +1042,37 @@ class MainWindow(QMainWindow):
         item = self._find_episode(EpisodeId.parse(canonical).canonical if ":" in canonical or canonical else canonical)
         if item is not None:
             self.episodes.setCurrentItem(item)
+
+    def open_leftovers(self) -> None:
+        """Episode › Remove leftover files…: the approval-time cleanup, again (it was refused or skipped)."""
+        episode = self.episode
+        LOG.info("action leftovers-open episode=%s", episode)
+        if not episode:
+            return
+        if not self.services.final_output_approved(episode):
+            QMessageBox.information(self, "Not yet", "Leftover files are removed only once the final output is "
+                                    "approved (Delivery A/V check), so nothing that might still be needed goes.")
+            return
+        try:
+            items = self.services.leftovers(episode)
+        except (FstkError, OSError) as exc:
+            QMessageBox.warning(self, "Cannot list leftover files", str(exc))
+            return
+        if not items:
+            QMessageBox.information(self, "Nothing to remove", "There are no leftover files for this episode.")
+            return
+        total = sum(x.bytes for x in items) / 2**30
+        box = QMessageBox(QMessageBox.Icon.Question, "Remove leftover files",
+                          f"Remove {len(items)} leftover file(s), {total:.1f} GiB? They are files of failed or "
+                          "replaced attempts that cannot be used again. This cannot be undone.", parent=self)
+        box.setDetailedText("\n".join(f"{x.path} — {x.why} ({x.bytes / 2**20:.0f} MiB)" for x in items))
+        remove = box.addButton("Remove", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        if box.clickedButton() is not remove:
+            return
+        self._log_cleanup(self.services.clean_leftovers(episode, actor=self.actor))
 
     def open_remove(self) -> None:
         episode = self.episode
@@ -1592,6 +1629,9 @@ class MainWindow(QMainWindow):
             if event["kind"] != "progress":
                 self.update_progress()
         kind = event["kind"]
+        passed = self.tracker.steps.get(event.get("step") or "") if self.tracker is not None else None
+        if kind == "step-passed" and passed is not None and passed.stage == "remux":
+            self.progress_panel.update_final_file()              # the "Finished file" row gets its link
         name = self._name_of(event.get("step"))
         ep = (self.episode or "").split(":")[-1]
         if kind == "step-awaiting-review":
@@ -1657,7 +1697,36 @@ class MainWindow(QMainWindow):
             self.set_banner(f"Stopped: {first} {STATUS_WORDS[steps[failed[0]]['status']]}"
                             + (f": {issue}" if issue else "."), "bad", actions, kind="needs")
         elif all(st.get("status") == "passed" for st in steps.values()):
-            self.set_banner(f"Finished: all {len(steps)} steps are done.", "good")
+            final = self._final_output_of_run()
+            if final is not None:
+                self.append_log(f"final output: {final}")
+                self.set_banner(f"Finished: all {len(steps)} steps are done. Final output: {final.name}", "good",
+                                [("Show in folder", lambda p=final: self.reveal_file(p))])
+                self.reveal_file(final)
+            else:
+                self.set_banner(f"Finished: all {len(steps)} steps are done.", "good")
+
+    def _final_output_of_run(self) -> Path | None:
+        """After a delivery or re-encode run: its final file, when it exists."""
+        if self.tracker is None or not self.episode \
+                or not any(s.stage == "remux" for s in self.tracker.steps.values()):
+            return None
+        try:
+            path = self.services.final_file(self.episode)
+        except (FstkError, OSError):
+            return None
+        return path if path is not None and path.is_file() else None
+
+    def reveal_file(self, path: Path) -> None:
+        """Open the folder holding ``path``, with the file selected where the system can do that."""
+        import sys
+
+        if sys.platform == "win32":
+            QProcess.startDetached("explorer", [f"/select,{QDir.toNativeSeparators(str(path))}"])
+        elif sys.platform == "darwin":
+            QProcess.startDetached("open", ["-R", str(path)])
+        else:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent)))
 
     @Slot(str)
     def on_failed(self, message: str) -> None:

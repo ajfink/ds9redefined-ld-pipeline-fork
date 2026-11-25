@@ -45,3 +45,5 @@ def _no_modal_volume_advice(monkeypatch):
     except ImportError:                                   # no Qt in this environment
         return
     monkeypatch.setattr(MainWindow, "show_volume_advice", lambda self, advice: None)
+    # never open a file manager from a test (a finished delivery opens the folder of its final file)
+    monkeypatch.setattr(MainWindow, "reveal_file", lambda self, path: None)

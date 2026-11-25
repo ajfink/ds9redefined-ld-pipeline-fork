@@ -173,7 +173,9 @@ def test_a_job_running_in_another_process_is_reported_not_edited(services, tmp_p
     services.run_plan(review_plan(tmp_path), actor="op")
     lock = services.workspace("DS9:S01E20").job_dir("rv") / ".job.lock"
     assert services.job_runner("DS9:S01E20", "rv") is None
-    lock.write_text(f"pid={os.getpid()} host={socket.gethostname()} started_utc=2026-01-01T00:00:00+00:00 purpose=x\n")
+    from fstk.core.timeutil import utc_now_iso
+
+    lock.write_text(f"pid={os.getpid()} host={socket.gethostname()} started_utc={utc_now_iso()} purpose=x\n")
     assert services.job_runner("DS9:S01E20", "rv") == os.getpid()
     with _pytest.raises(FstkError, match="another FromStunToKill window"):
         services.recheck_space("DS9:S01E20", "rv")

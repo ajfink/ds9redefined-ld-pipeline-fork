@@ -52,7 +52,7 @@ class Remux(Stage):
             raise GateError(str(exc)) from None
         tracks = audio_tracks(settings, has_51=want_51)
         # A/V-check reruns make new versions; nothing is ever overwritten.
-        stem = f"{ctx.episode.code}-23.976-padfixed"
+        stem = f"{ctx.episode.code}-23.976-final-output"
         version = 1
         out = ctx.root("out") / f"{stem}.mkv"
         while out.exists() or out.with_name(out.stem + ".tmp.mkv").exists():

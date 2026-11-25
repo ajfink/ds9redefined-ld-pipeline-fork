@@ -535,7 +535,7 @@ class SettingsDialog(QDialog):
         lay = QVBoxLayout(w)
         lay.addWidget(QLabel("Container: Matroska (.mkv)"))
         lay.addWidget(_note("Every codec offered under Video and Audio, the subtitles and the track titles fit "
-                            "in Matroska. Finished files are named <episode>-23.976-padfixed.mkv; a re-encode or "
+                            "in Matroska. Finished files are named <episode>-23.976-final-output.mkv; a re-encode or "
                             "an A/V correction makes -r2, -r3 … and never overwrites an earlier file."))
         lay.addWidget(_note("Changing Video or Audio settings after an episode is finished re-runs only "
                             "encode → remux → QC from the lossless master; nothing earlier is redone."))

@@ -1639,3 +1639,22 @@ names that no longer exist; required tools never found) and, if any, lists them 
   `test_qc_gates.py`. Suite 683 passed.
 - To finish S01E20: update and restart the app, then *Restart from here* on qc.
 
+
+## CP75 — stale old-style lock, Remove leftover files…, the Finished file row, `-final-output.mkv` (owner, 2026-11-25)
+
+- S01E20 (PC-A) passed QC with CP74 and was approved, but the cleanup said the episode was "being worked on" by
+  `intake-ds9-s01e20-20261123t015558 (pid 38088)`: a two-day-old lock written before locks recorded `ptime`, whose pid
+  Windows had since given to another process. `LockInfo.local_process_alive` now checks an old lock against its
+  `started_utc`: a process with that pid that started after the lock was taken is not its owner
+  (`pid_alive(..., started_by=)`). Every user of job locks gets this (running jobs, removal, queue, cleanup).
+- **Episode › Remove leftover files…** (also on the episode list's right-click menu): the approval-time cleanup again,
+  for when it was refused or skipped. Only once the final output is approved (`Services.final_output_approved`); lists
+  every file with why and size, default button Cancel.
+- Owner: the final output is now `<episode>-23.976-final-output.mkv` (was `-padfixed.mkv`; revisions `-r2`, …). The
+  video-only encode keeps its own name; manifest keys are unchanged. Files already delivered keep their names.
+- Owner: a delivery or re-encode run's Progress table ends with a **Finished file** row: "not made yet" → "made"
+  (after remux) → "✓ ready" (every step done, approval included); its last column links the file (click to play) and
+  "show in folder". When such a run finishes, the log says `final output: <path>`, the banner names it with
+  **Show in folder**, and the folder opens with the file selected (Explorer `/select`, Finder `open -R`).
+- Tests: old-lock staleness, a stale lock no longer blocks the cleanup, the menu helpers, the Finished file row and the
+  end-of-run reveal; remux tests use the new name; a UI test's fake lock is now dated now. Suite 688 passed.

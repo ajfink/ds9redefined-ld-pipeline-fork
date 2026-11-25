@@ -180,3 +180,60 @@ def test_dvd_dialog_leads_with_the_recorded_file(services, tmp_path, qtbot):  # 
     assert dlg.chooser.isHidden() and dlg.change_button.text() == "Change DVD…"
     dlg.change_button.click()
     assert not dlg.chooser.isHidden()
+
+
+# ------------------------------------------------------------------ the finished file (owner, 2026-11-25)
+DELIVERY = {"job": "delivery-ds9-s01e20-20261125t120000", "episode": "DS9:S01E20",
+            "steps": [{"id": "remux", "stage": "remux", "after": []},
+                      {"id": "qc", "stage": "qc-report", "after": ["remux"]}]}
+
+
+@pytest.mark.gui
+def test_a_delivery_run_ends_with_a_finished_file_row_linking_the_file(qtbot, tmp_path):
+    from fstk.ui.progress_panel import ProgressPanel
+
+    final = tmp_path / "S01E20-23.976-final-output.mkv"
+    panel = ProgressPanel()
+    qtbot.addWidget(panel)
+    panel.final_file_source = lambda: final
+    t = ProgressTracker(DELIVERY)
+    t.load_state({"job": DELIVERY["job"], "steps": {"remux": {"status": "pending"}, "qc": {"status": "pending"}}})
+    panel.set_tracker(t)
+    row = panel.final_row
+    assert row == 2 and panel.table.item(row, 0).text() == "Finished file"
+    assert panel.table.item(row, 1).text() == "not made yet" and panel.final_link.text() == ""
+    assert panel.step_at(row) is None and panel.row_menu(row) is None      # not a step: no step actions
+    final.write_bytes(b"x")
+    panel.update_final_file()
+    assert panel.table.item(row, 1).text() == "made"
+    assert final.name in panel.final_link.text() and "show in folder" in panel.final_link.text()
+    assert str(final) in panel.final_link.toolTip()
+    shown = []
+    panel.reveal_file.connect(shown.append)
+    panel._final_link_clicked("folder")
+    assert shown == [str(final)]
+    t.load_state({"job": DELIVERY["job"], "steps": {"remux": {"status": "passed"}, "qc": {"status": "passed"}}})
+    panel.refresh()
+    assert panel.table.item(row, 1).text() == "✓ ready"
+    # a run without a remux (intake) has no such row
+    panel.set_tracker(ProgressTracker(PLAN))
+    assert panel.final_row is None and panel.table.rowCount() == 3
+
+
+@pytest.mark.gui
+def test_the_end_of_a_delivery_logs_and_opens_the_final_file(services, qtbot, tmp_path, monkeypatch):  # noqa: F811
+    from fstk.ui.app import MainWindow
+
+    w = MainWindow(services, actor="op")
+    qtbot.addWidget(w)
+    final = tmp_path / "S01E20-23.976-final-output.mkv"
+    final.write_bytes(b"x")
+    monkeypatch.setattr(type(w.services), "final_file", lambda self, e: final)
+    opened = []
+    monkeypatch.setattr(MainWindow, "reveal_file", lambda self, p: opened.append(p))
+    monkeypatch.setattr(MainWindow, "episode", property(lambda self: "DS9:S01E20"))
+    w.tracker = ProgressTracker(DELIVERY)
+    w.on_finished({"job": DELIVERY["job"], "steps": {"remux": {"status": "passed"}, "qc": {"status": "passed"}}})
+    assert opened == [final]
+    assert any(f"final output: {final}" in line for line in w.log.toPlainText().splitlines())
+    assert "final-output.mkv" in w.banner.text()
