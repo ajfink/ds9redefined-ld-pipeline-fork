@@ -75,10 +75,21 @@ def set_priority(value: str) -> None:
     PRIORITY["value"] = value
 
 
+#: Windows: the app runs without a console (pythonw, started detached), so every console tool it starts would
+#: open a console window of its own — one flashing window per ffprobe/ffmpeg/vspipe call, and a click on one
+#: stops that tool (exit 0xC000013A). CREATE_NO_WINDOW runs them with no window; their pipes are unchanged.
+CREATE_NO_WINDOW = 0x08000000
+
+
+def hidden() -> dict:
+    """Popen keyword arguments that start a console tool without a window (Windows; nothing elsewhere)."""
+    return {"creationflags": CREATE_NO_WINDOW} if os.name == "nt" else {}
+
+
 def _popen_kwargs() -> dict:
     if os.name == "nt":
         flag = {"normal": 0, "below_normal": 0x00004000, "idle": 0x00000040}[PRIORITY["value"]]
-        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | flag}
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | flag}
     nice = {"normal": 0, "below_normal": 10, "idle": 19}[PRIORITY["value"]]
     if nice:
         def lower() -> None:
@@ -175,7 +186,7 @@ def stop_tree(proc: subprocess.Popen, *, grace: float = STOP_GRACE_SECONDS) -> N
             return
         except subprocess.TimeoutExpired:
             subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                           capture_output=True, check=False)
+                           capture_output=True, check=False, **hidden())
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:

@@ -20,6 +20,8 @@ from pathlib import Path
 
 import numpy as np
 
+from fstk.tools import process
+
 RATE = 48000
 FADE_S = 0.002
 CHUNK = 1 << 16
@@ -31,7 +33,7 @@ class _PCMReader:
     """Sequential float32 reader over an FFmpeg decode of one audio stream."""
 
     def __init__(self, args: list[str], channels: int):
-        self.proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **process.hidden())
         self.channels = channels
         self.pos = 0                        # samples consumed
         self.buf = np.zeros((0, channels), np.float32)
@@ -89,7 +91,7 @@ def render_51(pieces, *, total_s: float, dvd: Path, dvd_selector: str, layout: s
     enc = subprocess.Popen([ffmpeg, "-hide_banner", "-nostdin", "-v", "error", "-f", "s32le", "-ar", str(RATE),
                             "-ac", "6", "-channel_layout", layout, "-i", "-", "-c:a", "flac", "-compression_level", "8",
                             "-sample_fmt", "s32", "-bits_per_raw_sample", str(BITS), "-f", "flac", str(tmp)],
-                           stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                           stdin=subprocess.PIPE, stderr=subprocess.DEVNULL, **process.hidden())
     rng = np.random.default_rng(SEED)
     h = hashlib.sha256()
     written = 0

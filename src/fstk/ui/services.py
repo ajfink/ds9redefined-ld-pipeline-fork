@@ -21,6 +21,7 @@ from fstk.core.fsio import LockHeldError
 from fstk.core.identity import EpisodeId
 from fstk.manifest.registry import FIELDS, field_def
 from fstk.stages.base import get_stage
+from fstk.tools import process
 from fstk.workflow.engine import Engine, EpisodeWorkspace, load_plan
 
 LOG_SETTINGS = logging.getLogger("fstk.ui")
@@ -610,7 +611,7 @@ class Services:
         import subprocess
 
         LOG_SETTINGS.info("queue done: putting the computer to sleep")
-        subprocess.Popen(self.sleep_command())
+        subprocess.Popen(self.sleep_command(), **process.hidden())
 
     # ---------------------------------------------------------------- settings
     APP_PREFS: ClassVar[dict[str, Any]] = {"operator": "", "notifications": True, "catalog_refresh_days": 30, "log_level": "INFO",
@@ -753,7 +754,7 @@ class Services:
             try:
                 exe = str(self.profile.tool("ffmpeg"))
                 text = subprocess.run([exe, "-hide_banner", "-encoders"], capture_output=True, text=True,
-                                      timeout=20).stdout
+                                      timeout=20, **process.hidden()).stdout
                 self._encoders = {line.split()[1] for line in text.splitlines()
                                   if len(line.split()) > 1 and line.startswith(" ") and line.split()[0][:1] in "VA"}
             except Exception:  # missing tool, timeout: treat as unknown

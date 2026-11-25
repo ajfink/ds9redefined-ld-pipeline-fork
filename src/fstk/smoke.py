@@ -22,6 +22,7 @@ from pathlib import Path
 from fstk.core.errors import FstkError
 from fstk.core.identity import EpisodeId
 from fstk.core.timeutil import utc_now_iso
+from fstk.tools import process
 
 
 @dataclass
@@ -84,11 +85,12 @@ def make_excerpt(prof, ep: EpisodeId, spec: SmokeSpec) -> tuple[Path, int]:
     out.parent.mkdir(parents=True, exist_ok=True)
     if not out.exists():
         subprocess.run([str(prof.tool("ffmpeg")), "-hide_banner", "-nostdin", "-v", "error", "-i", str(spec.master),
-                        "-t", f"{spec.seconds:.3f}", "-map", "0:v:0", "-c", "copy", "-an", str(out)], check=True)
+                        "-t", f"{spec.seconds:.3f}", "-map", "0:v:0", "-c", "copy", "-an", str(out)], check=True,
+                       **process.hidden())
     ff = prof.tool("ffprobe")
     res = subprocess.run([str(ff), "-v", "error", "-count_frames", "-select_streams", "v:0",
                           "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", str(out)],
-                         capture_output=True, text=True, check=True)
+                         capture_output=True, text=True, check=True, **process.hidden())
     return out, int(res.stdout.strip())
 
 

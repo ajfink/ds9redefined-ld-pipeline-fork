@@ -1357,3 +1357,17 @@ names that no longer exist; required tools never found) and, if any, lists them 
     message now carries the free memory at that moment (psutil) so the next bundle can confirm or rule out memory.
     The wrapper now closes the scripts it reads (the ResourceWarnings in the log).
   Full suite 617 passed, 1 skipped.
+
+## CP58 — no console windows (owner, 2026-11-24: "a lot of command windows pop up and close during these runs")
+
+- Cause: the launcher starts the app windowless (`pythonw`, DETACHED_PROCESS), so Windows gives every console tool
+  the app starts (ffprobe, ffmpeg, vspipe, orc, 7-Zip, taskkill) a console window of its own. A click on one of
+  them stops that tool with 0xC000013A (seen on a vspipe and an ffmpeg in today's Legion bundles).
+- Fix: `process.CREATE_NO_WINDOW` in `_popen_kwargs` (all `run`/`run_pipeline` tools) and `process.hidden()` on every
+  direct `subprocess` call (frame reader, retime render, resampler, 7-Zip, DVD subtitle extract, encoder list,
+  sleep, wizard probes, smoke, taskkill). Pipes, priorities, pause (psutil suspend) and stop (terminate →
+  taskkill /T /F) are unchanged: the windowless app could never send CTRL_BREAK to them anyway. Only the setup
+  wizard's package-manager installs keep the launcher's console (they may ask questions there).
+- Guard: `tests/unit/test_no_console_windows.py` parses every `subprocess` call in `src/` and fails on one started
+  without the flags.
+- Full suite 619 passed, 1 skipped.

@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 from fstk.core.errors import ArtifactError, ToolError
+from fstk.tools import process
 
 
 class SevenZip:
@@ -16,7 +17,8 @@ class SevenZip:
         self.exe = str(exe)
 
     def list_slt(self, archive: Path) -> str:
-        res = subprocess.run([self.exe, "l", "-slt", str(archive)], capture_output=True, check=False)
+        res = subprocess.run([self.exe, "l", "-slt", str(archive)], capture_output=True, check=False,
+                             **process.hidden())
         if res.returncode:
             raise ToolError(f"7-Zip could not list {archive}: {res.stderr.decode('utf-8', 'replace')[-800:]}")
         return res.stdout.decode("utf-8", "replace")
@@ -30,7 +32,7 @@ class SevenZip:
             raise ArtifactError(f"an earlier extraction left {partial}; inspect and move it aside first")
         cmd = [self.exe, "e", "-so", "-y", "-bso0", "-bsp0", "-bse2", str(archive), member]
         with partial.open("xb") as stream:
-            res = subprocess.run(cmd, stdout=stream, stderr=subprocess.PIPE, check=False)
+            res = subprocess.run(cmd, stdout=stream, stderr=subprocess.PIPE, check=False, **process.hidden())
             stream.flush()
         if res.returncode:
             raise ToolError(f"7-Zip extraction failed ({res.returncode}); partial output kept at {partial}: "

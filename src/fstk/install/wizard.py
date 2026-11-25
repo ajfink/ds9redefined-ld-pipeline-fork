@@ -25,6 +25,7 @@ from fstk.core.timeutil import utc_now_iso
 from fstk.install import orc as orc_install
 from fstk.install import providers
 from fstk.install.discover import TOOL_ORDER, Found, discover, tools_dir
+from fstk.tools import process
 
 LABELS = {"vspipe": "VapourSynth (vspipe)", "ffmpeg": "FFmpeg", "ffprobe": "FFprobe",
           "orc": "Decode-Orc (orc-cli)", "sevenzip": "7-Zip", "curl": "curl"}
@@ -78,7 +79,7 @@ def _run(cmd: list[str]) -> int:
 
 
 def _run_text(cmd: list[str]) -> str:
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False).stdout
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False, **process.hidden()).stdout
 
 
 def _clean_path(text: str) -> str:

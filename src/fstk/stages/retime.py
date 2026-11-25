@@ -33,6 +33,7 @@ from fstk.core.timeutil import utc_now_iso, utc_stamp
 from fstk.media import dvd_audio as da
 from fstk.media.retime_map import build_map, retime_srt
 from fstk.media.retime_render import RATE, render_51
+from fstk.tools import process
 
 from .base import ArtifactExists, Custom, Stage, StepOutput, StepPlan, ValueIs, ValueSet, register
 
@@ -144,7 +145,8 @@ class DvdRetime(Stage):
             srt_text, srt_origin = Path(d["srt_source"]).read_text(encoding="utf-8-sig"), "srt_source artifact"
         elif text_sub is not None:
             res = subprocess.run([ff.ffmpeg, "-hide_banner", "-nostdin", "-v", "error", "-i", str(dvd), "-map",
-                                  f"0:s:{text_sub}", "-f", "srt", "-"], capture_output=True, timeout=600)
+                                  f"0:s:{text_sub}", "-f", "srt", "-"], capture_output=True, timeout=600,
+                                 **process.hidden())
             if res.returncode == 0 and res.stdout.strip():
                 srt_text, srt_origin = res.stdout.decode("utf-8", "replace"), f"DVD subtitle stream 0:s:{text_sub}"
         cues, dropped = 0, []

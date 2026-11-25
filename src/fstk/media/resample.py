@@ -26,6 +26,8 @@ from typing import Any
 
 import numpy as np
 
+from fstk.tools import process
+
 OUT_RATE = 44100
 BITS = 24
 QUALITY = "VHQ"
@@ -38,7 +40,7 @@ def _encoder(ffmpeg: str, out: Path, log: Path | None) -> subprocess.Popen:
             "-i", "-", "-c:a", "flac", "-compression_level", "8", "-sample_fmt", "s32",
             "-bits_per_raw_sample", str(BITS), "-f", "flac", str(out)]
     err = open(log, "ab") if log else subprocess.DEVNULL  # noqa: SIM115 - closed by the caller via proc
-    return subprocess.Popen(args, stdin=subprocess.PIPE, stderr=err)
+    return subprocess.Popen(args, stdin=subprocess.PIPE, stderr=err, **process.hidden())
 
 
 class _Quantiser:
