@@ -1,13 +1,14 @@
 # Spec: hardware-accelerated encoding as an option (NVENC and others)
 
-Status: **approved to build, not implemented** (owner request and decisions 2026-11-25; see §0). Builds on the encoder registry in `src/fstk/config/output.py` (`VIDEO_ENCODERS`, `video_args`), the final encode stage (`stages/encode.py`, `media/encode.final_encode_args`, `check_encoded_stream`) and the Settings › Video page (`ui/settings.py`, `VideoPage`).
+Status: **approved to build, not implemented** (owner request and decisions 2026-11-25; see §0). No open questions remain. Builds on the encoder registry in `src/fstk/config/output.py` (`VIDEO_ENCODERS`, `video_args`), the final encode stage (`stages/encode.py`, `media/encode.final_encode_args`, `check_encoded_stream`) and the Settings › Video page (`ui/settings.py`, `VideoPage`).
 
 ## 0. Owner decisions (2026-11-25)
 
 - **Build every encoder in §3**, not a first batch. Which ones a machine offers is decided by detection (§4.2), not by the code.
 - **No benchmark before building.** Build it out; test and benchmark on the real machines afterwards (§4.1 becomes a post-build check).
 - **The lossless intermediate becomes a visible setting in Settings › General** (§7), with its extra storage stated plainly.
-- Still open: §6 questions 2 and 3.
+- **A hardware encode may be an episode's only delivered copy.** Whether it is, or an x265 copy is also made, is a setting, global and per episode (§8).
+- **The grain-retention check warns; it never blocks delivery** (§4.5).
 
 ## 1. What this adds, and what it does not
 
@@ -78,7 +79,7 @@ The S01E20 encode on PC-A ran at **11.48 fps for 95 minutes**, with vspipe and x
 ### 4.5 Checks that must keep passing
 `check_encoded_stream` already checks codec, profile, pixel format, rate, frame count and a full decode. Each hardware encoder needs its own `probe` table (profile names differ, e.g. NVENC HEVC 4:2:2 reports `Rext`), and two additions:
 - **Colour tags:** `color_primaries`, `color_transfer` and `color_space` must read `smpte170m`, and `color_range` `tv`. This catches the AMF BT.2020 issue and any driver that drops tags.
-- **Grain retention (new QC gate, WARN level):** grain of encoded frames against the master at the QC sample points, reusing `quality.grain`. Below a threshold it says "the encode removed N % of the grain". This applies to every encoder, not only hardware, so the warning is measured, not just stated.
+- **Grain retention (new QC check, WARN only, never blocks; owner decision):** grain of encoded frames against the master at the QC sample points, reusing `quality.grain`. Below a threshold it says "the encode removed N % of the grain". This applies to every encoder, not only hardware, so the warning is measured, not just stated.
 
 ### 4.6 Repeatability
 - Hardware output changes with GPU model and driver version. A re-run is not bit-identical, unlike x265 with a fixed version.
@@ -113,12 +114,13 @@ No new dependency: the Gyan full build (PC-A, PC-B) includes NVENC, QSV and AMF,
 6. **Scheduling.** `gpu` resource for hardware encodes.
 7. **Tests.** Argument building per encoder (no GPU needed); probe parsing; warning visibility (GUI tests: banner shown and not closable, dialog default is "Keep x265"); chroma refusal; fail-closed when the probe says no; colour-tag gate on a crafted bad stream. Real-hardware smoke runs on PC-A, PC-B and the Mac, recorded in DEVLOG.
 8. **Benchmark tool.** `fstk encode-bench EPISODE`: vspipe→null, vspipe→x265, intermediate→each available encoder, over N frames. Run after the build (§4.1).
-9. **ADR 0008** "Hardware encoders are opt-in, flagged, measured", and **ADR 0009** "Finished chain rendered once to a lossless intermediate (optional)".
+9. **Hardware-only delivery setting (§8).**
+10. **ADR 0008** "Hardware encoders are opt-in, flagged, measured", and **ADR 0009** "Finished chain rendered once to a lossless intermediate (optional)".
 
 ## 6. Open questions for the owner
 1. ~~Which GPUs are in PC-A, PC-B and the Mac?~~ Resolved: build all encoders; detection decides per machine.
-2. Should a hardware encode be allowed as the **only** deliverable, or always alongside (or followed by) an x265 encode? A "preview with NVENC now, x265 overnight" queue preset is possible.
-3. Grain gate: warn only (proposed), or block delivery below a threshold unless overridden?
+2. ~~May a hardware encode be the only deliverable?~~ Resolved: yes, as a global and per-episode setting (§8).
+3. ~~Grain gate: warn or block?~~ Resolved: warn, never block.
 
 ## 7. Lossless intermediate: a setting in Settings › General
 
@@ -147,3 +149,19 @@ In Settings › General, its own group, **not** under Advanced:
 
 ### Tests
 Setting round-trip and per-episode override; size estimate arithmetic and the measured-figure replacement; space gate refusal; plan wiring (encode and video-quality read the intermediate when on, the chain when off); invalidation when frame fixes change; cleanup on approval honours Delete/Keep; GUI: the group is on the General page, visible without Advanced, and shows the storage line.
+
+## 8. Hardware encode as the only copy: a setting
+
+Owner: a hardware encode may be an episode's only delivered copy, chosen by a setting that exists globally and per episode.
+
+- In **Settings › Video**, shown only while a hardware encoder is selected, directly under the warning banner:
+
+  > When a hardware encoder is used:
+  > ◉ **Also make an x265 copy afterwards** — the hardware encode is delivered first as a viewing copy; the x265 encode follows (queued, can run overnight) and becomes the archival deliverable.
+  > ○ **Deliver the hardware encode only** — no x265 copy. The grain warning applies to the only copy you keep.
+
+- Default: **Also make an x265 copy afterwards**, which follows the warning's advice. The person can change it globally or for one episode (⚑ flag, like other output settings).
+- "Deliver the hardware encode only" asks once for confirmation with the warning text (buttons **Deliver hardware only** / **Also make x265**, default the latter), and the episode's ⚑ flag reads "hardware encode only (smooths grain)".
+- With "Also make an x265 copy", the plan runs `encode-final` with the hardware encoder, remux and QC, then a second `encode-final` (x265, the episode's x265 settings), remux and QC. Both deliverables are recorded in the manifest; the x265 one is the final output once approved, and the hardware copy is kept as `… (viewing copy).mkv` unless the person removes it. The x265 encode takes a `compute` slot, so it can be queued behind other work.
+- The grain-retention check (§4.5) runs on both and only warns. On a hardware-only delivery its warning is repeated in the approval dialog, without blocking approval.
+- Tests: setting round-trip and per-episode override; the plan has one or two encodes accordingly; confirmation dialog default; manifest records both deliverables and which is final; approval is not blocked by a grain warning.
