@@ -1618,3 +1618,5 @@ names that no longer exist; required tools never found) and, if any, lists them 
   detection by probe encode; quality scales; chroma refusal; colour-tag and grain-retention checks; fail closed (no
   silent software fallback); `gpu` resource; §7 the `finish-render` intermediate (FFV1 10-bit, ~33 GB per episode
   estimated from the 520 KB/frame figure, measured after the first one; default off; delete or keep after approval).
+- Owner follow-up: a hardware encode may be the only delivered copy — a global and per-episode setting (spec §8;
+  default "also make an x265 copy afterwards"); the grain-retention check warns and never blocks delivery.
