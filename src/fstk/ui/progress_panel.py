@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from fstk.ui.step_help import STATUS_HELP, step_tooltip
 from fstk.workflow.progress import ProgressTracker, Snapshot, StepProgress, format_duration, is_space_block
 
 STATUS_TEXT = {"pending": "waiting", "running": "running", "passed": "done", "failed": "FAILED",
@@ -30,8 +31,20 @@ SCALE = 1000
 
 class ProgressPanel(QWidget):
     space_refresh = Signal()            # the Refresh icon on a step blocked by disk space was clicked
+    columns_resized = Signal(dict)      # the person dragged a column edge: {column name: width}, to remember
 
     COLUMNS: ClassVar[list[str]] = ["Step", "Status", "Progress", "Time", "", "What it is doing"]
+    #: starting widths; every column can be dragged wider or narrower, and the widths are remembered
+    WIDTHS: ClassVar[dict[str, int]] = {"Step": 130, "Status": 120, "Progress": 260, "Time": 130, "": 34,
+                                        "What it is doing": 360}
+    HEADER_TIPS: ClassVar[dict[str, str]] = {
+        "Step": "The step. Hover over a step's name to see what it does. Drag a column edge to resize it.",
+        "Status": "Where the step is: waiting, running, done, needs your review, blocked or failed.",
+        "Progress": "How far the step has got. “working…” means the tool gives no honest percentage.",
+        "Time": "How long the step has taken, and roughly how long is left when earlier runs give a guide.",
+        "": "Re-check free disk space (shown on steps blocked by disk space).",
+        "What it is doing": "What the step is doing right now, or what it reported when it finished.",
+    }
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -49,13 +62,20 @@ class ProgressPanel(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(24)
         head = self.table.horizontalHeader()
-        head.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        head.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        head.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        head.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        head.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(4, 34)
-        head.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        # every column is the person's to size: drag an edge (the last one fills what is left over)
+        head.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        head.setStretchLastSection(True)
+        head.setMinimumSectionSize(24)
+        head.setHighlightSections(False)
+        for col, name in enumerate(self.COLUMNS):
+            self.table.setColumnWidth(col, self.WIDTHS[name])
+            self.table.horizontalHeaderItem(col).setToolTip(self.HEADER_TIPS[name])
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(800)          # remember the widths once the dragging stops
+        self._resize_timer.timeout.connect(lambda: self.columns_resized.emit(self.column_widths()))
+        self._restoring = False
+        head.sectionResized.connect(self._on_resized)
         self.refresh_buttons: dict[str, QToolButton] = {}
         self.bars: dict[str, QProgressBar] = {}
         lay = QVBoxLayout(self)
@@ -63,7 +83,28 @@ class ProgressPanel(QWidget):
         lay.addWidget(self.overall)
         lay.addWidget(self.detail)
         lay.addWidget(self.table, 1)
-        self.table.setToolTip("Every step of the plan: its status, progress, time and what it is doing now.")
+        # shown only over the empty part of the table: every cell and header has its own tip
+        self.table.setToolTip("Hover over a step for what it does. Drag a column's edge to resize it.")
+
+    # ------------------------------------------------------------------ columns
+    def column_widths(self) -> dict[str, int]:
+        last = len(self.COLUMNS) - 1                 # the last column fills the rest: not remembered
+        return {name: self.table.columnWidth(col) for col, name in enumerate(self.COLUMNS) if col != last}
+
+    def set_column_widths(self, widths: dict | None) -> None:
+        """Widths remembered from an earlier session (unknown names and silly values are ignored)."""
+        self._restoring = True
+        try:
+            for col, name in enumerate(self.COLUMNS[:-1]):
+                w = (widths or {}).get(name)
+                if isinstance(w, int) and 24 <= w <= 2000:
+                    self.table.setColumnWidth(col, w)
+        finally:
+            self._restoring = False
+
+    def _on_resized(self, col: int, _old: int, _new: int) -> None:
+        if not self._restoring and col != len(self.COLUMNS) - 1:
+            self._resize_timer.start()
 
     # ------------------------------------------------------------------ data
     def set_tracker(self, tracker: ProgressTracker | None) -> None:
@@ -77,11 +118,19 @@ class ProgressPanel(QWidget):
             self.detail.setText("")
             return
         self.table.setRowCount(len(tracker.steps))
+        import fstk.stages  # noqa: F401 - registers every stage, for the titles
+        from fstk.stages.base import REGISTRY
+
         for row, step in enumerate(tracker.steps.values()):
-            self.table.setItem(row, 0, QTableWidgetItem(step.id))
+            stage = REGISTRY.get(step.stage)
+            tip = step_tooltip(step.stage, stage.title if stage else step.id)
+            name = QTableWidgetItem(step.id)
+            name.setToolTip(tip)
+            self.table.setItem(row, 0, name)
             bar = QProgressBar()
             bar.setRange(0, SCALE)
             bar.setTextVisible(True)
+            bar.setToolTip(tip)
             self.table.setCellWidget(row, 2, bar)
             self.bars[step.id] = bar
             btn = QToolButton()
@@ -124,6 +173,8 @@ class ProgressPanel(QWidget):
         if step.status == "running" and snap.paused:
             text = "paused"
         status = QTableWidgetItem(text)
+        status.setToolTip("Paused: the tools are frozen and resume exactly where they stopped."
+                           if text == "paused" else STATUS_HELP.get(step.status, ""))
         colour = STATUS_COLOUR.get(step.status)
         if colour:
             status.setForeground(QColor(colour))
@@ -143,11 +194,14 @@ class ProgressPanel(QWidget):
         eta = self.tracker.step_eta(step.id) if self.tracker else None
         if step.status == "running" and eta is not None and not snap.paused:
             label += f"  (≈{format_duration(eta)} left)"
-        self.table.setItem(row, 3, QTableWidgetItem(label))
+        when = QTableWidgetItem(label)
+        when.setToolTip("Time taken so far" + (" and a rough guess at the time left, from earlier runs"
+                                               if "left" in label else ""))
+        self.table.setItem(row, 3, when)
         self.refresh_buttons[step.id].setVisible(is_space_block(step.status, step.detail))
         msg = step.message if step.status == "running" else step.detail
         item = QTableWidgetItem(msg)
-        item.setToolTip(msg)
+        item.setToolTip(msg or self.table.item(row, 0).toolTip())
         self.table.setItem(row, 5, item)
         if step.status in ("failed", "blocked", "stale"):
             self.table.item(row, 0).setForeground(QColor(STATUS_COLOUR["failed"]))

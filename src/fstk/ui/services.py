@@ -615,7 +615,7 @@ class Services:
 
     # ---------------------------------------------------------------- settings
     APP_PREFS: ClassVar[dict[str, Any]] = {"operator": "", "notifications": True, "catalog_refresh_days": 30, "log_level": "INFO",
-                 "priority": "below_normal"}
+                 "priority": "below_normal", "progress_columns": {}}
 
     def app_prefs(self) -> dict[str, Any]:
         return {**self.APP_PREFS, **(self.profile.ui or {})}
@@ -631,6 +631,8 @@ class Services:
             raise FstkError("log level must be INFO, DEBUG or WARNING")
         if merged["priority"] not in PRIORITIES:
             raise FstkError(f"process priority must be one of {PRIORITIES}")
+        if not isinstance(merged["progress_columns"], dict):
+            raise FstkError("progress column widths must be a mapping of column name to width")
         if not (1 <= int(merged["catalog_refresh_days"]) <= 365):
             raise FstkError("catalog check interval must be 1–365 days")
         self.profile.ui = {k: merged[k] for k in self.APP_PREFS}

@@ -230,6 +230,8 @@ class MainWindow(QMainWindow):
         self._running_plan: str | None = None
         self.progress_panel = ProgressPanel()
         self.progress_panel.space_refresh.connect(self.recheck_space)
+        self.progress_panel.set_column_widths(self.services.app_prefs().get("progress_columns"))
+        self.progress_panel.columns_resized.connect(self._remember_progress_columns)
         self.status_line = QLabel("")
         self.tracker: ProgressTracker | None = None
         self.tabs = QTabWidget()
@@ -1071,6 +1073,13 @@ class MainWindow(QMainWindow):
             engine.pause()
             self.pause_button.setText("Resume")
         self.update_progress()
+
+    def _remember_progress_columns(self, widths: dict) -> None:
+        """Keep the Progress table's column widths the person chose for the next session."""
+        try:
+            self.services.save_app_prefs({"progress_columns": widths})
+        except Exception as exc:  # a preference that cannot be saved must not disturb a run
+            LOG.warning("could not remember the progress column widths: %s", exc)
 
     def recheck_space(self) -> None:
         """Refresh icon: re-measure disk space for every step blocked by it; clear the ones that now fit."""

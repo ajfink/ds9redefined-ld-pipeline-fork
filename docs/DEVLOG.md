@@ -1371,3 +1371,17 @@ names that no longer exist; required tools never found) and, if any, lists them 
 - Guard: `tests/unit/test_no_console_windows.py` parses every `subprocess` call in `src/` and fails on one started
   without the flags.
 - Full suite 619 passed, 1 skipped.
+
+## CP59 — Progress tab: a tooltip per step, resizable columns (owner request 2026-11-24)
+
+- The whole table carried one tooltip ("Every step of the plan …"), which covered the rows whenever the mouse rested
+  on the table. Removed. Each row now explains its own step (`ui/step_help.py`, plain language keyed by stage id):
+  the stage title, what it does, what it produces, and whether it stops for the person (cadence, DVD alignment,
+  delivery). Name cell and progress bar show it; the status cell explains the status (waiting, needs your review,
+  blocked …); the time cell says what the guess is based on; the "What it is doing" cell shows the full message.
+  Column headers have their own short tips.
+- Columns: every column is Interactive (drag the edge); the last fills the leftover width. Starting widths are
+  set, and the widths the person chooses are remembered between sessions (`progress_columns` app setting, saved
+  0.8 s after the dragging stops; odd values are ignored on restore).
+- Tests: every real stage has help (and the retired PAD/RIFE steps none); rows, bars, status and headers carry their
+  tips; columns are interactive; a drag is reported and restored; the setting is validated. Full suite 623 passed.
