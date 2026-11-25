@@ -251,6 +251,7 @@ class MainWindow(QMainWindow):
         self.progress_panel = ProgressPanel()
         self.progress_panel.space_refresh.connect(self.recheck_space)
         self.progress_panel.pack_save.connect(self.save_opening_pack)
+        self.progress_panel.restart_from.connect(self.restart_step)
         self.pack_thread: QThread | None = None
         self.progress_panel.set_column_widths(self.services.app_prefs().get("progress_columns"))
         self.progress_panel.columns_resized.connect(self._remember_progress_columns)
@@ -1108,6 +1109,43 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # a preference that cannot be saved must not disturb a run
             LOG.warning("could not remember the progress column widths: %s", exc)
 
+    # ------------------------------------------------------------------ restart from a step
+    def restart_step(self, step_id: str) -> None:
+        """"Restart from here" on a Progress row: confirm, mark the step and the steps after it, run the job."""
+        if self.thread is not None:
+            QMessageBox.information(self, "A job is running", "Wait for the current run to end, or cancel it, "
+                                                              "before restarting a step.")
+            return
+        episode, plan = self.episode, (self.tracker.plan if self.tracker else None)
+        if not episode or not plan:
+            return
+        job = plan["job"]
+        from fstk.workflow.engine import _descendants
+
+        later = [s["id"] for s in plan["steps"] if s["id"] in _descendants(plan, step_id)]
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Restart from here")
+        box.setText("Are you sure?  This will overwrite previous work.")
+        box.setInformativeText(
+            f"{step_id} runs again in {job} and its previous result is replaced."
+            + (f"\n\nAfter it: {', '.join(later)} — each is kept only if {step_id} gives exactly the same "
+               "result back; otherwise it runs again too." if later else ""))
+        go = box.addButton("Continue", QMessageBox.ButtonRole.AcceptRole)
+        box.setDefaultButton(box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole))
+        box.exec()
+        if box.clickedButton() is not go:
+            LOG.info("action restart-from cancelled episode=%s job=%s step=%s", episode, job, step_id)
+            return
+        LOG.info("action restart-from episode=%s job=%s step=%s", episode, job, step_id)
+        try:
+            path, affected = self.services.restart_from(episode, job, step_id, self.actor)
+        except FstkError as exc:
+            QMessageBox.warning(self, "Cannot restart", str(exc))
+            return
+        self.append_log(f"restart from {step_id} in {job}: {', '.join(affected)} marked to run again")
+        self.start_plan(str(path))
+
     # ------------------------------------------------------------------ DVD opening pack
     def _update_pack_target(self, episode: str) -> None:
         """The Save icon beside dvd-probe: shown only when the episode has a DVD; its tip names the target file."""
@@ -1201,6 +1239,7 @@ class MainWindow(QMainWindow):
             self.tracker = None
             return
         self.watch.stop()
+        self.progress_panel.allow_restart = False
         self.tracker = ProgressTracker(plan, timings=self.services.timings())
         with contextlib.suppress(OSError, ValueError, KeyError):   # first run of this job: nothing to resume
             self.tracker.load_state(self.services.job_state(plan["episode"], plan["job"]))
@@ -1233,6 +1272,7 @@ class MainWindow(QMainWindow):
             self.watch.start()                          # follow the other window's progress from the saved state
         else:
             self.watch.stop()
+        self.progress_panel.allow_restart = not runner
         plan = self.services.job_plan(episode, job)
         if plan:
             self.tracker = ProgressTracker(plan, timings=self.services.timings())
@@ -1292,6 +1332,7 @@ class MainWindow(QMainWindow):
             self.thread.quit()
             self.thread.wait()
         self.thread, self.worker = None, None
+        self.progress_panel.set_allow_restart(True)
         self.run_button.setEnabled(True)
         self.intake_button.setEnabled(True)
         self.deliver_button.setEnabled(True)

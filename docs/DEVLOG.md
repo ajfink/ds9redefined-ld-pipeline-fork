@@ -1522,3 +1522,19 @@ names that no longer exist; required tools never found) and, if any, lists them 
 - Not changed: the spot check still decodes the whole master once for its 13 pictures (PC-B: 14 min).
 - Tests: retry/no-retry cases, encode acceptance only after all frames, window script `rff=True`, held-run rerun
   reuses descriptors. Suite 658 passed.
+
+## CP67 — "Restart from here" on each Progress step (owner, 2026-11-24)
+
+- An icon in each Progress row (beside the disk-space re-check) runs that step again and then the steps after it.
+  It asks first — "Are you sure?  This will overwrite previous work." with Continue / Cancel (Cancel is the
+  default) — naming the job and the later steps. Shown only on steps that have run or tried to (not pending,
+  waiting or running), whose steps before it have all passed (owner: a step that cannot start because its
+  dependencies are not met gets no icon), and not while a job runs in this window or another one.
+- `engine.restart_from(plan, state, step, manifest, actor)`: the step is marked stale (its uncommitted pending
+  result dropped); later steps that had passed keep what they were made from, exactly as when an upstream step
+  re-runs on its own — kept if the restarted step gives the same files and values back, run otherwise. The
+  restart is recorded in the job state (`restarts`). `Services.restart_from` refuses a job running elsewhere,
+  writes the state and returns the plan; the window then runs it.
+- Tests: restart keeps later steps when the result is identical and runs them when it changes; unknown step
+  refused; the icon's visibility (passed/failed yes, dependency not met no, hidden during a run), the dialog text
+  and buttons, Cancel does nothing, Continue restarts and runs. Suite 662 passed.

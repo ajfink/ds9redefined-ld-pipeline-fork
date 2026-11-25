@@ -949,6 +949,24 @@ class Services:
                 return path
         return None
 
+    def restart_from(self, episode: str | EpisodeId, job: str, step_id: str, actor: str) -> tuple[Path, list[str]]:
+        """"Restart from here": ``step_id`` of ``job`` runs again and the steps after it are made stale (they are
+        kept only if it gives exactly the same result). Returns the plan to run and the steps affected."""
+        from fstk.core.fsio import atomic_write_json
+        from fstk.workflow.engine import restart_from
+
+        if self.job_runner(episode, job):
+            raise FstkError(f"{job} is running in another window; stop it there first")
+        ws = self.workspace(episode)
+        plan, path = self.job_plan(episode, job), self.job_plan_path(episode, job)
+        state_path = ws.job_dir(job) / "state.json"
+        if plan is None or path is None or not state_path.is_file():
+            raise FstkError(f"no saved job {job} for {episode}")
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        affected = restart_from(plan, state, step_id, ws.store.load(), actor=actor)
+        atomic_write_json(state_path, state)
+        return path, affected
+
     def job_plan(self, episode: str | EpisodeId, job: str) -> dict[str, Any] | None:
         """The plan a job ran (copy saved beside its state), or None."""
         for path in (self.workspace(episode).job_dir(job) / "plan.json",

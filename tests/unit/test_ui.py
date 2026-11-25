@@ -526,3 +526,53 @@ def test_rejecting_and_redoing_runs_the_step_again_and_asks_again(services, tmp_
     assert state["steps"]["r"]["status"] == "awaiting-review"                 # redone once, then asks again
     _, state = services.run_plan(review_plan(tmp_path), actor="op")
     assert te.CALLS.get("review", 0) == runs + 1                             # not redone a second time
+
+
+@pytest.mark.gui
+def test_restart_from_here_icon_confirms_then_reruns(services, tmp_path, qtbot, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from fstk.ui.app import MainWindow
+    from fstk.workflow.progress import ProgressTracker
+
+    w = MainWindow(services, actor="op")
+    qtbot.addWidget(w)
+    w.select_episode(str(EP))
+    plan = {"job": "jr", "episode": str(EP),
+            "steps": [{"id": "a", "stage": "efm-decode"}, {"id": "b", "stage": "efm-select", "after": ["a"]},
+                      {"id": "c", "stage": "stack-reference", "after": ["b"]}]}
+    t = ProgressTracker(plan)
+    w.tracker = t
+    p = w.progress_panel
+    p.set_tracker(t)
+    for sid in ("a", "b"):
+        t.on_event({"kind": "step-start", "step": sid})
+    t.on_event({"kind": "step-passed", "step": "a"})
+    t.on_event({"kind": "step-failed", "step": "b", "issues": ["x"]})
+    t.on_event({"kind": "step-blocked", "step": "c", "issues": ["upstream b has not passed"]})
+    p.refresh()
+    assert not p.restart_buttons["a"].isHidden() and not p.restart_buttons["b"].isHidden()
+    assert p.restart_buttons["c"].isHidden()              # c cannot start: b, which it needs, has not passed
+    assert "Restart from here" in p.restart_buttons["a"].toolTip()
+    p.set_allow_restart(False)                            # a run is going: no restarts
+    assert p.restart_buttons["a"].isHidden()
+    p.set_allow_restart(True)
+
+    seen, calls, started = [], [], []
+
+    def answer(button_text):
+        def exec_(box):
+            seen.append((box.text(), [b.text() for b in box.buttons()]))
+            box.clickedButton = lambda: next(b for b in box.buttons() if b.text() == button_text)
+            return 0
+        return exec_
+
+    services.restart_from = lambda ep, job, sid, actor: calls.append((ep, job, sid, actor)) or (Path("p.json"), [sid])
+    w.start_plan = lambda path: started.append(path)
+    monkeypatch.setattr(QMessageBox, "exec", answer("Cancel"))
+    p.restart_buttons["a"].click()
+    assert seen[-1][0] == "Are you sure?  This will overwrite previous work."
+    assert sorted(seen[-1][1]) == ["Cancel", "Continue"] and calls == [] and started == []
+    monkeypatch.setattr(QMessageBox, "exec", answer("Continue"))
+    p.restart_buttons["a"].click()
+    assert calls == [(str(EP), "jr", "a", "op")] and started == ["p.json"]

@@ -29,21 +29,27 @@ STATUS_COLOUR = {"passed": "#2e7d32", "failed": "#c62828", "blocked": "#ef6c00",
 SCALE = 1000
 
 
+#: steps with nothing to restart: never run, or running now
+NOT_STARTED = frozenset({"pending", "waiting", "running", "queued"})
+
+
 class ProgressPanel(QWidget):
     space_refresh = Signal()            # the Refresh icon on a step blocked by disk space was clicked
     columns_resized = Signal(dict)      # the person dragged a column edge: {column name: width}, to remember
     pack_save = Signal()                # the Save icon beside dvd-probe: save this DVD's opening pack
+    restart_from = Signal(str)          # "Restart from here" on a step: its id
 
     COLUMNS: ClassVar[list[str]] = ["Step", "Status", "Progress", "Time", "", "What it is doing"]
     #: starting widths; every column can be dragged wider or narrower, and the widths are remembered
-    WIDTHS: ClassVar[dict[str, int]] = {"Step": 130, "Status": 120, "Progress": 260, "Time": 130, "": 34,
+    WIDTHS: ClassVar[dict[str, int]] = {"Step": 130, "Status": 120, "Progress": 260, "Time": 130, "": 56,
                                         "What it is doing": 360}
     HEADER_TIPS: ClassVar[dict[str, str]] = {
         "Step": "The step. Hover over a step's name to see what it does. Drag a column edge to resize it.",
         "Status": "Where the step is: waiting, running, done, needs your review, blocked or failed.",
         "Progress": "How far the step has got. “working…” means the tool gives no honest percentage.",
         "Time": "How long the step has taken, and roughly how long is left when earlier runs give a guide.",
-        "": "Re-check free disk space (shown on steps blocked by disk space).",
+        "": ("Restart from here (on steps that have run and could start now), and re-check free disk space (on "
+             "steps blocked by disk space)."),
         "What it is doing": "What the step is doing right now, or what it reported when it finished.",
     }
 
@@ -80,6 +86,8 @@ class ProgressPanel(QWidget):
         self.refresh_buttons: dict[str, QToolButton] = {}
         self.bars: dict[str, QProgressBar] = {}
         self.save_buttons: dict[str, QToolButton] = {}
+        self.restart_buttons: dict[str, QToolButton] = {}
+        self.allow_restart = True                    # off while a job runs in this window
         self.pack_target: str | None = None          # where the opening pack would be written (set by the window)
         self.pack_exists = False
         lay = QVBoxLayout(self)
@@ -116,6 +124,7 @@ class ProgressPanel(QWidget):
         self.bars.clear()
         self.refresh_buttons.clear()
         self.save_buttons.clear()
+        self.restart_buttons.clear()
         self.table.setRowCount(0)
         if tracker is None:
             self.headline.setText("No run yet")
@@ -151,12 +160,39 @@ class ProgressPanel(QWidget):
             holder = QWidget()
             hl = QHBoxLayout(holder)
             hl.setContentsMargins(0, 0, 0, 0)
+            hl.setSpacing(0)
             hl.addWidget(btn)
+            again = QToolButton()
+            again.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaSkipBackward))
+            again.setAutoRaise(True)
+            again.setAccessibleName(f"Restart from {step.id}")
+            again.setToolTip(f"<qt><b>Restart from here</b><br><br>Runs <b>{step.id}</b> again, then the steps "
+                             "after it. Its previous result is replaced. A later step is kept only if this step "
+                             "gives exactly the same result back; otherwise it runs again too.<br><br>"
+                             "You are asked to confirm first.</qt>")
+            again.clicked.connect(lambda _=False, sid=step.id: self.restart_from.emit(sid))
+            again.setVisible(False)
+            hl.addWidget(again)
+            hl.addStretch(1)
             self.table.setCellWidget(row, 4, holder)
             self.refresh_buttons[step.id] = btn
+            self.restart_buttons[step.id] = again
         self.refresh()
 
     # ------------------------------------------------------------------ DVD opening pack
+    def can_restart(self, step_id: str, status: str) -> bool:
+        """The "Restart from here" icon: only for a step that has run (or tried to) and could start now — every
+        step it depends on has passed; one held up by unfinished steps before it would only wait again."""
+        if not self.allow_restart or self.tracker is None or status in NOT_STARTED:
+            return False
+        after = next((s.get("after", []) for s in self.tracker.plan["steps"] if s["id"] == step_id), [])
+        return all(self.tracker.steps[d].status == "passed" for d in after if d in self.tracker.steps)
+
+    def set_allow_restart(self, allow: bool) -> None:
+        """Hide the "Restart from here" icons while a job runs in this window (the state is being written)."""
+        self.allow_restart = allow
+        self.refresh()
+
     def set_pack_target(self, target: str | None, exists: bool = False) -> None:
         """Where the Save icon writes this episode's opening pack, and whether one is already there."""
         self.pack_target, self.pack_exists = target, exists
@@ -246,6 +282,7 @@ class ProgressPanel(QWidget):
                                                if "left" in label else ""))
         self.table.setItem(row, 3, when)
         self.refresh_buttons[step.id].setVisible(is_space_block(step.status, step.detail))
+        self.restart_buttons[step.id].setVisible(self.can_restart(step.id, step.status))
         if step.id in self.save_buttons:               # the DVD has been probed: its opening can be packed
             self.save_buttons[step.id].setVisible(step.status == "passed" and self.pack_target is not None)
         msg = step.message if step.status == "running" else step.detail

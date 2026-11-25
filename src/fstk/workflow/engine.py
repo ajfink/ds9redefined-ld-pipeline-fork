@@ -816,6 +816,37 @@ _HELD_KEYS = ("inputs", "outputs", "committed", "committed_artifacts", "report",
 CARRY_OVER_KINDS = ("intake", "delivery")
 
 
+def restart_from(plan: dict[str, Any], state: dict[str, Any], step_id: str, manifest, *, actor: str) -> list[str]:
+    """Mark ``step_id`` to run again and every step after it as stale (the owner's "Restart from here").
+
+    The step itself always runs. A later step that had passed keeps what it was made from, as when an upstream step
+    re-runs on its own (``_reconcile``): if the restarted step gives exactly the same files and values back, the
+    later step is kept, otherwise it runs. Returns the steps affected, the restarted one first."""
+    steps = state["steps"]
+    if step_id not in steps:
+        raise WorkflowError(f"step {step_id!r} is not in job {state.get('job')!r}")
+    st = steps[step_id]
+    prior = _result_of(st, manifest, state["job"], step_id)
+    note = f"restarted from here by {actor}"
+    st.pop("held", None)
+    st.pop("pending_commit", None)
+    st.update(previous_status=st.get("status"), status="stale", stale_reason=note, restarted_utc=utc_now_iso())
+    affected = [step_id]
+    for d in sorted(_descendants(plan, step_id), key=[x["id"] for x in plan["steps"]].index):
+        dst = steps[d]
+        if dst.get("status") == "passed":
+            held = dst.get("held") or {k: dst[k] for k in _HELD_KEYS if k in dst}
+            held.setdefault("upstream", {})[step_id] = held.get("upstream", {}).get(step_id, prior)
+            dst["held"] = held
+        if dst.get("status") in ("passed", "awaiting-review"):
+            dst.pop("pending_commit", None)
+            dst.update(previous_status=dst["status"], status="stale", stale_reason=f"upstream {step_id} {note}")
+        affected.append(d)
+    state.setdefault("restarts", []).append({"step": step_id, "by": actor, "utc": utc_now_iso(),
+                                             "affected": affected})
+    return affected
+
+
 def _artifact_of(m, key: str) -> dict | None:
     try:
         return dict(m.artifact(key))

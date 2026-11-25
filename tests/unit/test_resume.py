@@ -231,3 +231,48 @@ def test_the_progress_panel_says_when_the_run_is_checking_finished_steps():
     assert "checking" in t.note
     t.on_event({"kind": "verified"})
     assert t.note == ""
+
+
+# ------------------------------------------------------------------ "Restart from here" (owner request 2026-11-24)
+def _restart(env, job, sid):
+    from fstk.workflow.engine import restart_from
+
+    _, ws, _, _ = env
+    path = state_file(env, job)
+    st = json.loads(path.read_text())
+    affected = restart_from(chain(job), st, sid, ws.store.load(), actor="op")
+    path.write_text(json.dumps(st))
+    return affected, st
+
+
+def test_restart_from_a_step_runs_it_again_and_keeps_later_steps_when_it_gives_the_same(env):
+    setup(env)
+    run(env, chain("j"))
+    affected, st = _restart(env, "j", "a")
+    assert affected == ["a", "b"] and st["restarts"][-1]["step"] == "a"
+    assert st["steps"]["a"]["status"] == "stale" and st["steps"]["b"]["status"] == "stale"
+    again = run(env, chain("j"))
+    assert all(s["status"] == "passed" for s in again["steps"].values())
+    assert (runs("measure"), runs("a.txt"), runs("b.txt")) == (1, 2, 1)     # b kept: a gave the same file back
+
+
+def test_restart_from_runs_later_steps_when_the_result_changes(env):
+    setup(env)
+    run(env, chain("j"))
+    _, _, src, _ = env
+    _restart(env, "j", "m")
+    src.write_text("something else")                  # the re-run measures a different source
+    again = run(env, chain("j"))
+    assert again["steps"]["b"]["status"] == "passed"
+    assert (runs("measure"), runs("a.txt"), runs("b.txt")) == (2, 2, 2)
+
+
+def test_restart_from_an_unknown_step_is_refused(env):
+    import pytest
+
+    from fstk.core.errors import WorkflowError
+
+    setup(env)
+    run(env, chain("j"))
+    with pytest.raises(WorkflowError):
+        _restart(env, "j", "zz")
