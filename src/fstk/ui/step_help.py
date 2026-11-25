@@ -6,6 +6,24 @@ person running the app rather than for the code; ``tests/unit/test_step_help.py`
 """
 from __future__ import annotations
 
+#: The short name a person sees for each step (the stage id stays in the tooltip, for the log and bug reports).
+STEP_NAMES: dict[str, str] = {
+    "archive-download": "Download", "capture-inventory": "Capture inventory", "efm-decode": "EFM audio decode",
+    "efm-select": "EFM audio choice", "stack-reference": "Stack reference", "stack-render": "Stack render",
+    "cadence-evidence": "Film cadence", "dvd-probe": "DVD probe", "dvd-alignment": "DVD alignment",
+    "video-trim": "Video trim", "dvd-ld-audio": "LD audio", "dvd-free-audio": "LD audio (no DVD)",
+    "dvd-retime": "Retime 5.1", "stretch-preview": "Stretch previews", "frame-fixes": "Frame fixes",
+    "fix-preview": "Fix preview", "video-quality": "Video quality", "encode-final": "Encode",
+    "audio-quality": "Audio quality", "remux": "Remux", "qc-report": "QC", "av-correction": "A/V correction",
+    "episode-report": "Episode report",
+}
+
+
+def step_name(stage_id: str, fallback: str = "") -> str:
+    """Short person-facing name of a stage (falls back to the given text, then the id)."""
+    return STEP_NAMES.get(stage_id) or fallback or stage_id
+
+
 #: (what it does, what you get, when it stops for you — "" when it never does)
 STEP_HELP: dict[str, tuple[str, str, str]] = {
     "archive-download": (
@@ -141,7 +159,8 @@ STATUS_HELP = {
     "blocked": "Cannot start yet (for example, not enough free disk space, or an earlier step is not done).",
     "awaiting-review": "Waiting for you: open the Reviews tab to look or listen and decide.",
     "stale": "Its inputs changed since it finished, so it will run again.",
-    "cancelled": "Stopped because the run was stopped.",
+    "cancelled": "It was running when the run was stopped; it starts over next time.",
+    "not-started": "The run was stopped before this step began; it runs next time.",
     "interrupted": "Will run again: the app closed while it was running.",
 }
 
@@ -149,7 +168,10 @@ STATUS_HELP = {
 def step_tooltip(stage_id: str, title: str = "") -> str:
     """Rich-text tooltip for a step row."""
     what, result, review = STEP_HELP.get(stage_id, ("", "", ""))
-    head = f"<b>{title or stage_id}</b>"
+    head = f"<b>{step_name(stage_id, title)}</b>" + (f" <span style='color:gray'>({stage_id})</span>"
+                                                       if stage_id in STEP_NAMES else "")
+    if title and title != step_name(stage_id, title):
+        head += f"<br><span style='color:gray'>{title}</span>"
     if not what:
         return head
     parts = [head, what, f"<i>Produces:</i> {result}"]

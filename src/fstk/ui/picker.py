@@ -154,6 +154,10 @@ class EpisodePicker(QDialog):
                     item.setForeground(col, QColor("#9e9e9e"))
             groups[key].addChild(item)
             shown += 1
+        for g in groups.values():                     # a season row says what is inside before it is opened
+            kids = [g.child(i).data(0, ROLE_ENTRY) for i in range(g.childCount())]
+            here = sum(1 for k in kids if k and k[1].state in ("workspace", "downloaded", "partial"))
+            g.setText(1, f"{len(kids)} episodes" + (f" · {here} on this computer" if here else ""))
         expand = bool(self.search.text().strip()) or self.only_local.isChecked() or shown < 40
         for top in tops.values():
             top.setExpanded(True)

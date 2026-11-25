@@ -56,10 +56,14 @@ def test_main_window_smoke(services, tmp_path, qtbot):
     w = MainWindow(services, actor="op")
     qtbot.addWidget(w)
     assert w.episodes.count() == 1 and w.title.text().startswith("DS9:S01E20")
-    assert w.values.rowCount() > 60
+    assert 0 < w.values.rowCount() < 114                                     # set fields only, by default
+    w.details.show_empty.setChecked(True)
+    assert w.values.rowCount() > 60                                          # every declared field
+    w.details.search.setText("frames")
+    assert 0 < w.values.rowCount() < 20
     w.start_plan(str(review_plan(tmp_path)))
     qtbot.waitUntil(lambda: w.thread is None, timeout=10000)
-    assert w.tabs.tabText(3) == "Reviews (1)"
+    assert w.tabs.tabText(w.tabs.indexOf(w.review_page)) == "Reviews (1)"
     assert "step-awaiting-review" in w.log.toPlainText()
 
 
@@ -69,20 +73,22 @@ def test_progress_panel_follows_a_run_and_persists(services, tmp_path, qtbot):
 
     w = MainWindow(services, actor="op")
     qtbot.addWidget(w)
-    assert w.status_line.text() == "" and w.progress_panel.table.rowCount() == 0
+    assert w.progress_panel.table.rowCount() == 0 and w.progress_panel.runs.isHidden()
     w.start_plan(str(review_plan(tmp_path)))
     assert w.tracker is not None and w.progress_panel.table.rowCount() == 1
     assert w.pause_button.isEnabled() and "%" in w.windowTitle()
     qtbot.waitUntil(lambda: w.thread is None, timeout=10000)
     panel = w.progress_panel
-    assert panel.table.item(0, 1).text() == "needs your review"
+    assert panel.table.item(0, 1).text() == "needs you"
     assert "waiting for you" in panel.headline.text().lower()
-    assert not w.pause_button.isEnabled()
+    assert not w.pause_button.isEnabled() and w.pause_button.isHidden()       # Pause/Cancel only while running
+    assert "waiting for you" in w.banner.text().lower() and not w.banner.isHidden()
     # reopening the app later: the saved job state is shown without running anything
     w2 = MainWindow(services, actor="op")
     qtbot.addWidget(w2)
-    assert "waiting for your review" in w2.status_line.text()
+    assert "waiting for you" in w2.progress_panel.headline.text().lower()
     assert w2.progress_panel.table.rowCount() == 1
+    assert "needs you" in w2.episodes.item(0).text()                         # the episode list says so too
 
 
 @pytest.mark.gui
@@ -105,7 +111,7 @@ def test_pause_button_drives_the_engine(services, tmp_path, qtbot):
 
 
 @pytest.mark.gui
-def test_dead_runs_show_pending_not_running(services, tmp_path, qtbot):
+def test_dead_runs_show_interrupted_not_running(services, tmp_path, qtbot):
     from fstk.ui.app import MainWindow
 
     plan = review_plan(tmp_path)
@@ -116,8 +122,8 @@ def test_dead_runs_show_pending_not_running(services, tmp_path, qtbot):
     state_path.write_text(json.dumps(state))
     w = MainWindow(services, actor="op")
     qtbot.addWidget(w)
-    assert w.jobs.item(0, 2).text() == "pending"
-    assert w.progress_panel.table.item(0, 1).text() == "pending"
+    assert w.progress_panel.table.item(0, 1).text() == "interrupted"
+    assert "interrupted" in w.progress_panel.headline.text()
 
 
 @pytest.mark.gui

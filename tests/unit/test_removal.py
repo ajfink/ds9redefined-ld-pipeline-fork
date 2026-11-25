@@ -105,7 +105,7 @@ def test_remove_dialog_flow(tmp_path, qtbot, monkeypatch):
     prof, svc, media, dl = build(tmp_path)
     w = MainWindow(svc, actor="op")
     qtbot.addWidget(w)
-    assert w.remove_button.text() == "Remove…"
+    assert w.remove_button.text() == "Remove episode…"
     dlg = RemoveDialog(svc, "DS9:S01E20")
     qtbot.addWidget(dlg)
     assert dlg.radios["project"].isChecked() and not dlg.detail.isEnabled()

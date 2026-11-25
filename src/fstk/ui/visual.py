@@ -30,7 +30,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-TONES = {"good": "#2e7d32", "warn": "#ef6c00", "bad": "#c62828", "info": "#1565c0", "neutral": "#757575"}
+#: banner and headline tones: status colours stay semantic; "info" and "neutral" use the DS9 palette (fstk.ui.theme)
+TONES = {"good": "#2e7d32", "warn": "#e65100", "bad": "#c62828", "info": "#513037", "neutral": "#54585b"}
 
 
 def tone_colour(tone: str | None) -> str:

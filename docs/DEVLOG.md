@@ -1585,3 +1585,25 @@ names that no longer exist; required tools never found) and, if any, lists them 
   `reports/leftovers-removed-<stamp>.json` and written to the log. A rejection removes nothing.
 - Tests: what is listed (and not), named files kept, refusal while a job runs, approval clears and records, rejection
   does not. Suite 671 passed.
+
+## CP72 — UI clean-up: menus, one Run button, banner, Progress as the run's home, DS9 palette (ADR 0007)
+
+- Owner: "Implement them all" (every recommendation in the project doc UI-ASSESSMENT), then the DS9 palette
+  (#513037 plum, #a2afdb periwinkle, #7d86a7 slate, #54585b grey, #462224 maroon) as accents on a light base.
+- Main window (`ui/app.py`): menu bar; one primary Run button (intake until the stack reference exists, then delivery;
+  `Services.intake_done`); notifications bell; `Banner` with action buttons and standing "needs you" messages
+  (`_needs_you`); tabs Progress · Reviews · Queue · Details (Jobs folded into the run picker, Manifest → Details);
+  episode list with title and status (`Services.episode_status`); log strip collapsed by default, opens on failure,
+  warnings/errors coloured, "Only problems"; *Restart the app* after an update (`restart_app`).
+- Progress (`ui/progress_panel.py`, `workflow/progress.py`): headline names the most serious problem (fixes S02E02's
+  "ld-audio" for a failed retime); `STATUS_WORDS`; short step names (`step_help.STEP_NAMES`); bar only while running;
+  saved durations (`StepProgress.took`); "not started" (`shown_status`); Pause/Cancel beside the bar; run picker
+  (`Services.runs`); row right-click menu and double-click message; idle line shows machine time instead of "elapsed 0s".
+- Details (`ui/details.py`), DVD dialog leads with the recorded file (reachable? size, opening pack) and opens the
+  search on "Change DVD…"; Queue empty hint; picker season rows show counts; Settings nav with icons and spacing;
+  `ui/theme.py` and `ui/colours.py` (palette-aware status colours).
+- Correction to the assessment: `FoldersDialog` is not a duplicate — Settings › Folders opens it for "Change…". Only
+  the main window's never-shown Folders button and its handler were removed.
+- Tests: `tests/unit/test_ui_cleanup.py` (headline order, durations, not started, panel names/bars/menus/run picker,
+  menus and Run button, banner actions and episode status, log strip, Details grouping, empty states, DVD dialog);
+  existing UI tests updated for the new names. Suite 679 passed.

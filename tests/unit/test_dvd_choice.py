@@ -91,7 +91,7 @@ def test_dvd_dialog_without_a_folder_and_main_window_button(services, qtbot):  #
     assert not dlg.remember.isEnabled()
     w = MainWindow(services, actor="op")
     qtbot.addWidget(w)
-    assert w.dvd_button.text() == "DVD…" and w.dvd_button.toolTip()
+    assert w.dvd_button.text() == "Choose DVD…" and w.dvd_button.toolTip()
 
 
 @pytest.mark.gui

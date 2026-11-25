@@ -35,7 +35,7 @@ def test_weighted_overall_and_counts():
     total = sum(DEFAULT_SECONDS[s] for s in ("capture-inventory", "stack-render", "encode-final", "efm-select"))
     want = (DEFAULT_SECONDS["capture-inventory"] + 0.5 * DEFAULT_SECONDS["stack-render"]) / total
     assert abs(snap.overall - want) < 1e-9
-    assert snap.done == 1 and snap.state == "running" and snap.headline() == "Step 2 of 4: b"
+    assert snap.done == 1 and snap.state == "running" and snap.headline() == "Running b"
     assert snap.current[0].message == "rendering"
 
 

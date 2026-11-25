@@ -8,13 +8,16 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
+    QWidget,
 )
 
 from fstk.ui.services import Services
@@ -29,13 +32,39 @@ class DvdDialog(QDialog):
         self.changed = False
         self.setWindowTitle(f"DVD for {episode}")
         self.resize(760, 460)
-        lay = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        # what is recorded, first: the file, whether it can be reached, and whether its opening pack is saved
+        card = QFrame()
+        card.setObjectName("dvdCard")
+        card.setStyleSheet("#dvdCard { border: 1px solid #a2afdb; border-radius: 4px; background: palette(base); }")
+        cl = QVBoxLayout(card)
         self.state = QLabel("")
         self.state.setWordWrap(True)
         self.state.setStyleSheet("font-weight: 600;")
-        lay.addWidget(self.state)
-        lay.addWidget(QLabel("The DVD is the independent reference for this episode's alignment, audio and subtitles. "
-                             "It is never used as a picture source unless you choose it frame by frame."))
+        self.facts = QLabel("")
+        self.facts.setWordWrap(True)
+        self.facts.setTextFormat(Qt.TextFormat.RichText)
+        cl.addWidget(self.state)
+        cl.addWidget(self.facts)
+        about = QLabel("The DVD is the independent reference for this episode's alignment, audio and subtitles. "
+                       "It is never used as a picture source unless you choose it frame by frame.")
+        about.setWordWrap(True)
+        cl.addWidget(about)
+        self.change_button = QPushButton("Change DVD…")
+        self.change_button.setCheckable(True)
+        self.change_button.toggled.connect(self._show_chooser)
+        crow = QHBoxLayout()
+        crow.addStretch(1)
+        crow.addWidget(self.change_button)
+        cl.addLayout(crow)
+        card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        outer.addWidget(card)
+        self.chooser = QFrame()
+        lay = QVBoxLayout(self.chooser)
+        lay.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(self.chooser, 1)
+        self.spacer = QWidget()                          # takes the room while the search is closed
+        outer.addWidget(self.spacer, 1)
 
         row = QHBoxLayout()
         self.folder = QLineEdit(str((services.profile.sources or {}).get("dvd_root") or ""))
@@ -72,8 +101,11 @@ class DvdDialog(QDialog):
         for w in (self.use_button, self.file_button, self.none_button):
             buttons.addWidget(w)
         buttons.addStretch(1)
-        buttons.addWidget(self.close_button)
         lay.addLayout(buttons)
+        bottom = QHBoxLayout()
+        bottom.addStretch(1)
+        bottom.addWidget(self.close_button)
+        outer.addLayout(bottom)
 
         self.folder.setToolTip("Where to look for this episode's DVD file. Starts as the DVD folder in Settings → Folders.")
         self.browse_folder.setToolTip("Pick the folder to search.")
@@ -85,12 +117,16 @@ class DvdDialog(QDialog):
         self.file_button.setToolTip("Pick the DVD file yourself, from anywhere this computer can reach.")
         self.none_button.setToolTip("Record that no DVD exists for this episode: it takes the LaserDisc-only route.")
         self.close_button.setToolTip("Close this window.")
+        self.change_button.setToolTip("Search for another file, pick one, or record that this episode has no DVD.")
         from fstk.ui.tips import apply_common
 
         apply_common(self)
         self._show_state()
         self._update_remember()
         recorded = self.services.dvd_status(self.episode)
+        # a DVD already recorded: lead with it; the search opens on "Change DVD…"
+        self.change_button.setChecked(recorded["state"] != "set")
+        self._show_chooser(recorded["state"] != "set")
         if self.folder.text().strip():
             self.search()
         elif recorded["state"] == "set":
@@ -98,8 +134,34 @@ class DvdDialog(QDialog):
         else:
             self.status.setText("No DVD folder is set. Type or choose a folder and press Remember folder, or pick a file.")
 
+    def _show_chooser(self, on: bool) -> None:
+        self.chooser.setVisible(on)
+        self.spacer.setVisible(not on)
+        self.resize(self.width(), 460 if on else 230)
+        self.change_button.setText("Hide the search" if on else "Change DVD…")
+
+    def _facts(self, st: dict) -> str:
+        if st["state"] != "set":
+            return ""
+        f = Path(st["path"])
+        try:
+            size = f.stat().st_size
+            reach = f"{size / 2**30:.2f} GiB, reachable"
+        except OSError:
+            reach = "<span style='color:#c62828'>not reachable from this computer now</span>"
+        pack = ""
+        try:
+            target = self.services.opening_pack_target(self.episode)
+            pack = ("opening pack saved" if target.is_file() else
+                    "no opening pack yet (save one from the DVD probe step once it has run)")
+        except Exception:  # the pack location is a convenience; the DVD record stands without it
+            pack = ""
+        return reach + (f" · {pack}" if pack else "")
+
     def _show_state(self) -> None:
         st = self.services.dvd_status(self.episode)
+        self.facts.setText(self._facts(st))
+        self.facts.setVisible(st["state"] == "set")
         self.state.setText({"set": f"Recorded DVD: {st['path']}",
                             "unfiled": "This episode is marked as having a DVD, but no file is recorded. Choose the file below.",
                             "none": "Recorded: this episode has no DVD (LaserDisc-only route).",

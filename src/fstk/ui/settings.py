@@ -24,12 +24,14 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QRadioButton,
     QSlider,
     QSpinBox,
     QStackedWidget,
+    QStyle,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -376,7 +378,16 @@ class SettingsDialog(QDialog):
 
         middle = QHBoxLayout()
         self.groups = QListWidget()
-        self.groups.addItems(PAGES)
+        self.groups.setObjectName("settingsNav")
+        self.groups.setSpacing(2)
+        self.groups.setStyleSheet("#settingsNav::item { padding: 6px 8px; }")
+        icons = {"General": QStyle.StandardPixmap.SP_ComputerIcon, "Folders": QStyle.StandardPixmap.SP_DirIcon,
+                 "Video": QStyle.StandardPixmap.SP_MediaPlay, "Audio": QStyle.StandardPixmap.SP_MediaVolume,
+                 "Output": QStyle.StandardPixmap.SP_DriveHDIcon, "Processing": QStyle.StandardPixmap.SP_BrowserReload,
+                 "Tools": QStyle.StandardPixmap.SP_FileDialogDetailedView,
+                 "Logging": QStyle.StandardPixmap.SP_FileDialogContentsView}
+        for name in PAGES:
+            self.groups.addItem(QListWidgetItem(self.style().standardIcon(icons[name]), name))
         self.groups.setFixedWidth(170)
         self.stack = QStackedWidget()
         middle.addWidget(self.groups)

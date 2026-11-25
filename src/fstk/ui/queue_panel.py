@@ -145,6 +145,11 @@ class QueuePanel(QWidget):
         self.table.setColumnWidth(6, 140)
         self.table.itemSelectionChanged.connect(self._update_buttons)
         lay.addWidget(self.table, 1)
+        self.empty_hint = QLabel("The queue is empty. Use “Add to queue” to line up intake, delivery or a re-encode "
+                                 "for one or more episodes; Start queue runs them one after another, unattended.")
+        self.empty_hint.setWordWrap(True)
+        self.empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self.empty_hint, 1)
 
         from fstk.ui.tips import apply_tips
 
@@ -180,6 +185,8 @@ class QueuePanel(QWidget):
         self.store.sync()                       # changes saved by another window
         keep = self._selected()
         items = list(self.store.items)
+        self.table.setVisible(bool(items))
+        self.empty_hint.setVisible(not items)
         self.table.setRowCount(len(items))
         for r, it in enumerate(items):
             cells = [str(r + 1), it.episode, KIND_SHORT.get(it.kind, it.kind), STATUS_TEXT.get(it.status, it.status),

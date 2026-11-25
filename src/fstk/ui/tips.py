@@ -54,8 +54,8 @@ def apply_common(root: QWidget) -> None:
 
 def _internal(widget: QWidget) -> bool:
     parent = widget.parent()
-    if isinstance(parent, (QAbstractSpinBox, QComboBox)):
-        return True                                   # the editor inside a spin box / combo box
+    if isinstance(parent, (QAbstractSpinBox, QComboBox, QLineEdit)):
+        return True                                   # the editor inside a spin box / combo box, a line's clear button
     return widget.objectName().startswith("qt_") or type(widget).__name__ in ("ScrollLeftButton", "ScrollRightButton") \
         or widget.objectName() in ("ScrollLeftButton", "ScrollRightButton", "qt_scrollarea_viewport")
 

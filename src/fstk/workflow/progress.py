@@ -33,6 +33,17 @@ KEEP_SAMPLES = 9
 MIN_FRACTION_FOR_ETA = 0.03
 MIN_SECONDS_FOR_ETA = 15.0
 
+#: The words a person sees for each status, everywhere (Progress, run history, banners, notifications).
+STATUS_WORDS: dict[str, str] = {
+    "pending": "waiting", "running": "running", "passed": "done", "awaiting-review": "needs you",
+    "stale": "out of date", "blocked": "blocked", "failed": "failed", "cancelled": "cancelled",
+    "interrupted": "interrupted", "not-started": "not started",
+}
+#: Which problem to name first when several steps have one (S02E02 2026-11-25: the headline named a step that was only
+#: out of date, ld-audio, instead of the one that failed, retime).
+SEVERITY = {"failed": 0, "blocked": 1, "interrupted": 2, "stale": 3}
+PROBLEMS = tuple(SEVERITY)
+
 DONE = ("passed",)
 SETTLED = ("passed", "failed", "blocked", "cancelled", "interrupted", "stale")
 RUNNING = "running"
@@ -59,20 +70,40 @@ def format_duration(seconds: float | None) -> str:
     return f"{sec}s"
 
 
-def describe_job_state(state: Mapping[str, Any]) -> str:
+def worst_first(items, status_of) -> list:
+    """Problems ordered most serious first (failed, blocked, interrupted, out of date), plan order within each."""
+    probs = [x for x in items if status_of(x) in SEVERITY]
+    return sorted(probs, key=lambda x: SEVERITY[status_of(x)])
+
+
+def describe_job_state(state: Mapping[str, Any], name: Callable[[str], str] | None = None) -> str:
     """One line for a saved job: how far it got and what it is waiting on."""
+    name = name or (lambda sid: sid)
     steps = state.get("steps") or {}
     done = sum(1 for st in steps.values() if st.get("status") == "passed")
     line = f"{done} of {len(steps)} steps done"
     waiting = [k for k, st in steps.items() if st.get("status") == WAITING]
-    failed = [k for k, st in steps.items() if st.get("status") in ("failed", "blocked", "stale", "interrupted")]
+    failed = worst_first(list(steps), lambda k: steps[k].get("status"))
     if failed:
-        line += f" · needs attention: {failed[0]}"
+        line += f" · {name(failed[0])} {STATUS_WORDS[steps[failed[0]]['status']]}"
     elif waiting:
-        line += f" · waiting for your review: {waiting[0]}"
+        line += f" · waiting for your review: {name(waiting[0])}"
     elif done == len(steps) and steps:
         line += " · finished"
     return line
+
+
+def _duration(st: Mapping[str, Any]) -> float | None:
+    """Seconds between a saved step's start and finish, when both are recorded."""
+    from datetime import datetime
+
+    try:
+        a = datetime.fromisoformat(str(st["started_utc"]))
+        b = datetime.fromisoformat(str(st["finished_utc"]))
+    except (KeyError, ValueError, TypeError):
+        return None
+    secs = (b - a).total_seconds()
+    return secs if secs >= 0 else None
 
 
 class Timings:
@@ -133,6 +164,15 @@ class StepProgress:
     weight: float = FALLBACK_SECONDS
     review: bool = False                         # this stage ends in a human review
     detail: str = ""
+    took: float | None = None                    # duration recorded in the saved state (a run that has ended)
+    ran: bool = False                            # it started at some point (a cancelled step that never ran is "not started")
+
+    @property
+    def shown_status(self) -> str:
+        """The status as a person reads it: a step stopped before it ever began is "not started"."""
+        if self.status == "cancelled" and not self.ran and self.started is None:
+            return "not-started"
+        return self.status
 
     @property
     def done(self) -> bool:
@@ -140,7 +180,7 @@ class StepProgress:
 
     def elapsed(self, now: float) -> float | None:
         if self.started is None:
-            return None
+            return self.took
         return (self.finished if self.finished is not None else now) - self.started
 
     def credit(self) -> float:
@@ -166,18 +206,21 @@ class Snapshot:
     state: str                                   # idle | running | waiting | failed | finished
     paused: bool = False
 
-    def headline(self) -> str:
+    def headline(self, name: Callable[[StepProgress], str] | None = None) -> str:
+        name = name or (lambda s: s.id)
         if self.paused:
             return "Paused"
         if self.state == "finished":
             return f"All {self.total} steps done"
         if self.state == "failed" and self.failed:
-            return f"Stopped at step {self.failed[0].id}: " + ("run was interrupted; run again to continue" if self.failed[0].status == "interrupted" else "needs attention")
+            worst = self.failed[0]                       # already most serious first
+            why = {"interrupted": "the run was interrupted; run again to continue",
+                   "failed": "it failed", "blocked": "it cannot start", "stale": "it is out of date"}[worst.status]
+            return f"Stopped at {name(worst)}: {why}"
         if self.state == "waiting" and self.waiting:
-            return f"Waiting for you: {self.waiting[0].id}"
+            return f"Waiting for you: {name(self.waiting[0])}"
         if self.current:
-            c = self.current[0]
-            return f"Step {self.done + 1} of {self.total}: {c.id}"
+            return f"Running {name(self.current[0])}"
         return f"{self.done} of {self.total} steps done"
 
 
@@ -210,6 +253,8 @@ class ProgressTracker:
             # a saved "running" belongs to a run that is no longer going (the engine marks it interrupted on the next
             # start): showing it as running would make a dead run look alive
             step.status = "interrupted" if (status == RUNNING and not live) else status
+            step.ran = bool(st.get("started_utc"))
+            step.took = _duration(st) if step.status != RUNNING else None
             if step.status in SETTLED or step.status == WAITING:
                 step.detail = "; ".join(st.get("issues") or []) or str(st.get("result_note") or "")
 
@@ -243,7 +288,7 @@ class ProgressTracker:
         now = self.clock()
         if kind == "step-start":
             step.status, step.started, step.finished, step.fraction = RUNNING, now, None, None
-            step.message, step.detail = "", ""
+            step.message, step.detail, step.took, step.ran = "", "", None, True
         elif kind == "progress":
             frac = event.get("fraction")
             if step.status != RUNNING:
@@ -293,7 +338,7 @@ class ProgressTracker:
         overall = sum(s.weight * s.credit() for s in steps) / total_w
         current = [s for s in steps if s.status == RUNNING]
         waiting = [s for s in steps if s.status == WAITING]
-        failed = [s for s in steps if s.status in ("failed", "blocked", "stale", "interrupted")]
+        failed = worst_first(steps, lambda s: s.status)
         done = sum(1 for s in steps if s.done)
         if done == len(steps):
             state = "finished"

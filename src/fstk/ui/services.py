@@ -47,6 +47,8 @@ class ValueRow:
     origin: str
     by: str
     set: bool
+    utc: str = ""
+    note: str = ""
 
 
 @dataclass(frozen=True)
@@ -309,7 +311,8 @@ class Services:
             text = ("—" if entry is None else
                     value if isinstance(value, str) else json.dumps(value)[:120])
             rows.append(ValueRow(fd.key, fd.kind, text, fd.unit, (entry or {}).get("origin", ""),
-                                 (entry or {}).get("by", ""), entry is not None))
+                                 (entry or {}).get("by", ""), entry is not None, str((entry or {}).get("utc", "")),
+                                 str((entry or {}).get("note", "") or "")))
         return rows
 
     def title(self, episode: str | EpisodeId) -> str:
@@ -318,6 +321,71 @@ class Services:
     def jobs(self, episode: str | EpisodeId) -> list[str]:
         d = self.workspace(episode).state_dir / "plans"
         return sorted(p.name for p in d.iterdir() if (p / "state.json").is_file()) if d.is_dir() else []
+
+    def intake_done(self, episode: str | EpisodeId) -> bool:
+        """Intake has produced what delivery needs (the stack reference): the main Run button offers delivery."""
+        m = self.workspace(episode).store.load()
+        return m.is_set("stack.reference") or bool(m.artifact("stack_master"))
+
+    def runs(self, episode: str | EpisodeId) -> list[tuple[str, str]]:
+        """The episode's jobs, newest first, as (job id, label) for the run picker:
+        "Delivery · 24 Nov 21:37 · 10 of 15 done"."""
+        from datetime import UTC, datetime
+
+        from fstk.workflow.progress import describe_job_state
+
+        out = []
+        for job in self.jobs(episode):
+            try:
+                state = self.job_state(episode, job)
+            except (OSError, ValueError):
+                continue
+            kind = job.split("-", 1)[0]
+            stamp = job.rsplit("-", 1)[-1]
+            when = ""
+            try:
+                when = (datetime.strptime(stamp, "%Y%m%dt%H%M%S").replace(tzinfo=UTC).astimezone()
+                        .strftime("%d %b %H:%M"))
+            except ValueError:
+                when = str(state.get("created_utc", ""))[:16]
+            done = describe_job_state(state).split(" · ")[0].replace(" steps done", " done")
+            out.append((state.get("created_utc", ""), job, f"{kind.title()} · {when} · {done}"))
+        out.sort(reverse=True)
+        return [(job, label) for _c, job, label in out]
+
+    def episode_status(self, episode: str | EpisodeId) -> tuple[str, str]:
+        """(short status, tone) for the episode list: needs you · <step> failed · running · delivered · N of M."""
+        from fstk.ui.step_help import step_name
+        from fstk.workflow.progress import STATUS_WORDS, worst_first
+
+        if self.frozen_reason(episode):
+            return "handed off", "quiet"
+        if self.pending_reviews(episode):
+            return "needs you", "info"
+        jobs = self.jobs(episode)
+        if not jobs:
+            return "not started", "quiet"
+        states = []
+        for job in jobs:
+            with contextlib.suppress(OSError, ValueError):
+                states.append((self.job_state(episode, job), job))
+        if not states:
+            return "not started", "quiet"
+        state, job = max(states, key=lambda x: x[0].get("created_utc", ""))
+        steps = state.get("steps") or {}
+        if self.job_runner(episode, job):
+            return "running", "busy"
+        plan = self.job_plan(episode, job) or {"steps": []}
+        stage_of = {s["id"]: s["stage"] for s in plan["steps"]}
+        bad = worst_first(list(steps), lambda k: steps[k].get("status"))
+        if bad:
+            st = steps[bad[0]]["status"]
+            return f"{step_name(stage_of.get(bad[0], bad[0]), bad[0])} {STATUS_WORDS[st]}", \
+                ("bad" if st == "failed" else "warn")
+        done = sum(1 for st in steps.values() if st.get("status") == "passed")
+        if steps and done == len(steps):
+            return ("delivered" if job.startswith(("delivery", "reencode")) else "intake done"), "good"
+        return f"{done} of {len(steps)} steps", "quiet"
 
     def job_state(self, episode: str | EpisodeId, job: str) -> dict[str, Any]:
         path = self.workspace(episode).job_dir(job) / "state.json"

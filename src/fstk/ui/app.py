@@ -1,10 +1,13 @@
 """FromStunToKill desktop app (PySide6). First shell over ``fstk.ui.services``.
 
-Layout
-  left   – episodes found under the profile's data_root
-  centre – tabs: Manifest (every declared field, set or unset, with provenance),
-                 Jobs (step states for each job), Reviews (awaiting-review steps)
-  bottom – live event log for the running plan
+Layout (UI clean-up 2026-11-25, see the project's UI-ASSESSMENT)
+  menus  – File (settings, notifications), Episode (find, DVD, reviews, hand off, remove), Run, Help (log, bundle)
+  left   – episodes, each with its title and where it stands (needs you, a step failed, running, delivered)
+  centre – the title with the one Run button (offers intake or delivery, whichever is next) and the notifications
+           bell; a banner saying what needs doing next, with buttons that do it; tabs: Progress (headline, overall
+           bar with Pause/Cancel, run picker, steps), Reviews (everything waiting for a person), Queue, Details
+           (the manifest, grouped and searchable)
+  bottom – the latest log line; the full log opens on demand or when something goes wrong
 
 Plans run on a worker ``QThread`` and stream engine events back through a signal; the GUI
 thread never blocks on media work. Review decisions require a non-empty note and are bound
@@ -18,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import getpass
+import html
 import logging
 import os
 import socket
@@ -26,40 +30,42 @@ import time
 from pathlib import Path
 from typing import ClassVar
 
-from PySide6.QtCore import QObject, Qt, QThread, QTimer, QUrl, Signal, Slot
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QObject, QProcess, Qt, QThread, QTimer, QUrl, Signal, Slot
+from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
-    QHeaderView,
     QInputDialog,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSplitter,
     QSystemTrayIcon,
-    QTableWidget,
-    QTableWidgetItem,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from fstk.core.errors import FstkError
+from fstk.core.identity import EpisodeId
+from fstk.ui.colours import quiet_css, tone
+from fstk.ui.details import DetailsPanel
 from fstk.ui.progress_panel import ProgressPanel
-from fstk.ui.services import Services, describe_field
-from fstk.workflow.progress import ProgressTracker, describe_job_state
+from fstk.ui.services import Services
+from fstk.ui.step_help import step_name
+from fstk.workflow.progress import STATUS_WORDS, ProgressTracker, worst_first
 
 LOG = logging.getLogger("fstk.ui")
-STATUS_COLOURS = {"passed": "#2e7d32", "failed": "#c62828", "blocked": "#ef6c00",
-                  "awaiting-review": "#1565c0", "running": "#6a1b9a", "pending": "#616161",
-                  "cancelled": "#616161"}
 
 
 def code_stamp() -> tuple[int, int]:
@@ -157,9 +163,61 @@ class CallWorker(QObject):
             self.failed.emit(f"internal error: {exc!r}")
 
 
+class Banner(QFrame):
+    """The one place that says what needs doing next, with buttons that do it (and what just happened)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.label = QLabel("")
+        self.label.setWordWrap(True)
+        self.label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.buttons = QHBoxLayout()
+        self.buttons.setSpacing(6)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 6, 6, 6)
+        lay.addWidget(self.label, 1)
+        lay.addLayout(self.buttons)
+        self.close_button = QToolButton()
+        self.close_button.setText("✕")
+        self.close_button.setAutoRaise(True)
+        self.close_button.setToolTip("Hide this message")
+        self.close_button.clicked.connect(lambda: self.setVisible(False))
+        lay.addWidget(self.close_button)
+        self.kind = ""                                  # "needs" (what to do next) or "event" (what just happened)
+        self.setObjectName("banner")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setVisible(False)
+
+    def text(self) -> str:
+        return self.label.text()
+
+    def show_message(self, text: str, tone: str, actions=(), kind: str = "event") -> None:
+        from fstk.ui.visual import tone_colour
+
+        while self.buttons.count():
+            w = self.buttons.takeAt(0).widget()
+            if w is not None:
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
+        self.label.setText(text)
+        self.kind = kind
+        self.setStyleSheet(f"#banner {{ background: {tone_colour(tone)}; border-radius: 4px; }} "
+                           "#banner QLabel { color: white; font-weight: 600; background: transparent; } "
+                           "#banner QToolButton { color: white; }")
+        for label, slot in actions:
+            b = QPushButton(label)
+            b.clicked.connect(slot)
+            self.buttons.addWidget(b)
+        self.setVisible(bool(text))
+
+
 class MainWindow(QMainWindow):
     def __init__(self, services: Services, *, actor: str | None = None):
         super().__init__()
+        from fstk.ui import theme
+
+        theme.apply()
         self.services = services
         self.actor = actor or str((services.profile.ui or {}).get("operator") or "").strip() \
             or f"{getpass.getuser()}@{socket.gethostname()}"
@@ -168,32 +226,46 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"FromStunToKill — {services.profile.machine}")
         self.resize(1280, 800)
         self.catalog_thread: QThread | None = None
+        self._picked_job: str | None = None             # a run chosen in the run picker (None: the latest)
         QTimer.singleShot(1500, self.check_catalog_age)
 
+        # ---- episode list (left): title and where each episode stands
         self.episodes = QListWidget()
-        self.episodes.currentTextChanged.connect(self.show_episode)
+        self.episodes.setObjectName("episodeList")
+        self.episodes.currentItemChanged.connect(lambda cur, _prev: self.show_episode(self._canonical(cur)))
+        self.episodes.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.episodes.customContextMenuRequested.connect(self._episode_menu)
+        self.episodes.setSpacing(1)
+
+        # ---- header: title, the one Run button, notifications
         self.title = QLabel("No episode selected")
-        self.title.setStyleSheet("font-size: 16px; font-weight: 600;")
+        self.title.setObjectName("episodeTitle")
+        self.title.setWordWrap(True)
         self.override_flag = QPushButton()
         self.override_flag.setFlat(True)
-        self.override_flag.setStyleSheet("text-align: left; color: #ef6c00; font-weight: 600;")
+        self.override_flag.setStyleSheet(f"text-align: left; color: {tone('warn').name()}; font-weight: 600;")
         self.override_flag.setCursor(Qt.CursorShape.PointingHandCursor)
         self.override_flag.clicked.connect(self.open_settings)
         self.override_flag.setVisible(False)
+        self._build_actions()
+        self.run_menu = QMenu(self)
+        for a in (self.intake_button, self.deliver_button):
+            self.run_menu.addAction(a)
+        self.run_menu.addSeparator()
+        self.run_menu.addAction(self.run_button)
+        self.main_run = QToolButton()
+        self.main_run.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.main_run.setMenu(self.run_menu)
+        self.main_run.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.main_run.setObjectName("primary")
+        self.main_run.setDefaultAction(self.deliver_button)
+        self.notify_bell = QToolButton()
+        self.notify_bell.setDefaultAction(self.notify_button)
+        self.notify_bell.setAutoRaise(True)
+        self.notify_button.toggled.connect(self._bell)
+        self._bell(self.notify_button.isChecked())
 
-        self.values = QTableWidget(0, 5)
-        self.values.setHorizontalHeaderLabels(["Field", "Value", "Unit", "Kind", "Set by"])
-        self.values.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.values.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        for table_header in (self.values.verticalHeader(),):
-            table_header.setVisible(False)
-            table_header.setDefaultSectionSize(22)
-
-        self.jobs = QTableWidget(0, 4)
-        self.jobs.setHorizontalHeaderLabels(["Job", "Step", "Status", "Issues"])
-        self.jobs.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        self.jobs.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-
+        # ---- the Reviews tab: one front door for everything waiting for a person
         from fstk.ui.visual import DetailsToggle, SpotViewer, TimelineBar
 
         self.reviews = QListWidget()
@@ -204,7 +276,7 @@ class MainWindow(QMainWindow):
         self.review_headline.setTextFormat(Qt.TextFormat.RichText)
         self.review_how = QLabel("")
         self.review_how.setWordWrap(True)
-        self.review_how.setStyleSheet("color: #9e9e9e;")
+        self.review_how.setStyleSheet(f"color: {quiet_css()};")
         self.review_timeline = TimelineBar()
         self.review_timeline.tick_clicked.connect(lambda key: self.review_spots.show_spot(int(key)))
         self.review_spots = SpotViewer()
@@ -225,42 +297,59 @@ class MainWindow(QMainWindow):
         self.approve.setStyleSheet("font-weight: 600;")
         self.approve.clicked.connect(lambda: self.decide("APPROVED"))
         self.reject.clicked.connect(lambda: self.decide("REJECTED"))
+        self.review_empty = QLabel("Nothing is waiting for you.")
+        self.review_empty.setStyleSheet("font-size: 14px;")
+        self.review_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.review_other = QLabel('Also: <a href="efm">EFM capture choice…</a> · '
+                                   '<a href="delivery">Delivery A/V check…</a>')
+        self.review_other.setToolTip("The review windows you can open at any time, waiting or not.")
+        self.review_other.linkActivated.connect(lambda which: self.open_efm_review() if which == "efm"
+                                                else self.open_delivery_review())
         review_buttons = QHBoxLayout()
         review_buttons.addWidget(self.review_details_toggle)
         review_buttons.addStretch(1)
         for b in (self.open_evidence, self.reject, self.approve):
             review_buttons.addWidget(b)
+        self.review_controls = QWidget()
+        rc = QVBoxLayout(self.review_controls)
+        rc.setContentsMargins(0, 0, 0, 0)
+        rc.addWidget(self.reviews)
+        rc.addWidget(self.review_headline)
+        rc.addWidget(self.review_timeline)
+        rc.addWidget(self.review_spots, 5)
+        rc.addWidget(self.review_scroll, 5)
+        rc.addWidget(self.review_how)
+        rc.addWidget(self.review_detail, 2)
+        rc.addLayout(review_buttons)
         review_page = QWidget()
         rl = QVBoxLayout(review_page)
-        rl.addWidget(self.reviews)
-        rl.addWidget(self.review_headline)
-        rl.addWidget(self.review_timeline)
-        rl.addWidget(self.review_spots, 5)
-        rl.addWidget(self.review_scroll, 5)
-        rl.addWidget(self.review_how)
-        rl.addWidget(self.review_detail, 2)
-        rl.addLayout(review_buttons)
+        rl.addWidget(self.review_empty, 1)
+        rl.addWidget(self.review_controls, 1)
+        rl.addWidget(self.review_other)
         self.review_page = review_page
 
-        self.banner = QLabel("")
-        self.banner.setWordWrap(True)
-        self.banner.setVisible(False)
-        self.banner.setToolTip("What just happened and what the app is doing about it.")
+        self.banner = Banner()
         self._queued_plans: list[str] = []
         self._running_plan: str | None = None
         self.progress_panel = ProgressPanel()
         self.progress_panel.space_refresh.connect(self.recheck_space)
         self.progress_panel.pack_save.connect(self.save_opening_pack)
         self.progress_panel.restart_from.connect(self.restart_step)
+        self.progress_panel.open_step_log.connect(self.open_step_log)
+        self.progress_panel.open_step_report.connect(self.open_step_report)
+        self.progress_panel.pause_clicked.connect(self.toggle_pause)
+        self.progress_panel.cancel_clicked.connect(self.cancel_run)
+        self.progress_panel.run_chosen.connect(self.choose_run)
+        self.pause_button = self.progress_panel.pause_button
+        self.cancel_button = self.progress_panel.cancel_button
         self.pack_thread: QThread | None = None
         self.progress_panel.set_column_widths(self.services.app_prefs().get("progress_columns"))
         self.progress_panel.columns_resized.connect(self._remember_progress_columns)
-        self.status_line = QLabel("")
         self.tracker: ProgressTracker | None = None
+        self.details = DetailsPanel()
+        self.values = self.details
         self.tabs = QTabWidget()
         self.tabs.addTab(self.progress_panel, "Progress")
-        self.tabs.addTab(self.values, "Manifest")
-        self.tabs.addTab(self.jobs, "Jobs")
         self.tabs.addTab(review_page, "Reviews")
         from fstk.ui.queue_panel import QueuePanel
 
@@ -269,58 +358,34 @@ class MainWindow(QMainWindow):
                                       episodes=lambda: [str(e) for e in self.services.episodes()],
                                       notify=self.notify, sleep=self.services.sleep_computer)
         self.tabs.addTab(self.queue_panel, "Queue")
+        self.tabs.addTab(self.details, "Details")
         if self.queue_runner.running and any(i.status in ("queued", "held") for i in self.queue_runner.store.items):
             QTimer.singleShot(3000, self._resume_queue)
         QTimer.singleShot(1500, self._check_volumes)
 
+        # ---- the log: a one-line strip with the latest message; the full log opens on demand or on a problem
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(5000)
-        self.remove_button = QPushButton("Remove…")
-        self.remove_button.setToolTip("Remove the selected episode (and, if you choose, its files)")
-        self.remove_button.clicked.connect(self.open_remove)
-        self.pick_button = QPushButton("Episodes…")
-        self.pick_button.clicked.connect(self.open_picker)
-        self.intake_button = QPushButton("Run intake")
-        self.intake_button.clicked.connect(self.run_intake)
-        self.deliver_button = QPushButton("Run to delivery")
-        self.deliver_button.setToolTip("Stack render → … → QC, then the A/V check (DVD or no-DVD route)")
-        self.deliver_button.clicked.connect(self.run_delivery)
-        self.dvd_button = QPushButton("DVD…")
-        self.dvd_button.clicked.connect(self.open_dvd)
-        self.efm_button = QPushButton("EFM capture…")
-        self.efm_button.clicked.connect(self.open_efm_review)
-        self.delivery_button = QPushButton("Delivery review…")
-        self.delivery_button.clicked.connect(self.open_delivery_review)
-        self.handoff_button = QPushButton("Hand off…")
-        self.handoff_button.setToolTip("Freeze this episode here and hand it to another machine (shared workspace)")
-        self.handoff_button.clicked.connect(self.ask_handoff)
-        self.run_button = QPushButton("Run plan…")
-        self.run_button.clicked.connect(self.choose_and_run)
-        self.settings_button = QPushButton("Settings…")
-        self.settings_button.setToolTip("Video and audio quality (defaults and per episode), folders, tools, logging")
-        self.settings_button.clicked.connect(self.open_settings)
-        self.folders_button = QPushButton("Folders…")
-        self.folders_button.setToolTip("Where fstk keeps its state and does its work")
-        self.folders_button.clicked.connect(self.open_folders)
-        self.bundle_button = QPushButton("Save debug bundle…")
-        self.bundle_button.setToolTip("Zip the logs, settings, job state and tool logs (no media) to send for a bug report")
-        self.bundle_button.clicked.connect(self.save_bundle)
-        self.logs_button = QPushButton("Open logs")
-        self.logs_button.setToolTip("Open the folder with the application log and crash log")
-        self.logs_button.clicked.connect(self.open_logs)
-        self.cancel_button = QPushButton("Cancel")
-        self.cancel_button.setEnabled(False)
-        self.cancel_button.clicked.connect(self.cancel_run)
-        self.pause_button = QPushButton("Pause")
-        self.pause_button.setToolTip("Available while a plan is running in this window. Freezes the running tools "
-                                     "where they are and starts nothing new; Resume continues exactly from here")
-        self.pause_button.setEnabled(False)
-        self.pause_button.clicked.connect(self.toggle_pause)
-        self.notify_button = QPushButton("Notifications")
-        self.notify_button.setCheckable(True)
-        self.notify_button.setChecked(bool((services.profile.ui or {}).get("notifications", True)))
-        self.notify_button.setToolTip("Desktop notification when a step needs you, a step fails, or the run ends")
+        self._log_lines: list[tuple[str, str]] = []
+        self.log_last = QLabel("")
+        self.log_last.setStyleSheet(f"color: {quiet_css()};")
+        self.log_last.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.log_toggle = QToolButton()
+        self.log_toggle.setCheckable(True)
+        self.log_toggle.setAutoRaise(True)
+        self.log_toggle.toggled.connect(self.set_log_open)
+        self.log_problems = QCheckBox("Only problems")
+        self.log_problems.setToolTip("Show only warnings and errors in the log")
+        self.log_problems.toggled.connect(self._refill_log)
+        strip = QHBoxLayout()
+        strip.setContentsMargins(4, 0, 4, 0)
+        strip.addWidget(self.log_toggle)
+        strip.addWidget(self.log_last, 1)
+        strip.addWidget(self.log_problems)
+        self.log_strip = QWidget()
+        self.log_strip.setLayout(strip)
+
         self._set_tips()
         self.tray = QSystemTrayIcon(self.windowIcon() or QApplication.windowIcon(), self)
         self.watch = QTimer(self)                         # follows a run that another window/process is doing
@@ -338,67 +403,220 @@ class MainWindow(QMainWindow):
 
         centre = QWidget()
         cl = QVBoxLayout(centre)
-        cl.addWidget(self.title)
+        head = QHBoxLayout()
+        head.addWidget(self.title, 1)
+        head.addWidget(self.main_run)
+        head.addWidget(self.notify_bell)
+        cl.addLayout(head)
         cl.addWidget(self.override_flag)
-        cl.addWidget(self.status_line)
         cl.addWidget(self.banner)
         cl.addWidget(self.tabs, 1)
-        bar = QHBoxLayout()
-        bar.addWidget(self.pick_button)
-        bar.addWidget(self.intake_button)
-        bar.addWidget(self.deliver_button)
-        bar.addWidget(self.dvd_button)
-        bar.addWidget(self.efm_button)
-        bar.addWidget(self.delivery_button)
-        bar.addWidget(self.handoff_button)
-        bar.addWidget(self.run_button)
-        bar.addWidget(self.pause_button)
-        bar.addWidget(self.cancel_button)
-        bar.addStretch(1)
-        bar.addWidget(self.notify_button)
-        bar.addWidget(self.settings_button)
-        cl.addLayout(bar)
-        bar2 = QHBoxLayout()
-        bar2.addStretch(1)
-        bar2.addWidget(self.logs_button)
-        bar2.addWidget(self.bundle_button)
-        cl.addLayout(bar2)
 
-        split = QSplitter(Qt.Orientation.Vertical)
+        self.split = QSplitter(Qt.Orientation.Vertical)
         top = QSplitter(Qt.Orientation.Horizontal)
-        left = QWidget()
-        ll = QVBoxLayout(left)
-        ll.setContentsMargins(0, 0, 0, 0)
-        ll.addWidget(self.episodes, 1)
-        ll.addWidget(self.remove_button)
-        top.addWidget(left)
+        top.addWidget(self.episodes)
         top.addWidget(centre)
         top.setStretchFactor(1, 4)
-        split.addWidget(top)
-        split.addWidget(self.log)
-        split.setStretchFactor(0, 4)
-        self.setCentralWidget(split)
+        top.setSizes([230, 1050])
+        self.split.addWidget(top)
+        self.split.addWidget(self.log)
+        self.split.setStretchFactor(0, 4)
+        outer = QWidget()
+        ol = QVBoxLayout(outer)
+        ol.setContentsMargins(0, 0, 0, 0)
+        ol.setSpacing(0)
+        ol.addWidget(self.split, 1)
+        ol.addWidget(self.log_strip)
+        self.setCentralWidget(outer)
+        self.set_log_open(bool(self.services.app_prefs().get("log_open", False)), remember=False)
         self.refresh()
 
+    # ---------------------------------------------------------------- menus and actions
+    def _act(self, text: str, slot, tip: str = "", shortcut: str | None = None) -> QAction:
+        a = QAction(text, self)
+        a.triggered.connect(lambda _=False: slot())
+        if tip:
+            a.setToolTip(tip)
+            a.setStatusTip(tip)
+        if shortcut:
+            a.setShortcut(QKeySequence(shortcut))
+        return a
+
+    def _build_actions(self) -> None:
+        """Every command, once, as an action: the menus, the Run button and right-click menus share them."""
+        A = self._act
+        self.pick_button = A("Find or add episode…", self.open_picker,
+                             "Find an episode in the archive catalog, or add one from a folder you already have, then "
+                             "create or open its workspace.", "Ctrl+O")
+        self.dvd_button = A("Choose DVD…", self.open_dvd,
+                            "Choose this episode's DVD (a file found by its episode number, or one you browse to), "
+                            "or record that it has none. Needed before the delivery plan.")
+        self.efm_button = A("EFM capture choice…", self.open_efm_review,
+                            "Review the decoded EFM audio of this episode's captures and choose which one to use.")
+        self.delivery_button = A("Delivery A/V check…", self.open_delivery_review,
+                                 "Review a finished delivery: the A/V check and the evidence, then approve or send it "
+                                 "back for corrections.")
+        self.handoff_button = A("Hand off to another machine…", self.ask_handoff,
+                                "Freeze this episode here and hand it to another machine (shared workspace)")
+        self.remove_button = A("Remove episode…", self.open_remove,
+                               "Remove the selected episode (and, if you choose, its files)")
+        self.intake_button = A("Run intake", self.run_intake,
+                               "Intake: download the captures (if needed), inventory them, choose the stack reference "
+                               "and decode the EFM audio. Heavy steps run one at a time.")
+        self.deliver_button = A("Run to delivery", self.run_delivery,
+                                "Stack render → … → QC, then the A/V check (DVD or no-DVD route)", "Ctrl+R")
+        self.run_button = A("Run a plan file… (advanced)", self.choose_and_run,
+                            "Run a saved plan file for this episode (advanced; Run intake and Run to delivery write "
+                            "and run the usual plans for you).")
+        self.settings_button = A("Settings…", self.open_settings,
+                                 "Video and audio quality (defaults and per episode), folders, tools, logging",
+                                 "Ctrl+,")
+        self.notify_button = A("Desktop notifications", lambda: None,
+                               "Desktop notification when a step needs you, a step fails, or the run ends")
+        self.notify_button.setCheckable(True)
+        self.notify_button.setChecked(bool((self.services.profile.ui or {}).get("notifications", True)))
+        self.logs_button = A("Open logs", self.open_logs, "Open the folder with the application log and crash log")
+        self.bundle_button = A("Save debug bundle…", self.save_bundle,
+                               "Zip the logs, settings, job state and tool logs (no media) to send for a bug report")
+        self.show_log_action = A("Show the log", lambda: None, "Show or hide the full log at the bottom", "Ctrl+L")
+        self.show_log_action.setCheckable(True)
+        self.show_log_action.toggled.connect(lambda on: self.set_log_open(on))
+        self.pause_action = A("Pause / Resume", self.toggle_pause, "Freeze or continue the running tools")
+        self.cancel_action = A("Cancel the run", self.cancel_run, "Stop the run; finished steps are kept")
+        quit_action = A("Quit", self.close, "", "Ctrl+Q")
+
+        bar = self.menuBar()
+        m = bar.addMenu("&File")
+        m.addAction(self.settings_button)
+        m.addAction(self.notify_button)
+        m.addSeparator()
+        m.addAction(quit_action)
+        m = bar.addMenu("&Episode")
+        for a in (self.pick_button, None, self.dvd_button, self.efm_button, self.delivery_button, None,
+                  self.handoff_button, self.remove_button):
+            m.addSeparator() if a is None else m.addAction(a)
+        m = bar.addMenu("&Run")
+        for a in (self.intake_button, self.deliver_button, None, self.pause_action, self.cancel_action, None,
+                  self.run_button):
+            m.addSeparator() if a is None else m.addAction(a)
+        m = bar.addMenu("&Help")
+        for a in (self.show_log_action, self.logs_button, self.bundle_button):
+            m.addAction(a)
+
+    def _bell(self, on: bool) -> None:
+        self.notify_button.setText("🔔" if on else "🔕")
+        self.notify_button.setIconText("🔔" if on else "🔕")
+        self.notify_button.setToolTip(("Desktop notifications are on" if on else "Desktop notifications are off")
+                                      + ": a notice when a step needs you, a step fails, or the run ends. Click to "
+                                        "turn them " + ("off." if on else "on."))
+
+    def set_run_enabled(self, enabled: bool) -> None:
+        for a in (self.intake_button, self.deliver_button, self.run_button):
+            a.setEnabled(enabled)
+        self.main_run.setEnabled(enabled)
+        self.pause_action.setEnabled(not enabled and self.thread is not None)
+        self.cancel_action.setEnabled(self.thread is not None)
+
+    def _update_run_button(self, episode: str | None) -> None:
+        """The Run button offers the next sensible job: intake until it is done, then delivery."""
+        intake_next = False
+        if episode:
+            with contextlib.suppress(FstkError, OSError, ValueError):
+                intake_next = not self.services.intake_done(episode)
+        self.main_run.setDefaultAction(self.intake_button if intake_next else self.deliver_button)
+
+    # ---------------------------------------------------------------- log pane
+    def set_log_open(self, on: bool, remember: bool = True) -> None:
+        self.log.setVisible(on)
+        for w in (self.log_toggle, self.show_log_action):
+            w.blockSignals(True)
+            w.setChecked(on)
+            w.blockSignals(False)
+        self.log_toggle.setText("▾ Hide log" if on else "▴ Show log")
+        self.log_problems.setVisible(on)
+        if on:
+            sizes = self.split.sizes()
+            if len(sizes) == 2 and sizes[1] < 80:
+                total = sum(sizes) or 800
+                self.split.setSizes([int(total * 0.75), int(total * 0.25)])
+        if remember:
+            with contextlib.suppress(Exception):
+                self.services.save_app_prefs({"log_open": bool(on)})
+
+    def _refill_log(self) -> None:
+        only = self.log_problems.isChecked()
+        self.log.clear()
+        for text, level in self._log_lines[-5000:]:
+            if not only or level != "info":
+                self._put_log(text, level)
+
+    def _put_log(self, text: str, level: str) -> None:
+        if level == "info":
+            self.log.appendPlainText(text)
+        else:
+            colour = tone("bad" if level == "error" else "warn").name()
+            self.log.appendHtml(f'<span style="color:{colour}">{html.escape(text)}</span>')
+
     # ---------------------------------------------------------------- data
+    @staticmethod
+    def _canonical(item) -> str:
+        return item.data(Qt.ItemDataRole.UserRole) if item is not None else ""
+
     def refresh(self) -> None:
-        current = self.episodes.currentItem().text() if self.episodes.currentItem() else None
+        current = self.episode
+        self.episodes.blockSignals(True)
         self.episodes.clear()
         for ep in self.services.episodes():
-            self.episodes.addItem(ep.canonical)
-        if current:
-            matches = self.episodes.findItems(current, Qt.MatchFlag.MatchExactly)
-            if matches:
-                self.episodes.setCurrentItem(matches[0])
-            elif self.episodes.count():
-                self.episodes.setCurrentRow(0)
-        elif self.episodes.count():
-            self.episodes.setCurrentRow(0)
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, ep.canonical)
+            self._label_episode(item, ep.canonical)
+            self.episodes.addItem(item)
+        self.episodes.blockSignals(False)
+        target = self._find_episode(current) if current else None
+        if target is None and self.episodes.count():
+            target = self.episodes.item(0)
+        if target is not None:
+            self.episodes.setCurrentItem(target)
+            if current and self._canonical(target) == current:
+                self.show_episode(current)
+
+    def _label_episode(self, item, canonical: str) -> None:
+        try:
+            title = self.services.title(canonical)
+        except (FstkError, OSError, ValueError):
+            title = ""
+        status, tn = "", "quiet"
+        with contextlib.suppress(FstkError, OSError, ValueError, KeyError):
+            status, tn = self.services.episode_status(canonical)
+        if self.thread is not None and self._running_plan and canonical == self.episode and self.tracker:
+            status, tn = f"running {self.tracker.snapshot().overall:.0%}", "busy"
+        code = canonical.split(":", 1)[-1]
+        item.setText(f"{code}  {title}\n    {status}" if status else f"{code}  {title}")
+        item.setToolTip(f"{canonical} — {title}" + (f"\n{status}" if status else ""))
+        if tn in ("bad", "warn", "info", "busy"):
+            item.setForeground(tone(tn))
+        item.setData(Qt.ItemDataRole.UserRole + 1, tn)
+
+    def _find_episode(self, canonical: str):
+        for i in range(self.episodes.count()):
+            if self._canonical(self.episodes.item(i)) == canonical:
+                return self.episodes.item(i)
+        return None
+
+    def _episode_menu(self, pos) -> None:
+        item = self.episodes.itemAt(pos)
+        if item is not None:
+            self.episodes.setCurrentItem(item)
+        menu = QMenu(self)
+        for a in (self.pick_button, None, self.dvd_button, self.efm_button, self.delivery_button, None,
+                  self.handoff_button, self.remove_button):
+            menu.addSeparator() if a is None else menu.addAction(a)
+        menu.exec(self.episodes.viewport().mapToGlobal(pos))
 
     @property
     def episode(self) -> str | None:
         item = self.episodes.currentItem()
-        return item.text() if item else None
+        return self._canonical(item) or None if item else None
 
     @Slot(str)
     def show_episode(self, episode: str) -> None:
@@ -414,36 +632,10 @@ class MainWindow(QMainWindow):
         self.title.setText(title)
         self.title.setToolTip(frozen or "\n".join(p.describe() for p in others))
         self.show_override_flag(episode)
-        self.run_button.setEnabled(not frozen)
-        self.intake_button.setEnabled(not frozen)
-        self.deliver_button.setEnabled(not frozen)
+        self.set_run_enabled(not frozen and self.thread is None)
         self.handoff_button.setEnabled(not frozen)
-        rows = self.services.manifest_rows(episode)
-        self.values.setRowCount(len(rows))
-        for i, r in enumerate(rows):
-            for j, text in enumerate((r.key, r.value, r.unit, r.kind, f"{r.origin}/{r.by}" if r.set else "")):
-                item = QTableWidgetItem(text)
-                if j == 0:
-                    item.setToolTip(describe_field(r.key))
-                if not r.set:
-                    item.setForeground(Qt.GlobalColor.gray)
-                self.values.setItem(i, j, item)
-        self.values.resizeColumnToContents(0)
-        job_rows = []
-        for job in self.services.jobs(episode):
-            for sid, st in self.services.job_state(episode, job)["steps"].items():
-                status = st.get("status", "")
-                if status in ("running", "interrupted") and self.thread is None:
-                    status = "pending"          # saved by a run that is no longer going: it will start again
-                job_rows.append((job, sid, status, "; ".join(st.get("issues") or [])))
-        self.jobs.setRowCount(len(job_rows))
-        for i, row in enumerate(job_rows):
-            for j, text in enumerate(row):
-                item = QTableWidgetItem(text)
-                if j == 2:
-                    item.setForeground(Qt.GlobalColor.white)
-                    item.setBackground(self._colour(text))
-                self.jobs.setItem(i, j, item)
+        self._update_run_button(episode)
+        self.details.set_rows(self.services.manifest_rows(episode))
         self._update_pack_target(episode)
         self._show_saved_progress(episode)
         self._pending = self.services.pending_reviews(episode)
@@ -454,14 +646,15 @@ class MainWindow(QMainWindow):
             self.reviews.addItem(item)
         if self._pending and self.reviews.currentRow() < 0:
             self.reviews.setCurrentRow(0)
-        self.tabs.setTabText(3, f"Reviews ({len(self._pending)})")
+        n = len(self._pending)
+        idx = self.tabs.indexOf(self.review_page)
+        self.tabs.setTabText(idx, f"Reviews ({n})" if n else "Reviews")
+        self.tabs.tabBar().setTabTextColor(idx, tone("warn") if n else self.palette().color(self.foregroundRole()))
         self.show_review(self.reviews.currentRow())
-
-    @staticmethod
-    def _colour(status: str):
-        from PySide6.QtGui import QColor
-
-        return QColor(STATUS_COLOURS.get(status, "#616161"))
+        current = self._find_episode(episode)
+        if current is not None:
+            self._label_episode(current, episode)
+        self._needs_you(episode)
 
     REVIEW_NAMES: ClassVar[dict[str, str]] = {"dvd-alignment": "DVD alignment", "cadence-review": "Film cadence",
                     "delivery": "Delivery A/V check"}
@@ -474,6 +667,9 @@ class MainWindow(QMainWindow):
         for b in (self.open_evidence, self.approve, self.reject):
             b.setEnabled(has)
         self.approve.setText("Approve…")
+        anything = bool(getattr(self, "_pending", []))
+        self.review_controls.setVisible(anything)       # nothing waiting: one sentence, not empty controls
+        self.review_empty.setVisible(not anything)
         if not has:
             self.review_headline.setText(headline_html("", "Nothing is waiting for you.", "neutral"))
             self.review_detail.setPlainText("No step is waiting for review.")
@@ -587,7 +783,8 @@ class MainWindow(QMainWindow):
         elif self.ask_redo(name):
             self.continue_job(p.job, what=f"{name} rejected — redoing it")
         else:
-            self.set_banner(f"{name} rejected. It is redone the next time this job runs (Run to delivery).", "warn")
+            self.set_banner(f"{name} rejected. It is redone the next time this job runs (Run to delivery).", "warn",
+                            [("Redo now", lambda: self.continue_job(p.job, what=f"{name} rejected — redoing it"))])
 
     def ask_redo(self, name: str) -> bool:
         """After a rejection: redo the step now? (A method so tests can answer.)"""
@@ -645,17 +842,68 @@ class MainWindow(QMainWindow):
             return False
         self.code_watch.stop()
         self.append_log("the app's files were updated while it was open; restart it to use the new version")
-        self.set_banner("FromStunToKill was updated while it was open. Quit and start it again to use the new "
-                        "version" + (" (after this run: finished steps are kept)." if self.thread else "."), "warn")
+        self.set_banner("FromStunToKill was updated while it was open. Start it again to use the new version"
+                        + (" (after this run: finished steps are kept)." if self.thread else "."), "warn",
+                        [] if self.thread else [("Restart the app", self.restart_app)])
         return True
 
-    def set_banner(self, text: str, tone: str = "info") -> None:
-        from fstk.ui.visual import tone_colour
+    def restart_app(self) -> None:
+        """Start a fresh copy of the app and close this one (only when nothing is running here)."""
+        if self.thread is not None:
+            QMessageBox.information(self, "A run is going", "Restart the app after the run ends (or cancel it).")
+            return
+        LOG.info("action restart-app")
+        if QProcess.startDetached(sys.executable, list(sys.argv)):
+            self.close()
+        else:
+            QMessageBox.warning(self, "Could not restart", "Start FromStunToKill again yourself.")
 
-        self.banner.setText(text)
-        self.banner.setStyleSheet(f"background: {tone_colour(tone)}; color: white; padding: 6px 10px; "
-                                  "border-radius: 4px; font-weight: 600;")
-        self.banner.setVisible(bool(text))
+    def set_banner(self, text: str, tone: str = "info", actions=(), kind: str = "event") -> None:
+        """Say what just happened (``kind="event"``) or what needs doing next (``"needs"``), with buttons."""
+        self.banner.show_message(text, tone, actions, kind)
+
+    def _needs_you(self, episode: str) -> None:
+        """The banner's standing message for this episode: a review waiting, or a step that stopped the run.
+        A message about something that just happened is left alone; a standing one that no longer applies goes."""
+        msg, tn, actions = "", "info", []
+        pending = getattr(self, "_pending", [])
+        snap = self.tracker.snapshot() if self.tracker is not None else None
+        if pending:
+            p = pending[0]
+            name = self.REVIEW_NAMES.get(p.review, p.review)
+            more = f" (and {len(pending) - 1} more)" if len(pending) > 1 else ""
+            msg, tn = f"{name} is waiting for your review{more}.", "info"
+            actions = [("Review now", self.open_first_review)]
+        elif snap is not None and snap.failed and self.thread is None:
+            worst = snap.failed[0]
+            label = self.progress_panel.step_label(worst)
+            issue = (worst.detail or "").splitlines()[0].split("; see ")[0][:160] if worst.detail else ""
+            word = {"failed": "failed", "blocked": "is blocked", "interrupted": "was interrupted",
+                    "stale": "is out of date"}[worst.status]
+            msg = f"{label} {word}" + (f": {issue}" if issue else ".")
+            tn = "bad" if worst.status == "failed" else "warn"
+            row = list(self.tracker.steps).index(worst.id)
+            actions = [("Show details", lambda r=row: self.progress_panel.show_message(r))]
+            if self.progress_panel.can_restart(worst.id, worst.status):
+                actions.append(("Restart from here", lambda sid=worst.id: self.restart_step(sid)))
+            else:                                       # the steps before it need doing again first
+                actions.append(("Run again", lambda: self.main_run.defaultAction().trigger()))
+        if msg:
+            if self.banner.kind != "event" or self.banner.isHidden():
+                self.set_banner(msg, tn, actions, kind="needs")
+        elif self.banner.kind == "needs":
+            self.banner.setVisible(False)
+
+    def open_first_review(self) -> None:
+        """"Review now": the Reviews tab on the first waiting review (the A/V check opens its own window)."""
+        pending = getattr(self, "_pending", [])
+        if not pending:
+            return
+        if pending[0].review == "delivery":
+            self.open_delivery_review()
+            return
+        self.tabs.setCurrentWidget(self.review_page)
+        self.reviews.setCurrentRow(0)
 
     def _log_cleanup(self, doc: dict | None) -> None:
         """After the final output is approved: what was cleared away (files of attempts that cannot be reused)."""
@@ -710,7 +958,7 @@ class MainWindow(QMainWindow):
         dlg = DvdDialog(self.services, self.episode, self.actor, self)
         dlg.exec()
         if dlg.changed:
-            self.log.appendPlainText(f"DVD for {self.episode}: " + str(self.services.dvd_status(self.episode)))
+            self.append_log(f"DVD for {self.episode}: " + str(self.services.dvd_status(self.episode)))
             self.show_episode(self.episode)
 
     def open_efm_review(self):
@@ -785,9 +1033,9 @@ class MainWindow(QMainWindow):
 
     def select_episode(self, canonical: str) -> None:
         self.refresh()
-        matches = self.episodes.findItems(canonical, Qt.MatchFlag.MatchExactly)
-        if matches:
-            self.episodes.setCurrentItem(matches[0])
+        item = self._find_episode(EpisodeId.parse(canonical).canonical if ":" in canonical or canonical else canonical)
+        if item is not None:
+            self.episodes.setCurrentItem(item)
 
     def open_remove(self) -> None:
         episode = self.episode
@@ -809,12 +1057,11 @@ class MainWindow(QMainWindow):
             self.append_log(f"removed {episode}: " + ("; ".join(dlg.removed) or "project record only"))
             self.tracker = None
             self.progress_panel.set_tracker(None)
-            self.status_line.setText("")
+            self.progress_panel.set_runs([], None)
             self.refresh()
             if not self.episodes.count():
                 self.title.setText("No episode selected")
-                self.values.setRowCount(0)
-                self.jobs.setRowCount(0)
+                self.details.set_rows([])
 
     def open_logs(self) -> None:
         from fstk.core.applog import log_dir
@@ -854,19 +1101,12 @@ class MainWindow(QMainWindow):
             return
         prefs = self.services.app_prefs()
         self.notify_button.setChecked(bool(prefs["notifications"]))
+        self._bell(self.notify_button.isChecked())
         if prefs["operator"]:
             self.actor = str(prefs["operator"])
         self.refresh()
         if dlg.reencode_plan:
             self.start_plan(dlg.reencode_plan)
-
-    def open_folders(self) -> None:
-        from fstk.ui.folders import FoldersDialog
-
-        dlg = FoldersDialog(self.services.profile, self)
-        if dlg.exec() and dlg.changed:
-            self.log.appendPlainText("folders: " + "; ".join(f"{k} → {n or '(default)'}" for k, _o, n in dlg.changed))
-            self.refresh()
 
     def run_intake(self) -> None:
         LOG.info("action run-intake episode=%s", self.episode)
@@ -914,12 +1154,10 @@ class MainWindow(QMainWindow):
         self.worker.event.connect(self.on_event)
         self.worker.finished.connect(self.on_finished)
         self.worker.failed.connect(self.on_failed)
-        self.run_button.setEnabled(False)
-        self.intake_button.setEnabled(False)
-        self.deliver_button.setEnabled(False)
-        self.cancel_button.setEnabled(True)
-        self.pause_button.setEnabled(True)
-        self.pause_button.setText("Pause")
+        self.set_run_enabled(False)
+        self.progress_panel.set_running(True)
+        if self.banner.kind == "needs":
+            self.banner.setVisible(False)
         self.append_log(f"running {path}")
         self.thread.start()
         self.update_progress()
@@ -957,13 +1195,10 @@ class MainWindow(QMainWindow):
         from fstk.ui.tips import apply_common, apply_tips
 
         apply_tips(self, {
-            "episodes": "Episodes on this computer. Select one to see its values, jobs and reviews.",
+            "episodes": "Episodes on this computer, with where each stands. Select one to see it; right-click for "
+                        "its actions (DVD, reviews, hand off, remove).",
             "override_flag": "This episode has its own output settings. Click to open them.",
-            "values": "Every value recorded for this episode, and who or what set it (measured, imported from v38, "
-                      "entered by hand). Hover a field name for its meaning.",
-            "jobs": "The plans that have run, or are running, for this episode, step by step, with their status "
-                    "and any issues.",
-            "reviews": "Checks waiting for a person to look at the evidence. Select one to read what was measured.",
+            "reviews": "Checks waiting for a person. Select one to read what was measured.",
             "review_scroll": "The review's picture sheet (a stage's evidence image), shown at full size; scroll to see every row.",
             "review_detail": "The measurements behind the review, for reference.",
             "review_headline": "What the automatic checks concluded, in plain words.",
@@ -975,26 +1210,19 @@ class MainWindow(QMainWindow):
             "approve": "Record that you checked the evidence and it is right. Your name and a note are stored with "
                        "the decision, and the next step may start.",
             "reject": "Record that the evidence is wrong. The step stays blocked until it is fixed or redone.",
-            "log": "What fstk is doing, oldest first. The full log is in the logs folder (Open logs).",
-            "pick_button": "Find an episode in the archive catalog, or add one from a folder you already have, then "
-                           "create or open its workspace.",
-            "intake_button": "Intake: download the captures (if needed), inventory them, choose the stack reference "
-                             "and decode the EFM audio. Heavy steps run one at a time.",
-            "dvd_button": "Choose this episode's DVD (a file found by its episode number, or one you browse to), "
-                          "or record that it has none. Needed before the delivery plan.",
-            "efm_button": "Review the decoded EFM audio of this episode's captures and choose which one to use.",
-            "delivery_button": "Review a finished delivery: the A/V check and the evidence, then approve or send it "
-                               "back for corrections.",
-            "run_button": "Run a saved plan file for this episode (advanced; Run intake and Run to delivery write "
-                          "and run the usual plans for you).",
-            "cancel_button": "Stop the running plan. Finished steps are kept; the step in progress starts over "
-                             "next time.",
+            "log": "What fstk is doing, oldest first; warnings and errors in colour. The full log is in the logs "
+                   "folder (Help › Open logs).",
+            "log_toggle": "Show or hide the full log (Ctrl+L). It opens by itself when a step fails.",
+            "log_last": "The latest thing the app did.",
+            "main_run": "Run the next job for this episode: intake until it is done, then delivery. The arrow offers "
+                        "the other one and running a plan file. Finished steps are always kept.",
+            "notify_bell": "Desktop notifications on or off: a notice when a step needs you, a step fails, or the "
+                           "run ends.",
         })
-        self.tabs.setTabToolTip(0, "Progress of the running plan: each step, how far it is, and the time left.")
-        self.tabs.setTabToolTip(1, "All recorded values (the manifest) for the selected episode.")
-        self.tabs.setTabToolTip(2, "Plans that ran for the selected episode.")
-        self.tabs.setTabToolTip(3, "Checks waiting for a person.")
-        self.tabs.setTabToolTip(4, "Run several episodes one after another, unattended.")
+        self.tabs.setTabToolTip(0, "The run: each step, how far it is, how long it took, and the time left.")
+        self.tabs.setTabToolTip(1, "Everything waiting for a person to look or listen, and the review windows.")
+        self.tabs.setTabToolTip(2, "Run several episodes one after another, unattended.")
+        self.tabs.setTabToolTip(3, "Every value recorded for this episode (the manifest), grouped and searchable.")
         apply_common(self)
 
     def show_override_flag(self, episode: str) -> None:
@@ -1113,10 +1341,9 @@ class MainWindow(QMainWindow):
 
         if PAUSE.is_paused:
             engine.resume()
-            self.pause_button.setText("Pause")
         else:
             engine.pause()
-            self.pause_button.setText("Resume")
+        self.progress_panel.set_running(True, paused=PAUSE.is_paused)
         self.update_progress()
 
     def _remember_progress_columns(self, widths: dict) -> None:
@@ -1266,30 +1493,30 @@ class MainWindow(QMainWindow):
         self.update_progress()
 
     def _show_saved_progress(self, episode: str) -> None:
-        """Between runs: the latest job's saved state, so progress survives closing the app."""
+        """Between runs: a job's saved state (the latest, or the one picked in the run picker), so progress survives
+        closing the app and earlier runs can be looked at."""
         if self.thread is not None:
             return
-        jobs = self.services.jobs(episode)
-        if not jobs:
-            self.status_line.setText("")
+        runs = self.services.runs(episode)
+        if not runs:
+            self.progress_panel.set_runs([], None)
             self.progress_panel.set_tracker(None)
             return
-        best = None
-        for job in jobs:
-            state = self.services.job_state(episode, job)
-            if best is None or state.get("created_utc", "") >= best[1].get("created_utc", ""):
-                best = (job, state)
-        job, state = best
+        jobs = [j for j, _label in runs]
+        if self._picked_job not in jobs:
+            self._picked_job = None
+        job = self._picked_job or jobs[0]
+        self.progress_panel.set_runs(runs, job)
+        state = self.services.job_state(episode, job)
         runner = self.services.job_runner(episode, job)
         if runner == os.getpid():
             runner = None
-        note = f" · running in another window (pid {runner})" if runner else ""
-        self.status_line.setText(f"{job}: {describe_job_state(state)}{note}")
         if runner:
             self.watch.start()                          # follow the other window's progress from the saved state
+            self.progress_panel.detail.setText(f"running in another window (pid {runner})")
         else:
             self.watch.stop()
-        self.progress_panel.allow_restart = not runner
+        self.progress_panel.allow_restart = not runner and job == jobs[0]
         plan = self.services.job_plan(episode, job)
         if plan:
             self.tracker = ProgressTracker(plan, timings=self.services.timings())
@@ -1298,11 +1525,43 @@ class MainWindow(QMainWindow):
         else:
             self.progress_panel.set_tracker(None)
 
+    def choose_run(self, job: str) -> None:
+        """The run picker: show an earlier run's steps (restarts are offered only on the latest run)."""
+        if self.thread is not None or not self.episode:
+            return
+        runs = [j for j, _ in self.services.runs(self.episode)]
+        self._picked_job = None if (not runs or job == runs[0]) else job
+        self.show_episode(self.episode)
+
+    def _step_state(self, step_id: str) -> tuple[str, dict]:
+        job = self.tracker.plan["job"] if self.tracker else ""
+        try:
+            return job, self.services.job_state(self.episode, job)["steps"].get(step_id, {})
+        except (OSError, ValueError, FstkError):
+            return job, {}
+
+    def open_step_report(self, step_id: str) -> None:
+        job, st = self._step_state(step_id)
+        report = st.get("report")
+        if report and Path(report).exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(report))
+        else:
+            QMessageBox.information(self, "No report", f"{step_id} has no report file in {job}.")
+
+    def open_step_log(self, step_id: str) -> None:
+        job, _st = self._step_state(step_id)
+        folder = self.services.workspace(self.episode).log_dir(job) / step_id
+        if folder.is_dir():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+        else:
+            QMessageBox.information(self, "No tool logs", f"{step_id} wrote no tool logs in {job}.")
+
     def update_progress(self) -> None:
         snap = self.progress_panel.refresh()
         if snap is None:
             return
-        name = f"{self.episode or ''} — {snap.overall:.0%} — {snap.headline()}" if self.thread else ""
+        name = (f"{(self.episode or '').split(':')[-1]} — {snap.overall:.0%} — "
+                f"{snap.headline(self.progress_panel.step_label)}") if self.thread else ""
         self.setWindowTitle(f"{name} · FromStunToKill" if name else f"FromStunToKill — {self.services.profile.machine}")
         self._taskbar_update(snap)
 
@@ -1333,29 +1592,31 @@ class MainWindow(QMainWindow):
             if event["kind"] != "progress":
                 self.update_progress()
         kind = event["kind"]
+        name = self._name_of(event.get("step"))
+        ep = (self.episode or "").split(":")[-1]
         if kind == "step-awaiting-review":
-            self.notify("Needs your review", f"{self.episode}: {event.get('step')} is ready for you")
+            self.notify("Needs your review", f"{ep}: {name} is ready for you")
         elif kind in ("step-failed", "step-blocked"):
-            self.notify("Step failed", f"{self.episode}: {event.get('step')} {'; '.join(event.get('issues') or [])}"[:200])
+            self.notify(f"{name} {STATUS_WORDS[kind.removeprefix('step-')]}",
+                        f"{ep}: {'; '.join(event.get('issues') or [])}"[:200])
         if event["kind"] == "progress":
             frac = event.get("fraction")
             self.append_log(f"  [{event['step']}] {'' if frac is None else f'{frac:5.0%} '}{event.get('message', '')}")
         else:
             extra = event.get("issues") or event.get("detail") or ""
-            self.append_log(f"{event['kind']} {event.get('step', '')} {extra}")
+            level = "error" if kind == "step-failed" else "warn" if kind in ("step-blocked", "step-stale") else "info"
+            self.append_log(f"{event['kind']} {event.get('step', '')} {extra}", level)
+            if kind == "step-failed":
+                self.set_log_open(True, remember=False)    # a failure opens the log once; closing it is remembered
 
     def _done(self) -> None:
         if self.thread:
             self.thread.quit()
             self.thread.wait()
         self.thread, self.worker = None, None
+        self.progress_panel.set_running(False)
         self.progress_panel.set_allow_restart(True)
-        self.run_button.setEnabled(True)
-        self.intake_button.setEnabled(True)
-        self.deliver_button.setEnabled(True)
-        self.cancel_button.setEnabled(False)
-        self.pause_button.setEnabled(False)
-        self.pause_button.setText("Pause")
+        self.set_run_enabled(True)
         self.tick.stop()
         self.update_progress()
         self._running_plan = None
@@ -1376,20 +1637,32 @@ class MainWindow(QMainWindow):
             if snap.state == "finished":
                 self.notify("Run complete", f"{self.episode}: all {snap.total} steps done")
         self._done()
-        waiting = [s for s, st in state["steps"].items() if st.get("status") == "awaiting-review"]
-        failed = [s for s, st in state["steps"].items() if st.get("status") in ("failed", "blocked")]
+        steps = state["steps"]
+        waiting = [s for s, st in steps.items() if st.get("status") == "awaiting-review"]
+        failed = [s for s in worst_first(list(steps), lambda k: steps[k].get("status"))
+                  if steps[s].get("status") in ("failed", "blocked")]
         if waiting and not self._queued_plans:
-            self.set_banner(f"Waiting for you: {', '.join(waiting)} — look at it on the Reviews tab and decide.",
-                            "warn")
+            self.set_banner(f"Waiting for you: {', '.join(self._name_of(w) for w in waiting)} — look at it and "
+                            "decide.", "warn", [("Review now", self.open_first_review)], kind="needs")
             self.tabs.setCurrentWidget(self.review_page)
         elif failed:
-            self.set_banner(f"Stopped: {', '.join(failed[:3])} needs attention (see Jobs and the log).", "bad")
-        elif all(st.get("status") == "passed" for st in state["steps"].values()):
-            self.set_banner(f"Finished: all {len(state['steps'])} steps of {state['job']} are done.", "good")
+            first = self._name_of(failed[0])
+            issue = "; ".join(steps[failed[0]].get("issues") or []).split("; see ")[0][:160]
+            actions = []
+            if self.tracker is not None and failed[0] in self.tracker.steps:
+                row = list(self.tracker.steps).index(failed[0])
+                actions.append(("Show details", lambda r=row: self.progress_panel.show_message(r)))
+                if self.progress_panel.can_restart(failed[0], steps[failed[0]].get("status", "")):
+                    actions.append(("Restart from here", lambda sid=failed[0]: self.restart_step(sid)))
+            self.set_banner(f"Stopped: {first} {STATUS_WORDS[steps[failed[0]]['status']]}"
+                            + (f": {issue}" if issue else "."), "bad", actions, kind="needs")
+        elif all(st.get("status") == "passed" for st in steps.values()):
+            self.set_banner(f"Finished: all {len(steps)} steps are done.", "good")
 
     @Slot(str)
     def on_failed(self, message: str) -> None:
-        self.append_log(f"ERROR: {message}")
+        self.append_log(f"ERROR: {message}", "error")
+        self.set_log_open(True, remember=False)
         self._done()
         first = message.splitlines()[0] if message else "The run stopped."
         self.set_banner(first, "bad")
@@ -1400,9 +1673,22 @@ class MainWindow(QMainWindow):
         """Say why a plan did not start (a method so tests can replace the dialog)."""
         QMessageBox.warning(self, "Plan not started", message)
 
-    def append_log(self, text: str) -> None:
-        LOG.info("%s", text)
-        self.log.appendPlainText(text)
+    def _name_of(self, step_id: str | None) -> str:
+        if not step_id:
+            return ""
+        if self.tracker is not None and step_id in self.tracker.steps:
+            return self.progress_panel.step_label(self.tracker.steps[step_id])
+        return step_name("", step_id)
+
+    def append_log(self, text: str, level: str = "info") -> None:
+        if level == "info" and text.startswith(("ERROR", "WARNING")):
+            level = "error" if text.startswith("ERROR") else "warn"
+        (LOG.warning if level != "info" else LOG.info)("%s", text)
+        self._log_lines.append((text, level))
+        del self._log_lines[:-5000]
+        if not self.log_problems.isChecked() or level != "info":
+            self._put_log(text, level)
+        self.log_last.setText(text.splitlines()[0][:200] if text else "")
 
 
 def main(argv: list[str] | None = None) -> int:

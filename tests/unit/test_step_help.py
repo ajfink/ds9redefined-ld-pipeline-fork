@@ -17,7 +17,7 @@ def test_every_stage_has_plain_language_help():
     for what, result, _review in STEP_HELP.values():
         assert len(what) > 40 and result
     tip = step_tooltip("dvd-alignment", "DVD picture alignment")
-    assert "<b>DVD picture alignment</b>" in tip and "Your part:" in tip and "review" in tip
+    assert "<b>DVD alignment</b>" in tip and "(dvd-alignment)" in tip and "Your part:" in tip and "review" in tip
     assert "none, it runs on its own" in step_tooltip("remux", "Remux")
 
 
@@ -41,7 +41,7 @@ def test_each_row_explains_its_step_and_the_columns_can_be_resized_and_remembere
     panel.set_tracker(ProgressTracker(PLAN))
     assert "Every step of the plan" not in panel.table.toolTip()   # cells carry their own tips now
     name = panel.table.item(1, 0)
-    assert name.text() == "cadence" and "film cadence" in name.toolTip()
+    assert name.text() == "Film cadence" and "film cadence" in name.toolTip().lower()
     assert "Render weighted stack" in panel.table.item(0, 0).toolTip()
     assert panel.bars["video-quality"].toolTip() == panel.table.item(2, 0).toolTip()
     assert panel.table.item(0, 1).toolTip() == STATUS_HELP["pending"]
