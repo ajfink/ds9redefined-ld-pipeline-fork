@@ -46,21 +46,27 @@ def _source_id(path: Path) -> dict:
 
 
 def _reusable(ctx, key: str, source: Path) -> Path | None:
-    """An earlier descriptor artifact whose metadata names this exact source."""
-    spec = ctx.manifest.artifact(key)
-    if not spec:
-        return None
-    path = ctx.artifact_path(key)
-    meta = path.with_name(path.name + ".meta.json")
-    if not (path.is_file() and meta.is_file()):
-        return None
-    try:
-        recorded = read_json(meta).get("source") or {}
-    except (OSError, ValueError):
-        return None
+    """An earlier descriptor file whose metadata names this exact source: the one the manifest records, else the
+    newest one in the probe folder (a run held for review and rejected records none, yet its descriptors are as
+    good: S02E02 re-decoded its 2.6-hour master for 14 minutes on every redo)."""
     current = _source_id(source)
-    same = all(recorded.get(k) == current[k] for k in ("size_bytes", "sha256", "scope"))
-    return path if same else None
+
+    def matches(path: Path) -> bool:
+        meta = path.with_name(path.name + ".meta.json")
+        if not (path.is_file() and meta.is_file()):
+            return False
+        try:
+            recorded = read_json(meta).get("source") or {}
+        except (OSError, ValueError):
+            return False
+        return all(recorded.get(k) == current[k] for k in ("size_bytes", "sha256", "scope"))
+
+    candidates: list[Path] = []
+    if ctx.manifest.artifact(key):
+        candidates.append(ctx.artifact_path(key))
+    role = key.removesuffix("_descriptors")
+    candidates += sorted(ctx.root("probe").glob(f"{ctx.episode.code}-{role}-desc-*.npy"), reverse=True)
+    return next((c for c in candidates if matches(c)), None)
 
 
 @register

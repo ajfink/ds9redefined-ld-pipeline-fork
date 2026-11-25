@@ -17,10 +17,15 @@ DVD_WINDOW = 15   # DVD grid frames either side of the aligned position
 
 
 def dvd_window_script(dvd: Path, first: int, last: int) -> str:
-    """Progressive 23.976 window of the DVD between grid frames ``first``..``last``."""
+    """Progressive 23.976 window of the DVD between grid frames ``first``..``last``.
+
+    Grid frames are the alignment's: the DVD decoded at 30000/1001 with its pulldown flags honoured (FFmpeg,
+    ``gray_thumbnails``). BestSource returns *coded* frames unless ``rff=True``; on a soft-telecined DVD that is
+    ~4 frames per 5 (S01E20: the quality windows asked for frame 77954 of a clip that ended before it, and every
+    earlier window showed the wrong moment). With ``rff=True`` frame n is the same 1/29.97 s as grid frame n."""
     return "\n".join([
         "import vapoursynth as vs", "core = vs.core",
-        f"src = core.bs.VideoSource({str(dvd)!r})",
+        f"src = core.bs.VideoSource({str(dvd)!r}, rff=True)",
         f"src = core.std.Trim(src, {int(first)}, {int(last)})",
         "src = core.std.SetFrameProps(src, _FieldBased=2)",
         "fm = core.tivtc.TFM(src, order=-1, PP=0, chroma=1, slow=2)",

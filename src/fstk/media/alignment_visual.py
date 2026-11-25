@@ -52,6 +52,9 @@ class Spot:
         return d
 
 
+START_SETTLE_S = 3.0
+
+
 def clock(seconds: float) -> str:
     m, s = divmod(max(seconds, 0.0), 60)
     return f"{int(m)}:{s:04.1f}"
@@ -74,7 +77,9 @@ def choose_spots(res: AlignmentResult, dvd_frames: int, limit: int = MAX_POINTS)
     suspects = [((s0 + s1) / 2 * FPS, "suspect", f"act {n}: stretch {clock(s0)}–{clock(s1)} that the checks flagged")
                 for _, s0, s1, n in spans][:max(limit - MIN_ORDINARY, 0)]
     wanted: list[tuple[float, str, str]] = []
-    wanted.append((float(res.idxs[ok[0]]), "start", "first picture matched to the DVD"))
+    # the programme fades up from black: a picture check on its first frames cannot tell anything (S02E02: NCC 0.63
+    # at the fade-up, "no similar picture"), so the start point is a couple of seconds in
+    wanted.append((float(res.idxs[ok[0]]) + START_SETTLE_S * FPS, "start", f"{START_SETTLE_S:g} s into the programme"))
     for n, act in enumerate(res.acts, 1):
         span = act.end_frame - act.start_frame
         for frac, what in ((0.25, "first quarter"), (0.5, "middle"), (0.75, "last quarter")):

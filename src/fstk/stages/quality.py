@@ -154,7 +154,8 @@ class VideoQuality(Stage):
         # ---- DVD as a measuring reference (levels, active area): never a pixel source
         dvd_luma, dvd_sar = {}, None
         if d["dvd"]:
-            dvd_luma, dvd_sar = self._dvd_samples(ctx, vs, ff, sorted(samples_y), d)
+            dvd_luma, dvd_sar, skipped = self._dvd_samples(ctx, vs, ff, sorted(samples_y), d)
+            report["levels"]["dvd_samples"] = {"taken": len(dvd_luma), "skipped": skipped}
         if dvd_luma:
             report["levels"]["dvd"] = measure.level_stats(list(dvd_luma.values()))
             report["levels"]["compare"] = measure.compare_levels(ld_levels, report["levels"]["dvd"])
@@ -227,7 +228,8 @@ class VideoQuality(Stage):
         return info
 
     def _dvd_samples(self, ctx, vs, ff, indices: list[int], d: dict):
-        """Aligned DVD luma at the sampled output frames (8-bit codes) + the DVD's sample aspect ratio."""
+        """Aligned DVD luma at the sampled output frames (8-bit codes), the DVD's sample aspect ratio, and the
+        samples that could not be taken (with why: they are reported, not dropped silently)."""
         import numpy as np
 
         from fstk.stages.dvdborrow import dvd_window_script as _dvd_window_script
@@ -246,12 +248,14 @@ class VideoQuality(Stage):
         except Exception:
             sar = None
         out = {}
+        skipped: list[str] = []
         work = ctx.root("probe") / f"quality-dvd-{ctx.episode.slug}"
         work.mkdir(parents=True, exist_ok=True)
         for f in indices:
             master = ld_to_master_frame(f, head_trim=head, pad=pad)
             act = next((a for a in rec["acts"] if a["start_frame"] <= master <= a["end_frame"]), None)
             if act is None:
+                skipped.append(f"frame {f}: no accepted act covers master frame {master}")
                 continue
             centre = round(master + float(np.interp(master, act["knots"], act["values"])))
             win = work / f"w{f}.vpy"
@@ -260,10 +264,11 @@ class VideoQuality(Stage):
                 wi = vs.info(win)
                 arr = vs.frames(win, 0, wi["frames"] - 1, width=int(wi["width"]), height=int(wi["height"]),
                                 pix_fmt="gray")
-            except Exception:
+            except Exception as exc:
+                skipped.append(f"frame {f} (DVD frame {centre}): {str(exc).splitlines()[0][:160]}")
                 continue
             out[f] = arr[len(arr) // 2].astype(np.float32)
-        return out, sar
+        return out, sar, skipped
 
     def _prove(self, ctx, vs, base: Path, finish: Path, info: dict, fixes, lock: dict, denoised: bool) -> dict:
         """The finishing script reports the right frame count and size, leaves luma untouched outside the

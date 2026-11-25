@@ -113,3 +113,7 @@ def test_ld_only_material_mid_programme_is_held_for_review(env):
     assert rep["picture_check"]["checked"] >= 3 and rep["picture_sheet"].endswith("-sheet.png")
     assert (prof.root("reports", EP) / rep["picture_sheet"]).is_file()
     assert "Automatic picture check" in rep["review_summary"] and "numbers held it for review" in rep["review_summary"]
+    # held, so nothing was recorded in the manifest; a new run still reuses the descriptor files on disk
+    assert not m.artifact("master_descriptors")
+    st = run(prof, "c2")["steps"]["align"]
+    assert st["status"] == "awaiting-review" and "master reused, dvd reused" in st["plan_summary"]

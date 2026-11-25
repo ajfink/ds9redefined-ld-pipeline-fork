@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from fstk.core.errors import ArtifactError, FstkError, GateError
@@ -28,9 +29,17 @@ from fstk.media.encode import (
     final_encode_args,
 )
 from fstk.media.finish import finish_matches_base
+from fstk.tools import process
 
 from .base import ArtifactExists, SpaceNeed, Stage, StepOutput, StepPlan, ValueSet, register
 
+
+def finished_anyway(res, served: dict, frames: int) -> bool:
+    """vspipe ended with STATUS_CONTROL_C_EXIT that fstk did not send, after reporting it served every frame,
+    and FFmpeg exited 0 (the encoded stream is still fully verified afterwards)."""
+    stages = res.stages or [res]
+    return (len(stages) == 2 and process.interrupted_unasked(stages[0]) and stages[1].returncode == 0
+            and served.get("frames") == frames)
 
 @register
 class EncodeFinal(Stage):
@@ -120,20 +129,32 @@ class EncodeFinal(Stage):
         settings = OutputSettings(sd["video"], sd["audio"], tuple(sd.get("overridden") or ()))
         common = dict(aspect=aspect, frames=d["frames"], duration_s=d["duration"], capture=d["capture"],
                       out=d["tmp"], settings=settings)
+        served: dict[str, int] = {}
+
+        def watched(progress):
+            def on_line(name: str, line: str) -> None:
+                hit = re.match(r"Output (\d+) frames", line) if name.startswith("vspipe") else None
+                if hit:
+                    served["frames"] = int(hit.group(1))
+                progress(name, line)
+            return on_line
+
         if two_pass(settings):
             stats = str(Path(d["tmp"]).with_suffix(".passlog"))
             first = LineProgress(ctx.report, total_frames=d["frames"], span=0.44, label="pass 1 of 2:")
             res = vs.encode(Path(d["script"]), final_encode_args(**common, pass_no=1, stats=stats), name="encode-pass1",
-                            cancel=ctx.cancel, on_line=first)
+                            cancel=ctx.cancel, on_line=watched(first))
             ctx.check_cancel()
-            if res.returncode not in (0,):
+            if res.returncode not in (0,) and not finished_anyway(res, served, d["frames"]):
                 raise ArtifactError(f"first pass failed ({res.describe()})")
             second = LineProgress(ctx.report, total_frames=d["frames"], base=0.44, span=0.44, label="pass 2 of 2:")
+            served.clear()
             res = vs.encode(Path(d["script"]), final_encode_args(**common, pass_no=2, stats=stats),
-                            cancel=ctx.cancel, on_line=second)
+                            cancel=ctx.cancel, on_line=watched(second))
         else:
             encode_progress = LineProgress(ctx.report, total_frames=d["frames"], span=0.88, label="encoding")
-            res = vs.encode(Path(d["script"]), final_encode_args(**common), cancel=ctx.cancel, on_line=encode_progress)
+            res = vs.encode(Path(d["script"]), final_encode_args(**common), cancel=ctx.cancel,
+                            on_line=watched(encode_progress))
         expected = expected_video(settings)
         ctx.check_cancel()
         tmp = Path(d["tmp"])
@@ -149,13 +170,18 @@ class EncodeFinal(Stage):
                                       expected_frames=d["frames"], expected_duration_s=d["duration"],
                                       expected_raster=(int(info.get("width", src.raw["width"])), int(info.get("height", src.raw["height"]))),
                                       chroma=d["chroma"], expected=expected)
+        notes: list[str] = []
         if res.returncode not in (0,):
-            issues.append(f"encode pipeline exit codes {[s.returncode for s in res.stages]}")
+            if finished_anyway(res, served, d["frames"]):
+                notes.append(f"vspipe ended with 0xC000013A (a console control event fstk did not send) after it had "
+                             f"served all {d['frames']} frames; FFmpeg finished cleanly and the stream verified above")
+            else:
+                issues.append(f"encode pipeline exit codes {[s.returncode for s in res.stages]}")
         atomic_write_json(d["report"], {"schema": "fstk-encode-final-v1", "created_utc": utc_now_iso(),
                                         "episode": str(ctx.episode), "aspect": aspect, "chroma": d["chroma"], "preset": d["preset"],
                                         "settings": d["settings"], "description": d["description"],
                                         "expected_stream": expected,
-                                        "recipe_override": d["recipe_override"], "issues": issues,
+                                        "recipe_override": d["recipe_override"], "issues": issues, "notes": notes,
                                         "status": "PASS" if not issues else "FAIL",
                                         "encoded": str(d["out"]) if not issues else str(tmp)})
         if not issues:

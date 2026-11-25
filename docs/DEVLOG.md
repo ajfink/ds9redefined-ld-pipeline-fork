@@ -1494,3 +1494,31 @@ names that no longer exist; required tools never found) and, if any, lists them 
   `fstk openings export`; `Services.opening_pack_target` / `save_opening_pack`.
 - Tests: export reuses or decodes, refuses a repeating opening unless forced, the service writes where the target
   says, the icon appears only after dvd-probe passes and saves through the worker. Full suite 654 passed.
+
+## CP66 — two debug bundles (PC-A S01E20 encode, PC-B S02E02 alignment)
+
+- **S01E20 encode failed after finishing.** vspipe printed "Output 65392 frames", FFmpeg wrote and closed all 65392,
+  the stream verified (null decode, frame count) — then vspipe's exit status was 0xC000013A (STATUS_CONTROL_C_EXIT,
+  a console control event). fstk had not stopped it (not cancelled). The same status hit `ffprobe -version` twice
+  that day (0.4 s). Cause outside fstk not found. Now: `process.run` repeats once a run under 30 s that ended so
+  without fstk stopping it (not one whose stdout was streamed); `encode` accepts it only when vspipe reported serving
+  every expected frame, FFmpeg exited 0 and the stream verifies — said in the report's `notes`.
+- **DVD windows read the wrong DVD frames.** `dvd_window_script` used `bs.VideoSource` without `rff=True`, i.e. coded
+  frames, while alignment indexes the DVD on the 30000/1001 grid with pulldown honoured. S01E20's DVD is mostly
+  soft-telecined, so window n showed ~0.8 n: video-quality's DVD level/area samples were from the wrong moments and
+  the last 7 failed ("Trim: invalid first frame specified (beyond clip end)", silently skipped). Frame-fixes' DVD
+  borrowing used the same windows (its flank check refuses a wrong window, so it fell back, but borrowed nothing).
+  Fixed (`rff=True`); quality reports skipped DVD samples with why (`levels.dvd_samples`). Frame-fixes and
+  video-quality should be redone for episodes run before this.
+- **S02E02 (PC-B), CP63 opening anchor working:** opening found at LD 1485 (NCC 0.971, next best 0.31); the
+  warning-card act is gone (`ld_only_edges` 0–49.3 s). Still held for one reason: 19:03.8–19:08.7 sits 3 DVD frames
+  off the act line (picture check NCC 0.93 at −3 vs 0.85 predicted) and agrees again after — a locally different
+  edit, for the owner to approve.
+- **Redo after a rejected review re-decoded everything** (master descriptors 14 min each time): a held run records
+  no artifacts. `_reusable` now also takes the newest descriptor file in the probe folder whose metadata names the
+  same source.
+- **Start spot check** is 3 s into the programme instead of on the fade-up frame (S02E02: "no similar picture" at
+  NCC 0.63 on a near-black frame).
+- Not changed: the spot check still decodes the whole master once for its 13 pictures (PC-B: 14 min).
+- Tests: retry/no-retry cases, encode acceptance only after all frames, window script `rff=True`, held-run rerun
+  reuses descriptors. Suite 658 passed.

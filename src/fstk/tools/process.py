@@ -294,6 +294,20 @@ def _check_args(args: Sequence[str]) -> list[str]:
     return out
 
 
+#: Windows exit status STATUS_CONTROL_C_EXIT: the tool's console got a Ctrl+C/Ctrl+Break/close event. fstk sends one
+#: only when it stops a tool (``cancelled``/``timed_out`` then say so). Measured on the owner's PC-A (2026-11-24 debug
+#: bundle): it also hits now and then on its own — ``ffprobe -version`` after 0.4 s, and vspipe after it had written
+#: all 65392 frames of a 95-minute encode — with nothing stopped.
+STATUS_CONTROL_C_EXIT = 0xC000013A
+#: A short tool ended that way without being stopped is run once more (its outputs are rewritten whole).
+RETRY_INTERRUPTED_S = 30.0
+
+
+def interrupted_unasked(res: ProcessResult) -> bool:
+    """``res`` ended with STATUS_CONTROL_C_EXIT although fstk did not stop it."""
+    return res.returncode == STATUS_CONTROL_C_EXIT and not (res.cancelled or res.timed_out)
+
+
 def run(args: Sequence[str | os.PathLike], *, log_path: Path | None = None, cwd: Path | None = None,
         env: Mapping[str, str] | None = None, capture_stdout: bool = False,
         stdout_path: Path | None = None, stdin_bytes: bytes | None = None,
@@ -301,11 +315,20 @@ def run(args: Sequence[str | os.PathLike], *, log_path: Path | None = None, cwd:
         cancel: threading.Event | None = None, redact: Callable[[str], str] | None = None,
         poll_interval: float = 0.2, on_stdout: Callable[[bytes], None] | None = None) -> ProcessResult:
     """Run one tool. stdout is captured in memory, written to ``stdout_path``, handed chunk by chunk to
-    ``on_stdout``, or streamed as lines."""
-    return run_pipeline([args], log_path=log_path, cwd=cwd, env=env, capture_stdout=capture_stdout,
-                        stdout_path=stdout_path, stdin_bytes=stdin_bytes, on_line=on_line,
-                        timeout=timeout, cancel=cancel, redact=redact, poll_interval=poll_interval,
-                        on_stdout=on_stdout)
+    ``on_stdout``, or streamed as lines. A short run ended by a console control event fstk did not send is
+    repeated once (see ``STATUS_CONTROL_C_EXIT``); a streamed ``on_stdout`` run is not, its chunks are gone."""
+    def once() -> ProcessResult:
+        return run_pipeline([args], log_path=log_path, cwd=cwd, env=env, capture_stdout=capture_stdout,
+                            stdout_path=stdout_path, stdin_bytes=stdin_bytes, on_line=on_line,
+                            timeout=timeout, cancel=cancel, redact=redact, poll_interval=poll_interval,
+                            on_stdout=on_stdout)
+
+    res = once()
+    if interrupted_unasked(res) and res.duration_s < RETRY_INTERRUPTED_S and on_stdout is None:
+        LOG.warning("%s ended with 0xC000013A (console control event) though fstk did not stop it; running it "
+                    "once more", Path(str(args[0])).name)
+        res = once()
+    return res
 
 
 def run_pipeline(commands: Sequence[Sequence[str | os.PathLike]], *, log_path: Path | None = None,
