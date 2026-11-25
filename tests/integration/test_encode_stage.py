@@ -104,3 +104,15 @@ def test_default_encode_keeps_422_and_the_checks_know_it(env, tmp_path):
     out = prof.root("out", EP) / "S01E20-23.976-padfixed-video.mkv"
     raw = FFmpeg("ffmpeg", "ffprobe").probe(out).only("video").raw
     assert raw["pix_fmt"] == "yuv422p10le" and raw["profile"] == "Rext"
+
+
+def test_a_previous_attempts_leftover_is_set_aside_not_blocking(env):
+    prof, ws, _ = env
+    out = prof.root("out", EP) / "S01E20-23.976-padfixed-video.mkv"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.with_name(out.stem + ".tmp.mkv").write_bytes(b"a failed attempt")
+    st = run(env, "e-left")["steps"]["enc"]
+    assert st["status"] == "passed", st.get("issues")
+    kept = out.with_name(out.stem + ".previous-attempt.mkv")
+    assert kept.read_bytes() == b"a failed attempt" and out.is_file()
+    assert "previous attempt" in st["plan_summary"]

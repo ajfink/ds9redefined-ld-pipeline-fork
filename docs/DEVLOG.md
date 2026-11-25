@@ -1563,3 +1563,12 @@ names that no longer exist; required tools never found) and, if any, lists them 
   retime after updating.
 - Test: 33 ms, −33 ms and 66 ms steps placed within 0.5 s on synthetic envelopes (the old scan saw 0.0 difference).
   Suite 666 passed.
+
+## CP70 — a failed encode's leftover no longer blocks the next one (PC-A S01E20, overnight 2026-11-25)
+
+- Overnight: the restart from frame-fixes ran video-quality again (00:02–04:04, now with DVD windows on the grid);
+  encode then stopped at once, blocked: "temporary output exists; inspect it before retrying" — the 4 GB file of
+  the encode that failed on 0xC000013A (CP66). The block waited for a person all night.
+- Now encode sets such a leftover aside as `<name>.previous-attempt.mkv` (replacing an older one) and says so in
+  the step's plan summary. On PC-A the file was moved aside by hand the same way.
+- Test: a leftover `.tmp.mkv` is kept as `.previous-attempt.mkv` and the encode passes. Suite 667 passed.

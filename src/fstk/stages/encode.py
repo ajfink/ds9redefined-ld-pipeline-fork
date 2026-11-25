@@ -65,8 +65,12 @@ class EncodeFinal(Stage):
             out = ctx.root("out") / f"{ctx.episode.code}-23.976-padfixed-video-r{rev}.mkv"
             rev += 1
         tmp = out.with_name(out.stem + ".tmp" + out.suffix)
+        set_aside = None
         if tmp.exists():
-            raise GateError(f"temporary output exists; inspect it before retrying: {tmp}")
+            # a failed or cut-off attempt left its file: kept for inspection beside the new one, not in its way
+            # (S01E20 2026-11-25: the leftover of a failed encode blocked the next encode for the whole night)
+            set_aside = out.with_name(out.stem + ".previous-attempt" + out.suffix)
+            os.replace(tmp, set_aside)
         from .framefix import resolve_chain
 
         script = resolve_chain(ctx, m)   # encode script → operator fixes, verified
@@ -100,7 +104,8 @@ class EncodeFinal(Stage):
             basis = f"{frames} frames × {settings.encoder.bytes_per_frame} B ({settings.encoder.label})"
         return StepPlan(self.id, params, inputs=[script, master], outputs=[out, report],
                         space=SpaceNeed("out", planned, basis),
-                        summary=f"{describe_video(settings)} → {out.name}",
+                        summary=f"{describe_video(settings)} → {out.name}"
+                                + (f" (the previous attempt's file was kept as {set_aside.name})" if set_aside else ""),
                         data={"script": str(script), "master": str(master), "out": str(out), "tmp": str(tmp),
                               "report": str(report), "frames": m.require("video.frames"),
                               "duration": m.require("video.duration_s"), "capture": m.require("audio.capture"),
