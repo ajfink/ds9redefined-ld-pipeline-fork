@@ -1607,3 +1607,14 @@ names that no longer exist; required tools never found) and, if any, lists them 
 - Tests: `tests/unit/test_ui_cleanup.py` (headline order, durations, not started, panel names/bars/menus/run picker,
   menus and Run button, banner actions and episode status, log strip, Details grouping, empty states, DVD dialog);
   existing UI tests updated for the new names. Suite 679 passed.
+
+## CP73 — spec only: hardware encoders and the lossless intermediate (no code)
+
+- Owner: spec hardware-accelerated encoding (NVENC and others) with a very visible warning that it smooths away
+  LaserDisc grain; then "plan to build for all the encoders", no benchmark first, and make the lossless intermediate a
+  visible Settings › General setting that states its extra storage. Not implemented yet.
+- `docs/specs/hardware-encoding.md`: the warning text and every place it shows; the encoder suite (NVENC HEVC/AV1/H.264,
+  Quick Sync HEVC/AV1, AMF HEVC/AV1, VideoToolbox HEVC/ProRes HQ, VA-API HEVC) with chroma/bit-depth limits;
+  detection by probe encode; quality scales; chroma refusal; colour-tag and grain-retention checks; fail closed (no
+  silent software fallback); `gpu` resource; §7 the `finish-render` intermediate (FFV1 10-bit, ~33 GB per episode
+  estimated from the 520 KB/frame figure, measured after the first one; default off; delete or keep after approval).
