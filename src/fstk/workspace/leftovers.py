@@ -106,7 +106,9 @@ def remove_leftovers(profile, episode: EpisodeId, manifest) -> list[Leftover]:
 
     busy = running_jobs(profile, episode)
     if busy:
-        raise FstkError(f"{episode} is being worked on ({'; '.join(busy)}); leftover files were not removed")
+        raise FstkError(f"{episode} is being worked on ({'; '.join(busy)}); leftover files were not removed. If no "
+                        "FromStunToKill window is running that job, close the program named here (Task Manager on "
+                        "Windows) and try Episode › Remove leftover files… again")
     items = find_leftovers(profile, episode, manifest)
     roots = [r for _n, r in _roots(profile, episode)]
     for it in items:

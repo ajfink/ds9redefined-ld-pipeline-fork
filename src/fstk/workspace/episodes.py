@@ -20,6 +20,33 @@ def store_for(profile, episode: EpisodeId) -> ManifestStore:
     return ManifestStore(profile.episode_state_dir(episode) / "manifest")
 
 
+#: an episode whose project is kept but whose entry was removed from the app's list (Remove episode…)
+HIDDEN_MARKER = "removed-from-list.json"
+
+
+def is_hidden(profile, episode: EpisodeId) -> bool:
+    return (profile.episode_state_dir(episode) / HIDDEN_MARKER).is_file()
+
+
+def hide(profile, episode: EpisodeId, *, actor: str) -> Path:
+    from fstk.core.fsio import atomic_write_json
+    from fstk.core.timeutil import utc_now_iso
+
+    path = profile.episode_state_dir(episode) / HIDDEN_MARKER
+    atomic_write_json(path, {"schema": "fstk-removed-from-list-v1", "by": actor, "utc": utc_now_iso(),
+                             "note": "the project is kept; adding the episode again brings it back"})
+    return path
+
+
+def _reopen_hidden(profile, store: ManifestStore, ep: EpisodeId) -> bool:
+    """Adding an episode whose entry was only removed from the list brings the kept project back."""
+    marker = profile.episode_state_dir(ep) / HIDDEN_MARKER
+    if store.exists() and marker.is_file():
+        marker.unlink()
+        return True
+    return False
+
+
 def _shared_guard(profile, episode: EpisodeId, allow_parallel: bool) -> None:
     """In shared mode, refuse an episode a peer is actively working on (ADR 0002 §5).
     An unreachable share never blocks local work."""
@@ -47,6 +74,8 @@ def create_from_catalog(profile, entry: CatalogEntry, *, actor: str, catalog_sum
         raise FstkError(f"{entry.series}:{entry.code} cannot be started from the catalog: {entry.reason}")
     ep = entry.episode_id
     store = store_for(profile, ep)
+    if _reopen_hidden(profile, store, ep):
+        return store
     if store.exists():
         raise FstkError(f"{ep} already has a workspace ({store.path})")
     _shared_guard(profile, ep, allow_parallel)
@@ -66,6 +95,8 @@ def create_from_local(profile, folder: str | Path, *, actor: str, allow_parallel
     scan = inspect_local_source(Path(folder))
     ep = EpisodeId.parse(f"{scan['series']}:{scan['episode']}")
     store = store_for(profile, ep)
+    if _reopen_hidden(profile, store, ep):
+        return store
     if store.exists():
         raise FstkError(f"{ep} already has a workspace ({store.path})")
     _shared_guard(profile, ep, allow_parallel)

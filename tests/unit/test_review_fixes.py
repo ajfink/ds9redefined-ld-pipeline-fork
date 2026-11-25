@@ -220,6 +220,22 @@ def test_an_old_lock_without_ptime_is_stale_when_its_pid_was_reused(tmp_path):
     assert pid_alive(me, started_by=started + 1) and not pid_alive(me, started_by=started - 60)
 
 
+def test_a_lock_whose_pid_now_belongs_to_another_program_is_stale(tmp_path, monkeypatch):
+    """However the process looks otherwise (start time unreadable, older than the lock): fstk runs as Python."""
+    import fstk.core.fsio as fsio
+    from fstk.core.timeutil import utc_now_iso
+
+    p = tmp_path / "z.lock"
+    p.write_text(f"pid={os.getpid()} host={socket.gethostname()} started_utc={utc_now_iso()} purpose=t\n")
+    assert read_lock(p).local_process_alive is True                   # this test runs under python
+    monkeypatch.setattr(fsio, "process_name", lambda pid: "MsMpEng.exe")
+    assert read_lock(p).local_process_alive is False
+    monkeypatch.setattr(fsio, "process_name", lambda pid: None)      # not visible: decided as before
+    assert read_lock(p).local_process_alive is True
+    assert fsio.could_be_fstk("pythonw.exe") and fsio.could_be_fstk("Python3.12") and not fsio.could_be_fstk("explorer.exe")
+    assert "python" in fsio.describe_process(os.getpid()).lower()
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="posix zombie handling")
 def test_a_finished_child_is_not_alive():
     import subprocess

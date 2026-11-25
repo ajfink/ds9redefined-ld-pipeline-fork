@@ -293,7 +293,8 @@ class Services:
         if root.is_dir():
             for series_dir in sorted(p for p in root.iterdir() if p.is_dir()):
                 for code_dir in sorted(p for p in series_dir.iterdir() if p.is_dir()):
-                    if (code_dir / "manifest" / "manifest.json").is_file():
+                    if (code_dir / "manifest" / "manifest.json").is_file() \
+                            and not (code_dir / "removed-from-list.json").is_file():
                         try:
                             out.append(EpisodeId.parse(f"{series_dir.name}:{code_dir.name}"))
                         except FstkError:
@@ -1042,7 +1043,8 @@ class Services:
             manifest = None
         return plan_removal(self.profile, ep, manifest)
 
-    def remove_episode(self, episode: str | EpisodeId, scope: str) -> list[str]:
+    def remove_episode(self, episode: str | EpisodeId, scope: str | set[str] | frozenset[str],
+                       actor: str = "ui") -> list[str]:
         from fstk.workspace.removal import remove_episode
 
         ep = episode if isinstance(episode, EpisodeId) else EpisodeId.parse(episode)
@@ -1054,7 +1056,7 @@ class Services:
         if any(i.episode == str(ep) and i.status == "running" for i in store.items):
             raise FstkError(f"{ep} is running in the queue. Stop that item (Queue tab) before removing the episode. "
                             "Nothing was deleted.")
-        removed = remove_episode(self.profile, ep, scope, manifest)
+        removed = remove_episode(self.profile, ep, scope, manifest, actor=actor)
         store.drop_episode(str(ep))                    # its waiting queue items would only fail now
         return removed
 

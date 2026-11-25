@@ -1658,3 +1658,25 @@ names that no longer exist; required tools never found) and, if any, lists them 
   **Show in folder**, and the folder opens with the file selected (Explorer `/select`, Finder `open -R`).
 - Tests: old-lock staleness, a stale lock no longer blocks the cleanup, the menu helpers, the Finished file row and the
   end-of-run reveal; remux tests use the new name; a UI test's fake lock is now dated now. Suite 688 passed.
+
+## CP76 — a run shows only under its own episode; Remove episode with checkboxes; locks owned by other programs (owner, 2026-11-25)
+
+- PC-A: after *Run intake* on S02E01, S01E20 also showed "running 0%" and the same steps, as if both had started.
+  Only S02E01 ran (log 11:48:06): the list's "running %" followed the **selected** episode, and the Progress tab kept
+  showing the live run whatever episode was clicked. Now `MainWindow.run_episode` is the run's own episode: only its
+  line says running (kept current on each step event when another is selected); another episode shows its own saved
+  progress, read only, with "a run of … is going on in this window; select it to follow it"; the window title,
+  taskbar, notifications, the end-of-run banner and the final-file reveal follow the run, not the selection.
+- The stale S01E20 lock (CP75) still blocked the cleanup on PC-A: the new start-time check did not apply. A lock is
+  now also stale when its pid belongs to a program that is not Python (`process_name`, `could_be_fstk`), and the
+  start time is read before anything that Windows may refuse. The "being worked on" message names the process and when
+  it started (`describe_process`), and says to close it if no window is running that job.
+- Owner: **Remove episode…** is now checkboxes: *Just the episode entry in the app* · *Project (manifest, jobs,
+  approvals, logs)* · *Working files* · *LaserDisc captures archive* (each with its folders and sizes) · *Everything*
+  (greys the others out). Ticking the project ticks (and locks) the entry; nothing is ticked at first and Remove stays
+  off until something is; total to free shown. `removal.PARTS`/`parts_of` (the old scope names still work). Removing
+  only the entry writes `removed-from-list.json` (the episode leaves the list, its project and files stay); adding the
+  episode again (catalog or local folder) brings it back. Captures from a folder the person chose are shown with path
+  and size but cannot be ticked: fstk never deletes those.
+- Tests: run vs selection, lock owned by another program, independent parts, entry-only hide and re-add, the dialog
+  (paths, entry lock, Everything, chosen-folder captures). Suite 693 passed.

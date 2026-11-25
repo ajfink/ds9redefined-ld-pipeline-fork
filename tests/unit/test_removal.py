@@ -108,9 +108,18 @@ def test_remove_dialog_flow(tmp_path, qtbot, monkeypatch):
     assert w.remove_button.text() == "Remove episode…"
     dlg = RemoveDialog(svc, "DS9:S01E20")
     qtbot.addWidget(dlg)
-    assert dlg.radios["project"].isChecked() and not dlg.detail.isEnabled()
-    dlg.radios["files"].setChecked(True)
-    assert (dlg.scope == "files" and dlg.detail.isEnabled() and "final" not in dlg.detail.toPlainText()) or True
+    assert dlg.parts == frozenset() and not dlg.remove_button.isEnabled()     # nothing ticked at first
+    assert str(prof.episode_state_dir(EP)) in dlg.notes["project"].text()          # where, and how big
+    assert str(media) in dlg.notes["files"].text() and str(dl) in dlg.notes["captures"].text()
+    dlg.boxes["project"].setChecked(True)
+    assert dlg.boxes["entry"].isChecked() and not dlg.boxes["entry"].isEnabled()  # the entry goes with the project
+    dlg.boxes["files"].setChecked(True)
+    assert dlg.parts == {"entry", "project", "files"} and "Total to free" in dlg.total.text()
+    dlg.everything.setChecked(True)
+    assert all(not b.isEnabled() and b.isChecked() for b in dlg.boxes.values())
+    assert dlg.parts == {"entry", "project", "files", "captures"}
+    dlg.everything.setChecked(False)
+    dlg.boxes["captures"].setChecked(False)
     # Cancel at the "Are you sure?" box: nothing is deleted
     monkeypatch.setattr(QMessageBox, "exec", lambda self: 0)
     monkeypatch.setattr(QMessageBox, "clickedButton", lambda self: self.escapeButton())
@@ -121,3 +130,45 @@ def test_remove_dialog_flow(tmp_path, qtbot, monkeypatch):
                         lambda self: next(b for b in self.buttons() if b.text() == "Remove"))
     dlg.confirm()
     assert not media.exists() and svc.episodes() == [] and dl.exists()
+
+
+def test_parts_are_chosen_independently(tmp_path):
+    prof, svc, media, dl = build(tmp_path)
+    svc.remove_episode("DS9:S01E20", {"captures"})                  # only the download
+    assert not dl.exists() and media.exists() and svc.episodes() == [EP]
+    prof2, svc2, media2, dl2 = build(tmp_path / "b")
+    svc2.remove_episode("DS9:S01E20", {"files", "captures"})        # files, but the project stays listed
+    assert not media2.exists() and not dl2.exists() and svc2.episodes() == [EP]
+    with pytest.raises(FstkError):
+        svc2.remove_episode("DS9:S01E20", {"bogus"})
+    with pytest.raises(FstkError):
+        svc2.remove_episode("DS9:S01E20", set())
+
+
+def test_removing_only_the_entry_keeps_everything_and_adding_it_again_brings_it_back(tmp_path, monkeypatch):
+    from fstk.workspace.episodes import create_from_local, is_hidden
+
+    prof, svc, media, dl = build(tmp_path)
+    svc.remove_episode("DS9:S01E20", {"entry"})
+    assert svc.episodes() == [] and is_hidden(prof, EP)
+    assert prof.episode_state_dir(EP).exists() and media.exists() and dl.exists()
+    import fstk.workspace.episodes as episodes
+
+    monkeypatch.setattr(episodes, "inspect_local_source", lambda folder: {"series": "DS9", "episode": "S01E20"})
+    create_from_local(prof, tmp_path, actor="t")                      # "add from folder" again
+    assert svc.episodes() == [EP] and not is_hidden(prof, EP)
+
+
+def test_a_chosen_capture_folder_is_shown_but_cannot_be_ticked(tmp_path, qtbot):
+    from fstk.ui.remove import RemoveDialog
+
+    mine = tmp_path / "X" / "DS9-S01E20-LaserDisc-Copies"
+    mine.mkdir(parents=True)
+    (mine / "a.tbc").write_bytes(b"orig")
+    prof, svc, media, dl = build(tmp_path, override_downloads=str(mine))
+    dlg = RemoveDialog(svc, "DS9:S01E20")
+    qtbot.addWidget(dlg)
+    assert not dlg.boxes["captures"].isEnabled()
+    assert str(mine) in dlg.notes["captures"].text() and "never deletes" in dlg.notes["captures"].text()
+    dlg.everything.setChecked(True)
+    assert "captures" not in dlg.parts

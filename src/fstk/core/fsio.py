@@ -11,6 +11,7 @@ while the runner replaces them). Extended with:
 """
 from __future__ import annotations
 
+import contextlib
 import errno
 import json
 import os
@@ -190,6 +191,11 @@ class LockInfo:
         """``True``/``False`` for a lock owned by this host; ``None`` when unknowable."""
         if self.pid is None or self.host != socket.gethostname():
             return None
+        name = process_name(self.pid)
+        if name is not None and not could_be_fstk(name):
+            # fstk runs as python/pythonw: a lock whose pid now belongs to another program is stale (PC-A,
+            # 2026-11-25: an old intake lock's pid had been reused)
+            return False
         if self.ptime is None and self.started_utc:
             # a lock from before ptime was recorded: its owner had started by the time it took the lock, so a
             # process with that pid that started later is another one that reused the pid (PC-A, 2026-11-25)
@@ -219,6 +225,38 @@ def process_start_time(pid: int | None = None) -> float | None:
         return None
 
 
+def process_name(pid: int) -> str | None:
+    """The program name of running process ``pid`` (``pythonw.exe``), or None if gone or not visible."""
+    try:
+        import psutil
+
+        return psutil.Process(pid).name() or None
+    except Exception:
+        return None
+
+
+def could_be_fstk(name: str) -> bool:
+    """Could a process of this name be FromStunToKill (or its CLI)? It runs under Python."""
+    n = name.lower()
+    return n.startswith(("python", "fstk")) or n in ("py", "py.exe")
+
+
+def describe_process(pid: int) -> str:
+    """``pythonw.exe, started 2026-11-23 17:55`` for messages; empty when it cannot be told."""
+    try:
+        from datetime import datetime
+
+        import psutil
+
+        proc = psutil.Process(pid)
+        parts = [proc.name()]
+        with contextlib.suppress(Exception):
+            parts.append("started " + datetime.fromtimestamp(proc.create_time()).strftime("%Y-%m-%d %H:%M"))
+        return ", ".join(p for p in parts if p)
+    except Exception:
+        return ""
+
+
 def pid_alive(pid: int, started: float | None = None, *, started_by: float | None = None) -> bool:
     """Is ``pid`` a running process, and (when ``started`` is given) the same one that started then?
 
@@ -235,12 +273,16 @@ def pid_alive(pid: int, started: float | None = None, *, started_by: float | Non
     if psutil is not None:
         try:
             proc = psutil.Process(pid)
-            if proc.status() == psutil.STATUS_ZOMBIE:
-                return False
-            created = proc.create_time()
-            if started_by is not None and created > started_by + PID_START_TOLERANCE_S:
-                return False
-            return started is None or abs(created - started) <= PID_START_TOLERANCE_S
+            try:                                   # readable even where other details are refused (Windows)
+                created = proc.create_time()
+            except psutil.AccessDenied:
+                created = None
+            if created is not None:
+                if started_by is not None and created > started_by + PID_START_TOLERANCE_S:
+                    return False
+                if started is not None and abs(created - started) > PID_START_TOLERANCE_S:
+                    return False
+            return proc.status() != psutil.STATUS_ZOMBIE
         except psutil.NoSuchProcess:
             return False
         except psutil.AccessDenied:

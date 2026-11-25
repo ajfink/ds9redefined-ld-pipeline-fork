@@ -594,7 +594,7 @@ class MainWindow(QMainWindow):
         status, tn = "", "quiet"
         with contextlib.suppress(FstkError, OSError, ValueError, KeyError):
             status, tn = self.services.episode_status(canonical)
-        if self.thread is not None and self._running_plan and canonical == self.episode and self.tracker:
+        if canonical == self.run_episode and self.tracker is not None:
             status, tn = f"running {self.tracker.snapshot().overall:.0%}", "busy"
         code = canonical.split(":", 1)[-1]
         item.setText(f"{code}  {title}\n    {status}" if status else f"{code}  {title}")
@@ -602,6 +602,14 @@ class MainWindow(QMainWindow):
         if tn in ("bad", "warn", "info", "busy"):
             item.setForeground(tone(tn))
         item.setData(Qt.ItemDataRole.UserRole + 1, tn)
+
+    @property
+    def run_episode(self) -> str | None:
+        """The episode of the run going on in this window (None when nothing runs). Only it is "running": the
+        selected episode may be another one (2026-11-25: the run showed under every episode clicked)."""
+        if self.thread is not None and self._running_plan and self.tracker is not None:
+            return self.tracker.plan.get("episode")
+        return None
 
     def _find_episode(self, canonical: str):
         for i in range(self.episodes.count()):
@@ -1531,8 +1539,33 @@ class MainWindow(QMainWindow):
 
     def _show_saved_progress(self, episode: str) -> None:
         """Between runs: a job's saved state (the latest, or the one picked in the run picker), so progress survives
-        closing the app and earlier runs can be looked at."""
+        closing the app and earlier runs can be looked at.
+
+        While a run goes on in this window: its own episode shows the live run; any other episode shows its own
+        saved progress, read only, and the live run is left alone."""
         if self.thread is not None:
+            run_ep = self.run_episode
+            if run_ep is None or episode == run_ep:
+                if self.tracker is not None and self.progress_panel.tracker is not self.tracker:
+                    self.progress_panel.set_tracker(self.tracker)
+                    self.progress_panel.set_running(True, paused=self.tracker.snapshot().paused)
+                return
+            self.progress_panel.set_running(False)
+            self.progress_panel.allow_restart = False
+            runs = self.services.runs(episode)
+            self.progress_panel.set_runs(runs, runs[0][0] if runs else None)
+            note = f"a run of {run_ep} is going on in this window; select it to follow it"
+            plan = self.services.job_plan(episode, runs[0][0]) if runs else None
+            if not plan:
+                self.progress_panel.set_tracker(None)
+                self.progress_panel.detail.setText(note)
+                self.progress_panel.detail.setVisible(True)
+                return
+            view = ProgressTracker(plan, timings=self.services.timings())
+            with contextlib.suppress(OSError, ValueError, KeyError):
+                view.load_state(self.services.job_state(episode, runs[0][0]))
+            view.note = note                               # kept by every refresh of the panel
+            self.progress_panel.set_tracker(view)
             return
         runs = self.services.runs(episode)
         if not runs:
@@ -1594,10 +1627,12 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "No tool logs", f"{step_id} wrote no tool logs in {job}.")
 
     def update_progress(self) -> None:
-        snap = self.progress_panel.refresh()
+        shown = self.progress_panel.refresh()
+        snap = self.tracker.snapshot() if self.thread is not None and self.tracker is not None else shown
         if snap is None:
             return
-        name = (f"{(self.episode or '').split(':')[-1]} — {snap.overall:.0%} — "
+        run_ep = self.run_episode or self.episode or ""
+        name = (f"{run_ep.split(':')[-1]} — {snap.overall:.0%} — "
                 f"{snap.headline(self.progress_panel.step_label)}") if self.thread else ""
         self.setWindowTitle(f"{name} · FromStunToKill" if name else f"FromStunToKill — {self.services.profile.machine}")
         self._taskbar_update(snap)
@@ -1630,10 +1665,16 @@ class MainWindow(QMainWindow):
                 self.update_progress()
         kind = event["kind"]
         passed = self.tracker.steps.get(event.get("step") or "") if self.tracker is not None else None
-        if kind == "step-passed" and passed is not None and passed.stage == "remux":
+        run_ep = self.run_episode
+        if kind != "progress" and run_ep and run_ep != self.episode:
+            item = self._find_episode(run_ep)            # the running episode's line, when another is selected
+            if item is not None:
+                self._label_episode(item, run_ep)
+        if kind == "step-passed" and passed is not None and passed.stage == "remux" \
+                and self.progress_panel.tracker is self.tracker:
             self.progress_panel.update_final_file()              # the "Finished file" row gets its link
         name = self._name_of(event.get("step"))
-        ep = (self.episode or "").split(":")[-1]
+        ep = (self.run_episode or self.episode or "").split(":")[-1]
         if kind == "step-awaiting-review":
             self.notify("Needs your review", f"{ep}: {name} is ready for you")
         elif kind in ("step-failed", "step-blocked"):
@@ -1672,12 +1713,15 @@ class MainWindow(QMainWindow):
     def on_finished(self, state: dict) -> None:
         self.append_log(f"job {state['job']} finished: " +
                         ", ".join(f"{k}={v['status']}" for k, v in state["steps"].items()))
-        if self.tracker is not None:
-            snap = self.tracker.snapshot()
+        run_tracker = self.tracker                       # the run's own; showing the episode afterwards replaces it
+        run_ep = (run_tracker.plan.get("episode") if run_tracker is not None else None) or self.episode
+        if run_tracker is not None:
+            snap = run_tracker.snapshot()
             if snap.state == "finished":
-                self.notify("Run complete", f"{self.episode}: all {snap.total} steps done")
+                self.notify("Run complete", f"{run_ep}: all {snap.total} steps done")
         self._done()
         steps = state["steps"]
+        here = run_ep == self.episode                    # the run's episode is the one on screen
         waiting = [s for s, st in steps.items() if st.get("status") == "awaiting-review"]
         failed = [s for s in worst_first(list(steps), lambda k: steps[k].get("status"))
                   if steps[s].get("status") in ("failed", "blocked")]
@@ -1689,15 +1733,15 @@ class MainWindow(QMainWindow):
             first = self._name_of(failed[0])
             issue = "; ".join(steps[failed[0]].get("issues") or []).split("; see ")[0][:160]
             actions = []
-            if self.tracker is not None and failed[0] in self.tracker.steps:
+            if here and self.tracker is not None and failed[0] in self.tracker.steps:
                 row = list(self.tracker.steps).index(failed[0])
                 actions.append(("Show details", lambda r=row: self.progress_panel.show_message(r)))
                 if self.progress_panel.can_restart(failed[0], steps[failed[0]].get("status", "")):
                     actions.append(("Restart from here", lambda sid=failed[0]: self.restart_step(sid)))
-            self.set_banner(f"Stopped: {first} {STATUS_WORDS[steps[failed[0]]['status']]}"
+            self.set_banner(("" if here else f"{run_ep}: ") + f"Stopped: {first} {STATUS_WORDS[steps[failed[0]]['status']]}"
                             + (f": {issue}" if issue else "."), "bad", actions, kind="needs")
         elif all(st.get("status") == "passed" for st in steps.values()):
-            final = self._final_output_of_run()
+            final = self._final_output_of_run(run_tracker, run_ep)
             if final is not None:
                 self.append_log(f"final output: {final}")
                 self.set_banner(f"Finished: all {len(steps)} steps are done. Final output: {final.name}", "good",
@@ -1706,13 +1750,12 @@ class MainWindow(QMainWindow):
             else:
                 self.set_banner(f"Finished: all {len(steps)} steps are done.", "good")
 
-    def _final_output_of_run(self) -> Path | None:
+    def _final_output_of_run(self, tracker: ProgressTracker | None, episode: str | None) -> Path | None:
         """After a delivery or re-encode run: its final file, when it exists."""
-        if self.tracker is None or not self.episode \
-                or not any(s.stage == "remux" for s in self.tracker.steps.values()):
+        if tracker is None or not episode or not any(s.stage == "remux" for s in tracker.steps.values()):
             return None
         try:
-            path = self.services.final_file(self.episode)
+            path = self.services.final_file(episode)
         except (FstkError, OSError):
             return None
         return path if path is not None and path.is_file() else None

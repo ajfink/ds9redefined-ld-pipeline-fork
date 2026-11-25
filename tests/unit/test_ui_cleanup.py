@@ -237,3 +237,29 @@ def test_the_end_of_a_delivery_logs_and_opens_the_final_file(services, qtbot, tm
     assert opened == [final]
     assert any(f"final output: {final}" in line for line in w.log.toPlainText().splitlines())
     assert "final-output.mkv" in w.banner.text()
+
+
+@pytest.mark.gui
+def test_a_run_shows_only_under_its_own_episode(services, qtbot, monkeypatch):  # noqa: F811
+    """PC-A 2026-11-25: S02E01's intake showed as "running" under S01E20 too, as if both had started."""
+    from fstk.ui.app import MainWindow
+
+    w = MainWindow(services, actor="op")
+    qtbot.addWidget(w)
+    run = ProgressTracker({"job": "intake-ds9-s02e01-20261125t194806", "episode": "DS9:S02E01",
+                           "steps": [{"id": "inventory", "stage": "capture-inventory", "after": []}]})
+    w.thread, w._running_plan, w.tracker = object(), "plan.json", run
+    try:
+        assert w.run_episode == "DS9:S02E01"
+        w._show_saved_progress("DS9:S01E20")                       # another episode: its own runs, not this one
+        assert w.progress_panel.tracker is not run and w.tracker is run
+        assert w.progress_panel.pause_button.isHidden()
+        assert "DS9:S02E01" in w.progress_panel.detail.text()
+        w._show_saved_progress("DS9:S02E01")                       # back to the running one: the live run
+        assert w.progress_panel.tracker is run and not w.progress_panel.pause_button.isHidden()
+        item = w._find_episode("DS9:S01E20")
+        if item is not None:
+            w._label_episode(item, "DS9:S01E20")
+            assert "running" not in item.text()
+    finally:
+        w.thread, w._running_plan = None, None

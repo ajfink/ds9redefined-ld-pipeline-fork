@@ -1,11 +1,15 @@
 """Removing an episode from this machine: the project record, its working files, and (optionally) the download.
 
-Three scopes, from least to most:
+Parts, chosen independently (owner, 2026-11-25):
 
-* ``project``  remove only the project (manifest, jobs, approvals, logs): every file stays where it is;
-* ``files``    also delete the episode's working media (master, audio, scripts, encodes, finished video);
-* ``all``      also delete the downloaded capture folder, **but only when fstk downloaded it** into the profile's
-               downloads folder. Captures you pointed fstk at ("From local folder…") and the DVD are never deleted.
+* ``entry``     remove the episode from the app's list only; the project and every file are kept, and adding the
+                episode again brings it back;
+* ``project``   delete the project (manifest, jobs, approvals, logs); the entry goes with it;
+* ``files``     delete the episode's working media (master, audio, scripts, encodes, finished video);
+* ``captures``  delete the downloaded capture folder, **but only when fstk downloaded it** into the profile's
+                downloads folder. Captures you pointed fstk at ("From local folder…") and the DVD are never deleted.
+
+The older scopes still work: ``project`` → {project}, ``files`` → {project, files}, ``all`` → every part.
 
 Every path is checked to sit inside the folder it is supposed to belong to before anything is removed.
 """
@@ -20,6 +24,24 @@ from fstk.core.errors import FstkError
 from fstk.core.identity import EpisodeId
 
 SCOPES = ("project", "files", "all")
+PARTS = ("entry", "project", "files", "captures")
+_SCOPE_PARTS = {"project": {"project"}, "files": {"project", "files"}, "all": set(PARTS)}
+
+
+def parts_of(scope: str | set[str] | frozenset[str]) -> frozenset[str]:
+    """A scope name (older callers) or a set of parts → the parts. The project's deletion takes its entry along."""
+    if isinstance(scope, str):
+        if scope not in _SCOPE_PARTS:
+            raise FstkError(f"unknown removal scope {scope!r}")
+        parts = set(_SCOPE_PARTS[scope])
+    else:
+        parts = set(scope)
+        unknown = parts - set(PARTS)
+        if unknown:
+            raise FstkError(f"unknown removal part(s) {sorted(unknown)}")
+    if "project" in parts:
+        parts.add("entry")
+    return frozenset(parts)
 
 
 @dataclass
@@ -37,18 +59,14 @@ class RemovalPlan:
     files: list[Item] = field(default_factory=list)
     captures: list[Item] = field(default_factory=list)
     captures_note: str = ""                      # why the captures are not offered, if they are not
+    captures_kept: Item | None = None            # a capture folder the person chose: shown, never deleted
 
-    def items(self, scope: str) -> list[Item]:
-        if scope not in SCOPES:
-            raise FstkError(f"unknown removal scope {scope!r}")
-        out = list(self.project)
-        if scope in ("files", "all"):
-            out += self.files
-        if scope == "all":
-            out += self.captures
-        return out
+    def items(self, scope: str | set[str] | frozenset[str]) -> list[Item]:
+        parts = parts_of(scope)
+        return ([*self.project] if "project" in parts else []) + ([*self.files] if "files" in parts else []) \
+            + ([*self.captures] if "captures" in parts else [])
 
-    def total_bytes(self, scope: str) -> int:
+    def total_bytes(self, scope: str | set[str] | frozenset[str]) -> int:
         return sum(i.bytes for i in self.items(scope))
 
 
@@ -107,6 +125,7 @@ def plan_removal(profile, episode: EpisodeId, manifest=None) -> RemovalPlan:
     if sources.get("downloads_override"):
         plan.captures_note = ("The captures come from a folder you chose (" + str(sources["downloads_override"]) +
                               "); fstk never deletes those.")
+        plan.captures_kept = _item("LaserDisc captures (your folder)", Path(str(sources["downloads_override"])))
     else:
         try:
             folder = profile.downloads_dir(episode)
@@ -122,7 +141,7 @@ def plan_removal(profile, episode: EpisodeId, manifest=None) -> RemovalPlan:
 
 def running_jobs(profile, episode: EpisodeId) -> list[str]:
     """Jobs of this episode whose lock is held by a live process (or by one we cannot tell about)."""
-    from fstk.core.fsio import read_lock
+    from fstk.core.fsio import describe_process, read_lock
 
     out: list[str] = []
     plans = profile.episode_state_dir(episode) / "plans"
@@ -133,6 +152,9 @@ def running_jobs(profile, episode: EpisodeId) -> list[str]:
         if info is None or info.local_process_alive is False:      # no lock, or its owner is gone: not running
             continue
         who = f"pid {info.pid}" if info.pid else "an unknown process"
+        if info.pid and info.local_process_alive:
+            what = describe_process(info.pid)
+            who += f": {what}" if what else ""
         where = "" if info.local_process_alive else f" on {info.host or 'another machine'}"
         out.append(f"{lock.parent.name} ({who}{where})")
     return out
@@ -145,11 +167,15 @@ def _delete(path: Path) -> None:
         path.unlink()
 
 
-def remove_episode(profile, episode: EpisodeId, scope: str, manifest=None) -> list[str]:
-    """Do the removal. Returns the paths removed. Raises FstkError (before deleting anything) if a path fails its
-    safety check. The project record goes last so a half-finished removal can be retried."""
+def remove_episode(profile, episode: EpisodeId, scope, manifest=None, *, actor: str = "ui") -> list[str]:
+    """Do the removal of ``scope`` (a set of ``PARTS``, or an older scope name). Returns what was removed. Raises
+    FstkError (before deleting anything) if a path fails its safety check. The project record goes last so a
+    half-finished removal can be retried."""
     from fstk.workspace.shared import frozen_reason
 
+    parts = parts_of(scope)
+    if not parts:
+        raise FstkError("nothing was chosen to remove")
     plan = plan_removal(profile, episode, manifest)
     reason = frozen_reason(profile, episode)
     if reason:
@@ -159,7 +185,7 @@ def remove_episode(profile, episode: EpisodeId, scope: str, manifest=None) -> li
         raise FstkError(f"{episode} is being worked on: {'; '.join(busy)}. Wait for it to finish, or stop it, "
                         "before removing the episode. Nothing was deleted.")
     allowed: list[tuple[Item, Path]] = []
-    for item in plan.items(scope):
+    for item in plan.items(parts):
         if item in plan.project:
             base = profile.data_root
         elif item in plan.files:
@@ -175,6 +201,11 @@ def remove_episode(profile, episode: EpisodeId, scope: str, manifest=None) -> li
         if item.exists:
             _delete(item.path)
             removed.append(str(item.path))
+    if "entry" in parts and "project" not in parts and profile.episode_state_dir(episode).is_dir():
+        from fstk.workspace.episodes import hide
+
+        hide(profile, episode, actor=actor)
+        removed.append("the episode's entry in the app (its project is kept)")
     return removed
 
 
